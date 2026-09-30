@@ -1,0 +1,41 @@
+:SoilClasses
+  :Attributes
+  :Units
+  SOIL
+:EndSoilClasses
+:SoilProfiles
+  SOILP, 1, SOIL, 1.0
+:EndSoilProfiles
+:VegetationClasses
+  :Attributes, MAX_HT, MAX_LAI, MAX_LEAF_COND
+  :Units, m, none, mm_per_s
+  GRASS, 1, 1, 5
+:EndVegetationClasses
+:LandUseClasses
+  :Attributes, IMPERM, FOREST_COV
+  :Units, frac, frac
+  OPEN, 0, 0
+:EndLandUseClasses
+:SoilParameterList
+  :Parameters, POROSITY, MAX_PERC_RATE
+  :Units, none, mm_per_d
+  [DEFAULT], 0.4, 0.0
+:EndSoilParameterList
+:LandUseParameterList
+  :Parameters, PET_CORRECTION
+  :Units, none
+  [DEFAULT], 0.0
+:EndLandUseParameterList
+:AquiferClasses
+  :Attributes, K_HORIZ, K_VERT, SPEC_STORAGE, SPEC_YIELD, POROSITY
+  :Units, m/d, m/d, 1/m, none, none
+  SANDC, 10.0, 1.0, 1.0E-5, 0.2, 0.3
+:EndAquiferClasses
+:AquiferProfiles
+  CONF, 1, SANDC, 50.0, CONFINED_AQUIFER
+:EndAquiferProfiles
+:AquiferProfileParameters
+  :Attributes, INITIAL_HEAD_DEPTH, DEFAULT_BEDROCK_DEPTH, SEEPAGE_LEAKANCE
+  :Units, m, m, 1/d
+  CONF, 20.0, 50.0, 0.0
+:EndAquiferProfileParameters

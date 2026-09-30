@@ -1,0 +1,13 @@
+# Raven coupled to an existing MODFLOW 6 model (model/, built independently of Raven: UTM zone 10N, rotated grid,
+# 4 layers, monthly stress periods, wells, rivers, head boundary, own recharge and ET)
+:HRUGeometry       Liard_HRUs_standin.geojson  HRU_ID
+:MinCellCoverage   0.25
+# :MF6Library      /path/to/libmf6.so          # or set the environment variable RAVEN_MF6_LIB
+:MF6Simulation     model/mfsim.nam
+:MF6CRS            EPSG:32610                  # the model's coordinates are UTM zone 10N (WGS84)
+:MF6StartDate      1985-10-01                  # the model's time zero
+:RavenTakesOver    RCH_MODEL EVT_MODEL         # Raven supplies recharge; the model's ET is replaced
+:StreamPackage     RIV_STREAMS AUX SUBBASIN    # river cells carry their Raven subbasin ID
+:SeepageToRaven    ON
+# Alternatives to :MF6CRS (use one): a polygon file of the cells, or the overlap weights in
+# overlap_weights_alternative.rvg (paste its block here and remove :MF6CRS and :HRUGeometry).

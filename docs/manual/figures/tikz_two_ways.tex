@@ -1,0 +1,25 @@
+% Which chapter to start from (TikZ; text is set by LaTeX, so boxes always fit their text)
+\begin{tikzpicture}[font=\sffamily\small,
+  base/.style={rounded corners=3pt,line width=0.8pt,align=center,inner sep=5pt,execute at begin node={\hyphenpenalty=10000\exhyphenpenalty=10000}},
+  q/.style={base,draw=brand,fill=white,text width=58mm,font=\sffamily\bfseries},
+  yesA/.style={base,draw=teal!70!black,fill=teal!7,text width=66mm},
+  noA/.style={base,draw=orange!80!black,fill=orange!7,text width=66mm},
+  yesB/.style={base,draw=teal!70!black,fill=white,text width=66mm,font=\sffamily\footnotesize},
+  noB/.style={base,draw=orange!80!black,fill=white,text width=66mm,font=\sffamily\footnotesize},
+  fin/.style={base,draw=brand,fill=brandlight,text width=144mm},
+  arr/.style={-{Stealth[length=2.4mm]},line width=0.9pt},
+  lab/.style={font=\sffamily\bfseries\small,inner sep=2pt}]
+\node[q] (q) at (0,0) {Do you already have a MODFLOW~6 groundwater model?};
+\node[yesA,anchor=north] (y) at (-39mm,-11mm) {\textbf{Raven connects to your model}\\(Chapter~\ref{ch:existing})\\[3pt]Your model is used as it is. Raven links its HRUs to the model's top layer.};
+\node[noA,anchor=north] (n) at (39mm,-11mm) {\textbf{Raven builds a groundwater model}\\(Chapter~\ref{ch:c3})\\[3pt]From your HRUs and a short description of the soil and rock layers under them.};
+\node[yesB,anchor=north] (y2) at ([yshift=-5mm]y.south) {Tell Raven where the model is on the map: its projection (\texttt{:MF6CRS EPSG:\dots}), a file of cell outlines, or a table of overlap weights.};
+\node[noB,anchor=north] (n2) at ([yshift=-5mm]n.south) {Choose a grid, or keep the default: regular, rotated, quadtree, cells that follow HRU boundaries, or your own cells.};
+\path let \p1=(y2.south), \p2=(n2.south) in coordinate (m) at (0,{min(\y1,\y2)-7mm});
+\node[fin,anchor=north] (e) at (m) {Then, every day of the run, Raven sends recharge down and MODFLOW sends seepage and river water back up. Both keep exact water accounts (Chapters~\ref{ch:c4} and~\ref{ch:c5}).};
+\draw[arr,teal!70!black] (q.west) -| node[lab,pos=0.35,above,text=teal!70!black]{Yes} (y.north);
+\draw[arr,orange!80!black] (q.east) -| node[lab,pos=0.35,above,text=orange!80!black]{No} (n.north);
+\draw[arr,teal!70!black] (y.south) -- (y2.north);
+\draw[arr,orange!80!black] (n.south) -- (n2.north);
+\draw[arr,teal!70!black] (y2.south) -- (y2.south |- e.north);
+\draw[arr,orange!80!black] (n2.south) -- (n2.south |- e.north);
+\end{tikzpicture}

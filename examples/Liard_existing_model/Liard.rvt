@@ -1,0 +1,175 @@
+# DataType         Raven rvt file
+# For Liard Watershed Model, Canada
+#------------------------------------------------------
+
+:Gauge 1454 DEASE LAKE 
+	:Latitude 58.428335 
+	:Longitude -130.0105567 
+	:Elevation 802.8 
+	:RedirectToFile ../Liard_groundwater/data_forcing/1454.rvt
+:EndGauge
+
+:Gauge 1455 FORT NELSON  
+	:Latitude 58.83638889 
+	:Longitude -122.5972222 
+	:Elevation 381.9 
+	:RainCorrection 1.0
+	:SnowCorrection 0.95
+	:RedirectToFile ../Liard_groundwater/data_forcing/1455.rvt
+:EndGauge
+
+:Gauge 1656 FORT SIMPSON  
+	:Latitude 61.76027778 
+	:Longitude -121.2366667 
+	:Elevation 168 
+	:RainCorrection 1.0
+	:SnowCorrection 0.95
+	:RedirectToFile ../Liard_groundwater/data_forcing/1656.rvt
+:EndGauge
+
+:Gauge 1615 WATSON LAKE  
+	:Latitude 60.1165 
+	:Longitude -128.8223333 
+	:Elevation 683.3 
+	:RedirectToFile ../Liard_groundwater/data_forcing/1615.rvt
+:EndGauge
+
+:Gauge 2738 KEG RIVER 
+	:Latitude 57.75 
+	:Longitude -117.6166667 
+	:Elevation 427.3 
+	:RedirectToFile ../Liard_groundwater/data_forcing/2738.rvt
+:EndGauge
+
+:Gauge 1470 MUNCHO LAKE 
+	:Latitude 58.93 
+	:Longitude -125.77 
+	:Elevation 836.5 
+	:RedirectToFile ../Liard_groundwater/data_forcing/1470.rvt
+:EndGauge
+
+:Gauge 1464 TETSA RIVER 
+	:Latitude 58.65 
+	:Longitude -124.24 
+	:Elevation 810 
+	:RainCorrection 1.0
+	:SnowCorrection 0.8
+	:RedirectToFile ../Liard_groundwater/data_forcing/1464.rvt
+:EndGauge
+
+:Gauge 1511 HOUR LAKE 
+	:Latitude 61.18 
+	:Longitude -129.13 
+	:Elevation 890 
+	:RedirectToFile ../Liard_groundwater/data_forcing/1511.rvt
+:EndGauge
+
+:Gauge 1705 WRIGLEY A 
+	:Latitude 63.21 
+	:Longitude -123.44 
+	:Elevation 149.7 
+	:RedirectToFile ../Liard_groundwater/data_forcing/1705.rvt
+:EndGauge
+
+:Gauge 1613 TUCHITUA 
+	:Latitude 60.93 
+	:Longitude -129.22 
+	:Elevation 723.9 
+	:RedirectToFile ../Liard_groundwater/data_forcing/1613.rvt
+:EndGauge
+
+#OBSERVATION GAUGES---------------------------------------------------------------------------------------
+:RedirectToFile ../Liard_groundwater/data_obs/10AA001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10AA004.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10AB001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10AC002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10AC006.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10AD001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10AD002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BA001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BB001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BB002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BC001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BD001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BE001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BE004.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BE005.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BE006.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BE010.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BE012.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10BE013.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10CA001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10CB001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10CC002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10CD001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10EA003.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10EB001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10EC001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10ED001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10ED002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/10ED008.rvt
+
+#CALIBRATION WEIGHTS
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10AA001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10AA004.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10AB001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10AC002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10AC006.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10AD001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10AD002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BA001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BB001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BB002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BC001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BD001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BE001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BE004.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BE005.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BE006.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BE010.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BE012.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10BE013.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10CA001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10CB001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10CC002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10CD001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10EA003.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10EB001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10EC001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10ED001.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10ED002.rvt
+:RedirectToFile ../Liard_groundwater/data_obs/CalibrationWeights/Weight_10ED008.rvt
+
+
+#VALDIATION WEIGHTS
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10AA001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10AA004.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10AB001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10AC002.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10AC006.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10AD001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10AD002.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BA001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BB001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BB002.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BC001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BD001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BE001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BE004.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BE005.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BE006.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BE010.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BE012.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10BE013.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10CA001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10CB001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10CC002.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10CD001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10EA003.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10EB001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10EC001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10ED001.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10ED002.rvt
+#:RedirectToFile ../Liard_groundwater/data_obs/ValidationWeights/Weight_10ED008.rvt
+
+

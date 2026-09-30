@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #ifndef HYDROUNITS_H
 #define HYDROUNITS_H
@@ -29,6 +30,7 @@ private:/*------------------------------------------------------*/
   double                        _Area;  ///< contributing drainage area for HydroUnit [km^2]
   int                    _SubbasinInd;  ///< global index p (not ID!) of subbasin this HRU is in
   location                  _Centroid;  ///< centroid of HRU
+  string                    _aqProfileName; ///< groundwater (aquifer) profile name; "[NONE]" if no groundwater
   HRU_type                   _HRUType;  ///< Standard, Lake, Rock, Glacier, etc...
   bool                      _Disabled;  ///< true if processes are not simulated for this HRU
   bool                    _res_linked;  ///> true if HRU is linked to Reservoir
@@ -88,6 +90,8 @@ public:/*-------------------------------------------------------*/
 
   //Accessor functions (some inlined for speed)
   inline long long int   GetHRUID        () const { return _ID;          }
+  inline string          GetAquiferProfileName() const { return _aqProfileName; }
+  void                   SetAquiferProfileName(const string &name) { _aqProfileName=name; }
   inline int             GetGlobalIndex  () const { return _global_k;    }
   inline bool            IsEnabled       () const { return !_Disabled;   }
   inline location        GetCentroid     () const { return _Centroid;    }

@@ -1,0 +1,123 @@
+#########################################################################
+:FileType rvi ASCII Raven 2.9.1
+# DataType         Raven Input File
+# For Liard Watershed Model, Canada
+#------------------------------------------------------------------------
+# Simulation parameters
+#
+:StartDate          1985-10-01 00:00:00
+:Duration           7305 00:00:00
+:TimeStep           24:00:00
+
+#------------------------------------------------------------------------
+# Model options
+#
+:Method              ORDERED_SERIES
+:Interpolation       INTERP_NEAREST_NEIGHBOR
+
+:Routing             ROUTE_DIFFUSIVE_WAVE
+:CatchmentRoute      ROUTE_TRI_CONVOLUTION
+
+:Evaporation         PET_HARGREAVES_1985
+:OW_Evaporation      PET_HARGREAVES_1985
+:SWRadiationMethod   SW_RAD_DEFAULT
+:SWCloudCorrect      SW_CLOUD_CORR_NONE
+:SWCanopyCorrect     SW_CANOPY_CORR_NONE
+:LWRadiationMethod   LW_RAD_DEFAULT
+:RainSnowFraction    RAINSNOW_HBV
+:PotentialMeltMethod POTMELT_HBV
+:OroTempCorrect      OROCORR_HBV
+:OroPrecipCorrect    OROCORR_SIMPLELAPSE
+:OroPETCorrect       OROCORR_HBV
+:CloudCoverMethod    CLOUDCOV_NONE
+:PrecipIceptFract    PRECIP_ICEPT_USER
+
+
+:SoilModel           SOIL_MULTILAYER 4
+
+#------------------------------------------------------------------------
+# Soil Layer Alias Definitions 
+#
+:Alias       VADOSE_RESERVOIR      SOIL[1]
+:Alias       FAST_RESERVOIR        SOIL[2]
+:Alias       SLOW_RESERVOIR        SOIL[3]
+
+
+#Wetland, Upland Groups
+:GroundwaterModel MODFLOW6
+:DefineHRUGroups AquiferHRUs
+:DefineHRUGroups WetlandHRUs, UplandHRUs,FlushWetlands, NahanniHRUs,
+
+#------------------------------------------------------------------------
+# Hydrologic process order
+#
+
+:HydrologicProcesses
+  :SnowRefreeze          FREEZE_DEGREE_DAY  SNOW_LIQ        SNOW
+  :Precipitation         PRECIP_RAVEN       ATMOS_PRECIP    MULTIPLE 
+  :CanopyEvaporation     CANEVP_ALL         CANOPY          ATMOSPHERE
+  :CanopySnowEvap        CANEVP_ALL         CANOPY_SNOW     ATMOSPHERE  
+  :SnowBalance           SNOBAL_SIMPLE_MELT SNOW            SNOW_LIQ  
+    :-->Overflow         RAVEN_DEFAULT      SNOW_LIQ        PONDED_WATER
+  :Flush                 RAVEN_DEFAULT      PONDED_WATER    GLACIER
+    :-->Conditional HRU_TYPE IS GLACIER
+  :Flush                 RAVEN_DEFAULT      SOIL[0]         GLACIER
+      :-->Conditional HRU_TYPE IS GLACIER
+  :GlacierMelt           GMELT_HBV          GLACIER_ICE     GLACIER
+  :GlacierRelease        GRELEASE_HBV_EC    GLACIER         SURFACE_WATER
+  :Flush                 RAVEN_DEFAULT      PONDED_WATER    DEPRESSION
+    :-->Conditional HRU_TYPE IS WETLAND
+  :DepressionOverflow    DFLOW_THRESHPOW    DEPRESSION      SURFACE_WATER
+  :Seepage               SEEP_LINEAR        DEPRESSION      FAST_RESERVOIR
+  :OpenWaterEvaporation  OPEN_WATER_EVAP    DEPRESSION      ATMOSPHERE
+  :Infiltration          INF_HBV            PONDED_WATER    MULTIPLE
+  :LateralFlush          RAVEN_DEFAULT UplandHRUs SURFACE_WATER To FlushWetlands DEPRESSION	
+  :LakeEvaporation       LAKE_EVAP_BASIC    SURFACE_WATER   ATMOSPHERE
+    :-->Conditional HRU_TYPE IS LAKE
+  :Flush                 RAVEN_DEFAULT      SURFACE_WATER   FAST_RESERVOIR 
+    :-->Conditional HRU_TYPE IS_NOT GLACIER
+	:-->Conditional HRU_TYPE IS_NOT LAKE
+	:-->Conditional HRU_TYPE IS_NOT WETLAND
+	:-->Conditional HRU_GROUP IS_NOT UplandHRUs
+	:-->Conditional HRU_GROUP IS_NOT NahanniHRUs
+  :SoilEvaporation       SOILEVAP_HBV       SOIL[0]         ATMOSPHERE
+  :Percolation           PERC_GAWSER        SOIL[0]         VADOSE_RESERVOIR
+    :-->Conditional HRU_GROUP IS NahanniHRUs
+  :Baseflow             BASE_THRESH_POWER    SOIL[0]        SURFACE_WATER
+    :-->Conditional HRU_GROUP IS NahanniHRUs
+  :Flush                 RAVEN_DEFAULT      SURFACE_WATER   VADOSE_RESERVOIR
+    :-->Conditional HRU_GROUP IS NahanniHRUs
+  :Split RAVEN_DEFAULT VADOSE_RESERVOIR FAST_RESERVOIR SLOW_RESERVOIR 6.535500E-01
+    :-->Conditional HRU_GROUP IS NahanniHRUs
+  :CapillaryRise         RISE_HBV           FAST_RESERVOIR 	SOIL[0]
+  :Percolation           PERC_CONSTANT      FAST_RESERVOIR 	SLOW_RESERVOIR
+    :-->Conditional HRU_GROUP IS_NOT NahanniHRUs
+    :-->Conditional HRU_GROUP IS_NOT AquiferHRUs
+  :Percolation           PERC_CONSTANT      FAST_RESERVOIR 	GROUNDWATER
+    :-->Conditional HRU_GROUP IS AquiferHRUs
+  :Baseflow              BASE_POWER_LAW     FAST_RESERVOIR  SURFACE_WATER 
+  :Baseflow              BASE_LINEAR        SLOW_RESERVOIR  SURFACE_WATER 
+:EndHydrologicProcesses
+
+#---------------------------------------------------------
+# HRU Groups
+:DefineHRUGroups GSUB_1, GSUB_2, GSUB_3, GSUB_4, GSUB_5, GSUB_6, GSUB_7, GSUB_8, GSUB_9
+:DefineHRUGroups GSUB_10, GSUB_11, GSUB_12, GSUB_13, GSUB_14, GSUB_15, GSUB_16, GSUB_17, GSUB_18, GSUB_19, 
+:DefineHRUGroups GSUB_20, GSUB_21, GSUB_22, GSUB_23, GSUB_24, GSUB_25, GSUB_26, GSUB_27, GSUB_28, GSUB_29, 
+:DefineHRUGroups GSUB_30, GSUB_31, GSUB_32, GSUB_33, GSUB_34, GSUB_35, GSUB_36, GSUB_37, GSUB_38, GSUB_39, 
+:DefineHRUGroups GSUB_40, GSUB_41, GSUB_42, GSUB_43, GSUB_44, GSUB_45, GSUB_46, GSUB_47, GSUB_48, GSUB_49, 
+:DefineHRUGroups GSUB_50, GSUB_51, GSUB_52, GSUB_53, GSUB_54, GSUB_55, GSUB_56, GSUB_57, GSUB_58, GSUB_59, 
+:DefineHRUGroups GSUB_60, GSUB_61, GSUB_62, GSUB_63, GSUB_64, GSUB_65, 
+
+#---------------------------------------------------------
+# Output Options
+:EvaluationMetrics NASH_SUTCLIFFE
+:EvaluationMetrics RMSE
+:EvaluationMetrics PCT_BIAS
+:EvaluationMetrics KLING_GUPTA
+
+
+:CustomOutput DAILY AVERAGE RAINFALL BY_SUBBASIN
+:CustomOutput DAILY AVERAGE SNOWFALL BY_SUBBASIN
+:CustomOutput DAILY AVERAGE SNOW BY_SUBBASIN
+:CustomOutput DAILY AVERAGE SOIL[0] BY_SUBBASIN

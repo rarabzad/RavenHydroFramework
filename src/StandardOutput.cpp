@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2025 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
 
   Includes CModel routines for writing output headers and contents:
     CModel::CloseOutputStreams()
@@ -134,6 +135,7 @@ void CModel::CloseOutputStreams()
     _pCustomOutputs[c]->CloseFiles(*_pOptStruct);
   }
   _pTransModel->CloseOutputFiles();
+  if (_pGWModel!=NULL){_pGWModel->CloseOutputs();} //groundwater outputs closed while the model is complete
   if ( _STORAGE.is_open()){ _STORAGE.close();}
   if (   _HYDRO.is_open()){   _HYDRO.close();}
   if (_FORCINGS.is_open()){_FORCINGS.close();}
@@ -1452,6 +1454,7 @@ void CModel::WriteMajorOutput(const time_struct &tt, string solfile, bool final)
   RVC<<":EndBasinStateVariables"<<endl;
 
   _pTransModel->WriteMajorOutput(RVC);
+  if ((_pGWModel!=NULL) && (_pGWModel->IsActive())){_pGWModel->WriteHotstart(RVC);} //groundwater heads for hotstart
 
   if (Options->management_optimization){_pDO->WriteMajorOutput(RVC);}
 

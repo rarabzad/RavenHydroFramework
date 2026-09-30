@@ -1,6 +1,7 @@
 //////////////////////////////////////////////////////////////////
 ///  Raven Library Source Code
 ///  Copyright (c) 2008-2025 the Raven Development Team
+///  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
 //////////////////////////////////////////////////////////////////
 
 #include <time.h>
@@ -43,8 +44,6 @@ string GetProcessName(process_type p)
   case(DEPRESSION_OVERFLOW):{name="Depression Overflow";      break;}
   case(SEEPAGE):            {name="Seepage from Depression";  break;}
   case(RECHARGE):           {name="Recharge";                 break;}
-  case(DRAIN):              {name="Drain";                    break;}
-  case(GWRECHARGE):         {name="Groundwater Recharge";     break;}
 
   case(SNOWMELT):           {name="Snow Melt";                break;}
   case(SNOWSQUEEZE):        {name="Liquid snow release";      break;}

@@ -1,0 +1,24 @@
+% Stress periods, Raven's days and a restart after 40 days (TikZ; 1 mm per day)
+\begin{tikzpicture}[every node/.append style={execute at begin node={\hyphenpenalty=10000\exhyphenpenalty=10000}},x=1mm,y=1mm,font=\sffamily\footnotesize,
+  rowlab/.style={anchor=east,align=right,text width=25mm,font=\sffamily\footnotesize\bfseries},
+  per/.style={draw=brand,fill=brandlight,line width=0.6pt},
+  new/.style={draw=teal!70!black,fill=teal!8,line width=0.6pt}]
+% row 1: the model's stress periods (1 steady day, then 31, 30, 31, 31 days)
+\node[rowlab,text=brand] at (-3,0) {Model's stress\\periods};
+\draw[per] (0,-4) rectangle (1,4);
+\foreach \a/\b/\t/\lx in {1/32/{2 \ (31 days)}/16.5, 32/62/{3 \ (30 days)}/52, 62/93/{4 \ (31 days)}/77.5, 93/124/{5 \ (31 days)}/108.5}{
+  \draw[per] (\a,-4) rectangle (\b,4); \node at (\lx,0) {\t};}
+\draw[black!60] (0.5,4) -- (0.5,8.5) node[above,align=center,font=\sffamily\scriptsize] {1: steady\\(1 day)};
+% row 2: Raven's days
+\node[rowlab,text=black!70] at (-3,-11) {Raven's days};
+\foreach \d in {0,...,124}{\draw[black!45,line width=0.3pt] (\d,-12.5) -- (\d,-9.5);}
+% row 3: after a restart after 40 days
+\node[rowlab,text=teal!70!black] at (-3,-24) {After a restart\\after 40 days};
+\draw[black!45,fill=black!6,pattern=north east lines,pattern color=black!30] (0,-28) rectangle (40,-20);
+\node[fill=white,inner sep=1.5pt,text=black!65] at (20,-24) {already simulated: dropped};
+\foreach \a/\b/\t in {40/62/{1 \ (22 days)}, 62/93/{2 \ (31 days)}, 93/124/{3 \ (31 days)}}{
+  \draw[new] (\a,-28) rectangle (\b,-20); \node at ({(\a+\b)/2},-24) {\t};}
+% the restart
+\draw[red!65!black,dashed,line width=0.9pt] (40,12) -- (40,-30);
+\node[above,text=red!65!black,font=\sffamily\bfseries\footnotesize] at (40,12) {restart};
+\end{tikzpicture}

@@ -1,6 +1,7 @@
 ﻿/*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
 
   Includes declaration of global constants, enumerated types, and
   shared common & hydrological functions
@@ -14,7 +15,6 @@
 #define _CRT_SECURE_NO_WARNINGS 1
 #endif
 
-//#define _MODFLOW_USG_ // uncomment if compiling MODFLOW-USG coupled version of Raven
 //#define _STRICTCHECK_ // uncomment if strict checking should be enabled (slows down model)
 #ifndef _LPSOLVE_
 //#define _LPSOLVE_     // uncomment if compiling lpsolve Demand Optimization version of Raven
@@ -838,7 +838,8 @@ enum res_constraint
   RC_OVERRIDE_FLOW,
   RC_DRY_RESERVOIR,
   RC_MANAGEMENT,    //from management optimization
-  RC_DZTR
+  RC_DZTR,
+  RC_UNSET          //before the first time step (no constraint applied yet)
 };
 
 ////////////////////////////////////////////////////////////////////
@@ -1043,8 +1044,6 @@ enum process_type
   //in ProcessGroup.h
   PROCESS_GROUP,
 
-  //in GWSWProcesses.h
-  DRAIN, GWRECHARGE,
 
   //in CustomHydProcess.h
   RF_PROCESS,
@@ -1180,8 +1179,6 @@ struct optStruct
   double           custom_interval;           ///< custom output interval (i.e., for generating 10-day interval outputs)
   bool             write_forcings;            ///< true if ForcingFunctions.csv is written
   bool             write_mass_bal;            ///< true if WatershedMassEnergyBalance.csv is written
-  bool             write_gwhead;      		    ///< true if GWHead.csv is written
-  bool             write_gwflow;      		    ///< true if GWFlow.csv is written
   bool             write_reservoir;           ///< true if ReservoirStages.csv is written
   bool             write_reservoirMB;         ///< true if ReservoirMassBalance.csv is written
   bool             write_waterlevels;         ///< true if WaterLevels.csv is written

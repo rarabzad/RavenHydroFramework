@@ -1,0 +1,162 @@
+\chapter{Groundwater concepts}\label{ch:c2}\label{ch:concepts}
+This chapter introduces the physical ideas and vocabulary used in the rest of the document. Readers familiar with
+groundwater hydrology can skim it; everyone else will find every later equation built from the few ideas presented here.
+
+
+\section{Head}
+The \emph{head} $h$ at a point is the elevation to which water would rise in a small well drilled to that point, in
+metres above a common datum (here, the same datum as the digital elevation model). Groundwater always flows from
+higher head to lower head. In an unconfined aquifer the head is the elevation of the water table; the \emph{depth to
+water} is land-surface elevation minus head.
+
+\section{Darcy's law}
+The flow of water through a porous material is proportional to the drop in head and to the cross-section, and
+inversely proportional to the distance travelled:
+\begin{equation}
+Q = K\,A\,\frac{h_1-h_2}{L},
+\end{equation}
+where $Q$ is the flow [m$^3$/d], $K$ the hydraulic conductivity [m/d], $A$ the area the water passes through [m$^2$],
+$h_1-h_2$ the head difference [m] and $L$ the distance [m].
+
+\begin{example}[: Darcy's law]
+Gravel with $K=50$ m/d, a 2\,000 m wide and 10 m thick strip ($A=20\,000$ m$^2$), heads 101 m and 100 m, 2\,000 m apart:
+$Q=50\times20\,000\times1/2\,000=500$ m$^3$/d.
+\end{example}
+
+\section{Transmissivity and conductance}
+Because $K$, $A$ and $L$ always appear together, it is convenient to combine them into a \emph{conductance}
+$C = K A/L$ [m$^2$/d], so that $Q=C\,(h_1-h_2)$. Every exchange in this document --- between two grid cells, between an
+aquifer and a river, a drain, a wetland --- is written in this form: \textbf{flow = conductance $\times$ head
+difference}. For a layer of saturated thickness $b$, the \emph{transmissivity} is $T=Kb$ [m$^2$/d].
+
+Between two neighbouring cells with different conductivities $K_1,K_2$, the conductance is the series combination
+(harmonic mean), because water must pass through both halves in turn:
+\begin{equation}
+C_{12}=\frac{1}{\dfrac{L_1}{K_1A}+\dfrac{L_2}{K_2A}} .
+\end{equation}
+\begin{example}[: harmonic mean]
+Two 2\,000 m cells, 10 m thick and 2\,000 m wide ($A=20\,000$ m$^2$, $L_1=L_2=1\,000$ m to the shared face), gravel
+$K_1=50$ m/d next to till $K_2=0.2$ m/d:
+$C_{12}=1/(1\,000/(50\cdot20\,000)+1\,000/(0.2\cdot20\,000)) = 1/(0.001+0.25)=3.98$ m$^2$/d. The low-conductivity
+material controls the flow.
+\end{example}
+
+\section{Storage}
+When the head in an aquifer falls, water is released from storage.
+\begin{itemize}
+\item In an \emph{unconfined} aquifer the water table drops and pores drain. The water released per square metre per
+metre of fall is the \emph{specific yield} $S_y$ (typically 0.05--0.30).
+\item In a \emph{confined} (full) aquifer, water is released only by the slight expansion of water and compression of
+the grains; per cubic metre of aquifer per metre of head fall this is the \emph{specific storage} $S_s$
+(typically $10^{-6}$--$10^{-4}$ 1/m).
+\end{itemize}
+\begin{example}[: storage change]
+A 4 km$^2$ cell of gravel ($S_y=0.25$) whose water table falls 0.1 m in a day releases
+$4\times10^6\times0.25\times0.1=100\,000$ m$^3$. The same fall in a 20 m thick confined sand ($S_s=10^{-5}$ 1/m)
+releases $4\times10^6\times20\times10^{-5}\times0.1=80$ m$^3$ --- over a thousand times less.
+\end{example}
+
+\section{The groundwater flow equation}
+Combining Darcy's law with conservation of water (what flows in, minus what flows out, equals the change in storage)
+gives the equation MODFLOW solves. For one cell $n$ with neighbours $m$:
+\begin{equation}
+\sum_{m}C_{nm}\left(h_m-h_n\right) + \sum_{b}q_{b,n} = S_n\,\frac{h_n^{\,t+\dt}-h_n^{\,t}}{\dt},
+\end{equation}
+where all heads are those at the end of the step, $t+\dt$ (MODFLOW's implicit scheme, which is stable for any step
+length), the first sum is flow from the neighbours, $q_{b,n}$ are the boundary flows of the cell (recharge, rivers,
+drains, wells, \dots; positive into the aquifer), and $S_n$ is the storage capacity of the cell ($S_y$ times area when
+unconfined, $S_s$ times volume when confined). Writing this for every cell gives a large set of equations for the
+unknown heads, which MODFLOW solves every time step.
+
+\begin{plain}
+Each cell is a small water account: inflows from neighbours and boundaries, minus outflows, equals the change of water
+stored. MODFLOW finds the heads that make every cell's account balance at the same time.
+\end{plain}
+
+\section{Head-dependent boundaries}
+Many exchanges depend on the head: a river gives water to the aquifer when the river is higher than the water table,
+and receives water when it is lower. MODFLOW writes such a boundary as
+\begin{equation}
+q_b = C_b\left(h_b-h_n\right),
+\end{equation}
+where $h_b$ is the boundary's water level. Because $q_b$ depends on the unknown head $h_n$, MODFLOW solves for the
+boundary flow together with the heads; this keeps the solution stable even with large conductances. In MODFLOW's
+internal notation each boundary contributes two numbers per cell, HCOF and RHS, and its flow is
+\begin{equation}
+q_b = \mathrm{HCOF}\cdot h_n-\mathrm{RHS}.
+\end{equation}
+The coupling uses exactly this formula, with MODFLOW's own HCOF and RHS, to compute every exchanged flow. It is the same
+formula MODFLOW uses for its own budget, so the numbers exchanged with Raven are exactly the numbers MODFLOW accounts for.
+
+\section{Water table and potentiometric surface}
+In an unconfined aquifer the head is the water-table elevation and the pores above it are partly empty. In a confined
+aquifer, sealed above by a low-permeability layer, water rises in a well above the top of the aquifer; the imaginary
+surface joining these levels is the \emph{potentiometric surface}. The same aquifer can be confined in one place and
+unconfined in another, or change over time as heads fall; MODFLOW's \emph{convertible} layers handle this switch
+automatically by using $S_s$ while full and $S_y$ once the head falls below the top of the layer.
+
+\begin{figure}[!htbp]\centering
+\begin{tikzpicture}[x=1cm,y=1cm,lab/.style={font=\scriptsize,align=center},leg/.style={font=\scriptsize,anchor=west,align=left}]
+\fill[yellow!25] (0,3) rectangle (9,4.35); \fill[gray!35] (0,2.3) rectangle (9,3);
+\fill[orange!20] (0,0.6) rectangle (9,2.3); \fill[black!12] (0,0) rectangle (9,0.6);
+\fill[white] (0,4.42) -- (9,4.28) -- (9,4.4) -- (0,4.5) -- cycle;
+\draw[thick,brown!60!black] (0,4.42) -- (9,4.28);
+\draw[dotted,red!70!black,very thick] (0,4.95) -- (9,4.5);
+\draw[dashed,blue!70!black,thick] (0,3.95) -- (9,3.6);
+\node[lab] at (4.3,3.3) {sand (unconfined)}; \node[lab] at (4.3,2.65) {clay (aquitard)};
+\node[lab] at (4.3,1.45) {gravel (confined)}; \node[lab] at (4.3,0.3) {bedrock};
+\draw[line width=2.5pt,black!70] (1.6,5.25) -- (1.6,1.8); \draw[line width=2.5pt,black!70,dash pattern=on 1.5pt off 1.2pt] (1.6,1.8) -- (1.6,1.0);
+\fill[red!70!black] (1.6,4.87) -- ++(-0.13,0.16) -- ++(0.26,0) -- cycle;
+\node[lab,anchor=south] at (1.6,5.3) {well A, screened in gravel};
+\draw[line width=2.5pt,black!70] (6.8,5.25) -- (6.8,3.55); \draw[line width=2.5pt,black!70,dash pattern=on 1.5pt off 1.2pt] (6.8,3.55) -- (6.8,3.1);
+\fill[blue!70!black] (6.8,3.69) -- ++(-0.13,0.16) -- ++(0.26,0) -- cycle;
+\node[lab,anchor=south] at (6.8,5.3) {well B, screened in sand};
+\draw[-{Stealth[length=2mm]},thick,black!60] (8.1,1.95) -- node[lab,left]{leakage} (8.1,3.2);
+\draw[red!70!black] (9,4.5) -- (9.35,4.95) node[leg] {potentiometric surface\\ of the confined gravel};
+\draw[brown!60!black] (9,4.28) -- (9.35,4.2) node[leg] {land surface};
+\draw[blue!70!black] (9,3.6) -- (9.35,3.45) node[leg] {water table of the sand};
+\end{tikzpicture}
+\caption{The same place can have two different heads: the water table of the upper sand and the higher potentiometric surface of
+the confined gravel below the clay. Water leaks upward through the clay because the gravel head is higher.}\label{fig:potsurf}
+\end{figure}
+\section{Three kinds of boundary conditions}
+\begin{table}[!htbp]\centering
+\caption{Three kinds of boundary conditions.}
+\begin{tabular}{P{0.22\linewidth}P{0.368\linewidth}P{0.34\linewidth}}\toprule\hdr
+Kind & Meaning & In this coupling\\\midrule
+Specified flow & the flow is known (it does not depend on the head) & recharge, wells, reservoir seepage\\
+Specified head & the head is known; the flow is whatever is needed & fixed-head boundaries (CHD)\\
+Head-dependent flow & flow = conductance $\times$ (boundary level $-$ head) & rivers, seepage drains, wetlands, lakes, general-head boundaries, water-table ET\\\bottomrule
+\end{tabular}
+\end{table}
+Head-dependent boundaries are the heart of a coupled model: they let the aquifer and the surface water ``negotiate'' the
+exchange according to the water levels on both sides.
+
+\section{The Newton method in simple terms}
+The flow equations are non-linear: in an unconfined layer, transmissivity depends on the saturated thickness, which
+depends on the unknown head. MODFLOW therefore solves them iteratively: guess heads, compute the imbalance of every cell,
+correct the heads, and repeat until the corrections are smaller than a tolerance (here 0.00001 m, i.e.\ 0.01 mm). The Newton--Raphson method
+computes each correction from the slope of the imbalance with respect to the heads, which converges quickly even when cells
+are nearly dry. Each repetition is an \emph{outer iteration}; \cmd{GWBudget.csv} reports how many were needed each step
+(typically 3--10 in the Liard example).
+
+\section{A cell's water account, with numbers}
+\begin{example}[: one cell for one day]
+A 4 km$^2$ gravel cell receives 8\,000 m$^3$ recharge; it gets 1\,500 m$^3$ from an up-gradient neighbour and passes
+2\,500 m$^3$ to a down-gradient one; its drain removes 4\,000 m$^3$. Inflow $-$ outflow $=8\,000+1\,500-2\,500-4\,000=3\,000$
+m$^3$ are stored, so with $S_y=0.25$ the water table rises by $3\,000/(4\times10^6\times0.25)=3$ mm. MODFLOW finds heads for
+which every cell's account balances like this one at the same time.
+\end{example}
+
+\section{Units and conversions}
+\begin{table}[!htbp]\centering
+\caption{Units and conversions.}
+\begin{tabular}{P{0.44\linewidth}P{0.5\linewidth}}\toprule\hdr
+Quantity & Conversion\\\midrule
+depth of water in an HRU to volume & $V\,[\mathrm{m}^3]=x\,[\mathrm{mm}]\times A\,[\mathrm{km}^2]\times1000$\\
+flow & 1 m$^3$/s $=86\,400$ m$^3$/d\\
+recharge rate & 1 mm/d over 1 km$^2$ $=1\,000$ m$^3$/d\\
+hydraulic conductivity & 1 m/d $\approx1.16\times10^{-5}$ m/s\\
+leakance & conductance per area, d$^{-1}$; $C=L\times$area\\\bottomrule
+\end{tabular}
+\end{table}

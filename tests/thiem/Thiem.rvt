@@ -1,0 +1,29 @@
+:Gauge G
+  :Latitude 55.000000
+  :Longitude -120.000000
+  :Elevation 100
+  :Data RAINFALL mm/d
+    2000-01-01 00:00:00 1.0 3
+    0
+    0
+    0
+  :EndData
+  :Data SNOWFALL mm/d
+    2000-01-01 00:00:00 1.0 3
+    0
+    0
+    0
+  :EndData
+  :Data TEMP_AVE C
+    2000-01-01 00:00:00 1.0 3
+    10
+    10
+    10
+  :EndData
+:EndGauge
+:WellRate 1 m3/d
+  2000-01-01 00:00:00 1.0 3
+  -5000
+  -5000
+  -5000
+:EndWellRate

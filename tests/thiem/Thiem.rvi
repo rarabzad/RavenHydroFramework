@@ -1,0 +1,17 @@
+:StartDate 2000-01-01 00:00:00
+:Duration 3
+:TimeStep 1.0
+:Method ORDERED_SERIES
+:SoilModel SOIL_ONE_LAYER
+:Routing ROUTE_NONE
+:CatchmentRoute ROUTE_DUMP
+:Evaporation PET_CONSTANT
+:RainSnowFraction RAINSNOW_DATA
+:OroTempCorrect OROCORR_NONE
+:OroPrecipCorrect OROCORR_NONE
+:HydrologicProcesses
+  :Precipitation PRECIP_RAVEN ATMOS_PRECIP SOIL[0]
+  :Percolation   PERC_CONSTANT SOIL[0] GROUNDWATER
+:EndHydrologicProcesses
+:GroundwaterModel MODFLOW6
+:SilentMode
