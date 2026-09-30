@@ -1,0 +1,111 @@
+\documentclass[11pt,a4paper]{report}
+\usepackage[T1]{fontenc}
+\usepackage{mathpazo}
+\usepackage[scaled=0.92]{helvet}
+\usepackage[varqu,varl,scaled=0.96]{zi4}   % Inconsolata: a narrower, clearer monospace than Courier
+\usepackage[protrusion=true,expansion=true]{microtype}
+\usepackage[a4paper,margin=2.5cm,headheight=14pt]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,longtable,array,tabularx,multirow}
+\usepackage{graphicx}
+\usepackage[table]{xcolor}
+\definecolor{brand}{HTML}{1F4E79}
+\definecolor{brandlight}{HTML}{E3ECF6}
+\definecolor{rowgray}{gray}{0.965}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc,fit,backgrounds,decorations.pathmorphing,patterns}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{listings}
+\usepackage{caption}
+\captionsetup{font=small,labelfont={bf,color=brand},skip=6pt}
+\captionsetup[table]{position=top}
+\usepackage[most]{tcolorbox}
+\usepackage{needspace}
+\usepackage{float}
+\usepackage{etoolbox}
+\usepackage{titlesec}
+\titleformat{\chapter}[display]{\normalfont\color{brand}}{\sffamily\large\bfseries\MakeUppercase{\chaptertitlename}\ \thechapter}{4pt}{\raggedright\sffamily\huge\bfseries}[\vspace{3pt}{\titlerule[0.8pt]}]
+\titlespacing*{\chapter}{0pt}{0pt}{18pt}
+\titleformat{\section}{\needspace{8\baselineskip}\raggedright\normalfont\sffamily\Large\bfseries\color{brand}}{\thesection}{0.7em}{}
+\titleformat{\subsection}{\needspace{6\baselineskip}\raggedright\normalfont\sffamily\large\bfseries\color{brand!80!black}}{\thesubsection}{0.7em}{}
+\titleformat{\subsubsection}{\needspace{6\baselineskip}\normalfont\sffamily\normalsize\bfseries}{\thesubsubsection}{0.7em}{}
+\titlespacing*{\section}{0pt}{16pt plus 4pt minus 2pt}{6pt}
+\titlespacing*{\subsection}{0pt}{12pt plus 3pt minus 2pt}{4pt}
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\sffamily\color{gray}\leftmark}
+\fancyhead[R]{\small\sffamily\color{gray}Raven--MODFLOW~6 groundwater coupling}
+\fancyfoot[C]{\small\sffamily\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\chaptermark}[1]{\markboth{\thechapter\quad #1}{}}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\small\sffamily\thepage}\renewcommand{\headrulewidth}{0pt}}
+\usepackage[colorlinks=true,linkcolor=brand,citecolor=brand,urlcolor=brand]{hyperref}
+\emergencystretch=6em
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{1}
+\makeatletter\patchcmd{\l@chapter}{\addvspace{1.0em \@plus\p@}}{\addvspace{0.45em \@plus\p@}}{}{}\makeatother
+% ---- tables: small type, ragged-right columns, air between rows, shaded header row
+\renewcommand{\arraystretch}{1.25}
+\setlength{\tabcolsep}{5pt}
+\AtBeginEnvironment{tabular}{\small}
+\AtBeginEnvironment{tabularx}{\small}
+\AtBeginEnvironment{longtable}{\small}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\hdr}{\rowcolor{brandlight}}
+% ---- diagrams: the manual's sans-serif font; no hyphenation inside boxes
+\tikzset{every picture/.prefix style={execute at begin picture={\sffamily}},
+         every node/.append style={execute at begin node={\sffamily\hyphenpenalty=10000\exhyphenpenalty=10000}}}
+% ---- code listings
+\lstset{basicstyle=\ttfamily\footnotesize,columns=fullflexible,frame=single,framerule=0.3pt,rulecolor=\color{gray!50},breaklines=true,
+        xleftmargin=4pt,xrightmargin=4pt,backgroundcolor=\color{gray!5},aboveskip=6pt,belowskip=6pt}
+\newcommand{\ubreak}{\textunderscore}  % code names are not broken at underscores; a long one moves to the next line
+\DeclareRobustCommand{\cmd}[1]{\begingroup\ttfamily\let\_\ubreak #1\endgroup}
+\newcommand{\dt}{\Delta t}
+% ---- boxes
+\tcbset{boxrule=0.6pt,arc=2pt,left=5pt,right=5pt,top=3pt,bottom=3pt,fonttitle=\bfseries\small\sffamily}
+\newtcolorbox{plain}{colback=teal!4,colframe=teal!55!black,title=In plain words}
+\newtcolorbox{example}[1][]{colback=orange!4,colframe=orange!70!black,title=Worked example#1}
+\newtcolorbox{watch}{colback=red!3,colframe=red!55!black,title=Watch out}
+\newtcolorbox{refcard}[1]{colback=brandlight!40,colframe=brand,title={Reference card: #1},breakable,enhanced jigsaw,before skip=10pt,after skip=10pt}
+\begin{document}
+\pagenumbering{roman}
+\begin{titlepage}
+\centering
+\vspace*{3.5cm}
+{\color{brand}\rule{\linewidth}{1.2pt}}\par\vspace{16pt}
+{\sffamily\bfseries\fontsize{30}{38}\selectfont\color{brand}Raven--MODFLOW~6\\[4pt]Groundwater Coupling\par}
+\vspace{14pt}
+{\color{brand}\rule{\linewidth}{1.2pt}}\par\vspace{24pt}
+{\large Manual chapter for the Raven Hydrological Modelling Framework\\[2pt](based on Raven 4.15)\par}
+\vfill
+{\sffamily\Large\bfseries Rezgar Arabzadeh\par}
+\vspace{4pt}
+{\large Principal Scientist, Hazen and Sawyer\par}
+\vspace{2cm}
+{\large September 2026\par}
+\vspace{1.2cm}
+{\footnotesize\color{gray!70!black}\copyright\ 2026 Rezgar Arabzadeh. This manual is licensed under the Creative Commons Attribution 4.0
+International License (CC BY 4.0), \url{https://creativecommons.org/licenses/by/4.0/}.\par}
+\end{titlepage}
+\begingroup\small\tableofcontents\endgroup
+\cleardoublepage
+\pagenumbering{arabic}
+\input{chapters/ch1_intro}
+\input{chapters/ch2_concepts}
+\input{chapters/ch3_building}
+\input{chapters/ch4_existing}
+\input{chapters/ch4_exchanges}
+\input{chapters/ch5_accounting}
+\input{chapters/ch6_reference}
+\input{chapters/ch7_applying}
+\input{chapters/ch8_verification}
+\input{chapters/ch9_developers}
+\appendix
+\input{chapters/appendix}
+\cleardoublepage\phantomsection\addcontentsline{toc}{chapter}{Bibliography}
+\bibliographystyle{plain}
+\bibliography{refs}
+\end{document}

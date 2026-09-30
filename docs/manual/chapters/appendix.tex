@@ -1,0 +1,348 @@
+\chapter{Reference tables}\label{app:tables}
+This appendix collects, in the style of the Raven manual, every parameter, command, option, algorithm and output of the
+groundwater coupling in one place. \emph{Default} is the value used when the item is not given; \emph{checked} is the range
+Raven enforces at start-up (values outside it stop the run with a message); \emph{typical} ranges are guidance from the
+literature \cite{freeze1979groundwater,domenico1998physical,johnson1967specific,calver2001riverbed}, not limits.
+
+\begin{plain}
+The tables here repeat, in one place, every parameter, command, option and output with its unit, default and allowed range
+--- the same information as the chapters, arranged for looking up rather than reading.
+\end{plain}
+
+\section{Parameter classes}\label{app:classes}
+As in Raven, every parameter belongs to a class, and the class decides where it is set and which part of the model it applies to.
+\begin{longtable}{P{0.19\linewidth}P{0.13\linewidth}P{0.33\linewidth}P{0.25\linewidth}}
+\caption{Parameter classes.}\\
+\toprule\hdr Class & File & Applies to & Examples\\\midrule\endfirsthead
+\caption[]{Parameter classes (continued)}\\
+\toprule\hdr Class & File & Applies to & Examples\\\midrule\endhead
+Aquifer class & \cmd{.rvp} & every layer made of that material & \cmd{K\_HORIZ}, \cmd{SPEC\_YIELD}\\
+Aquifer profile & \cmd{.rvp} & every column whose dominant HRU has the profile; its layering & \cmd{SEEPAGE\_LEAKANCE}, \cmd{RIVERBED\_K}, layers\\
+HRU & \cmd{.rvh} & one HRU & \cmd{AQUIFER\_PROFILE}, \cmd{AREA}, \cmd{ELEVATION}\\
+Subbasin, channel & \cmd{.rvh}, \cmd{.rvp} & a subbasin's reach & channel profile, \cmd{Q\_REFERENCE}\\
+Reservoir & \cmd{.rvh} & one reservoir & \cmd{:SeepageParameters}, \cmd{:AbsoluteCrest\allowbreak Height}\\
+Groundwater option & \cmd{.rvg} & the whole groundwater model & \cmd{:GridCellSize}, \cmd{:SolverHead\allowbreak Tolerance}\\
+Stress or observation & \cmd{.rvg}, \cmd{.rvt} & a well, boundary or monitoring well & \cmd{:Wells}, \cmd{:WellRate}, \cmd{:BoundaryHead}\\
+Initial condition & \cmd{.rvc} & the start of a run & \cmd{:InitialGWHeads}, hotstart blocks\\
+Raven state variable & (computed) & an HRU store or flux & \cmd{GROUNDWATER}, \cmd{AET}, \cmd{DEPRESSION}\\\bottomrule
+\end{longtable}
+
+\section{Aquifer class parameters (\texttt{:AquiferClasses}, \texttt{.rvp})}\label{app:class}
+\begin{longtable}{P{0.17\linewidth}P{0.23\linewidth}P{0.07\linewidth}P{0.09\linewidth}P{0.11\linewidth}P{0.19\linewidth}}
+\caption{Aquifer class parameters (\cmd{:AquiferClasses}, \cmd{.rvp}).}\\
+\toprule\hdr Parameter & Meaning & Units & Default & Checked & Typical range\\\midrule\endfirsthead
+\caption[]{Aquifer class parameters (\cmd{:AquiferClasses}, \cmd{.rvp}) (continued)}\\
+\toprule\hdr Parameter & Meaning & Units & Default & Checked & Typical range\\\midrule\endhead
+\cmd{K\_HORIZ} & horizontal hydraulic conductivity & m/d & required & $>0$ & $10^{-7}$ (clay) -- $10^{3}$ (gravel)\\
+\cmd{K\_VERT} & vertical hydraulic conductivity & m/d & $K_h/10$ & $>0$ & $K_h/100$ -- $K_h$\\
+\cmd{SPEC\_STORAGE} & specific storage $S_s$ & 1/m & $10^{-5}$ & $\ge0$ & $10^{-6}$ (rock) -- $10^{-3}$ (soft clay)\\
+\cmd{SPEC\_YIELD} & specific yield $S_y$ & -- & 0.1 & $[0,1]$ & 0.01 (clay) -- 0.35 (gravel)\\
+\cmd{POROSITY} & total porosity (reserved for transport) & -- & 0.3 & $[0,1]$ & 0.01 (rock) -- 0.6 (clay)\\\bottomrule
+\end{longtable}
+
+\section{Typical values by material}\label{app:materials}
+\begin{longtable}{P{0.207\linewidth}P{0.17\linewidth}P{0.15\linewidth}P{0.2\linewidth}P{0.16\linewidth}}
+\caption{Typical values by material.}\\
+\toprule\hdr Material & $K$ [m/d] & $S_y$ [--] & $S_s$ [1/m] & Porosity [--]\\\midrule\endfirsthead
+\caption[]{Typical values by material (continued)}\\
+\toprule\hdr Material & $K$ [m/d] & $S_y$ [--] & $S_s$ [1/m] & Porosity [--]\\\midrule\endhead
+Gravel & $10^{1}$--$10^{3}$ & 0.13--0.35 & $10^{-6}$--$10^{-5}$ & 0.25--0.40\\
+Sand, clean & $10^{0}$--$10^{2}$ & 0.10--0.35 & $10^{-5}$--$10^{-4}$ & 0.25--0.50\\
+Sand, silty & $10^{-2}$--$10^{0}$ & 0.08--0.25 & $10^{-5}$--$10^{-4}$ & 0.30--0.45\\
+Silt, loess & $10^{-3}$--$10^{0}$ & 0.03--0.20 & $10^{-4}$ & 0.35--0.50\\
+Glacial till & $10^{-6}$--$10^{-1}$ & 0.02--0.15 & $10^{-4}$--$10^{-3}$ & 0.10--0.30\\
+Clay & $10^{-7}$--$10^{-3}$ & 0.00--0.05 & $10^{-4}$--$10^{-2}$ & 0.40--0.70\\
+Sandstone & $10^{-4}$--$10^{0}$ & 0.02--0.30 & $10^{-6}$--$10^{-5}$ & 0.05--0.30\\
+Limestone, karst & $10^{-1}$--$10^{3}$ & 0.01--0.15 & $10^{-6}$ & 0.05--0.50\\
+Fractured crystalline rock & $10^{-3}$--$10^{1}$ & 0.001--0.05 & $10^{-6}$ & 0.00--0.10\\\bottomrule
+\end{longtable}
+
+\section{Aquifer profile parameters (\texttt{:AquiferProfileParameters}, \texttt{.rvp})}\label{app:profile}
+\begin{longtable}{P{0.28\linewidth}P{0.23\linewidth}P{0.06\linewidth}P{0.08\linewidth}P{0.09\linewidth}P{0.12\linewidth}}
+\caption{Aquifer profile parameters (\cmd{:AquiferProfile\allowbreak Parameters}, \cmd{.rvp}).}\\
+\toprule\hdr Parameter & Meaning & Units & Default & Checked & Typical range\\\midrule\endfirsthead
+\caption[]{Aquifer profile parameters (\cmd{:AquiferProfile\allowbreak Parameters}, \cmd{.rvp}) (continued)}\\
+\toprule\hdr Parameter & Meaning & Units & Default & Checked & Typical range\\\midrule\endhead
+\cmd{INITIAL\_HEAD\_DEPTH} & initial depth to water below land & m & 5 & any & site data\\
+\cmd{DEFAULT\_BEDROCK\_DEPTH} & bedrock depth where no bedrock map is given & m & 50 & $>0$ & 5--300\\
+\cmd{SOIL\_ZONE\_DEPTH} & model top below land surface & m & 0 & $\ge0$ & 0--3\\
+\cmd{SEEPAGE\_LEAKANCE} & seepage conductance per m$^2$ of cell & 1/d & 1 & $\ge0$ & 0.1--10\\
+\cmd{SEEPAGE\_SMOOTHING\_DEPTH} & depth below the top where seepage starts & m & 0.5 & $\ge0$ & 0.1--1\\
+\cmd{RIVERBED\_K} & riverbed hydraulic conductivity & m/d & 0.5 & $\ge0$ & $10^{-3}$--10\\
+\cmd{RIVERBED\_THICKNESS} & riverbed thickness & m & 1 & $>0$ & 0.3--3\\
+\cmd{EXTINCTION\_DEPTH} & water-table ET extinction depth (0 = off) & m & 0 & $\ge0$ & 0.5--5 (root depth)\\
+\cmd{RECHARGE\_DELAY} & recharge delay time constant (0 = off) & d & 0 & $\ge0$ & 0--365\\\bottomrule
+\end{longtable}
+
+\section{Layer types (\texttt{:AquiferProfiles}, \texttt{.rvp})}\label{app:layers}
+\begin{longtable}{P{0.27\linewidth}P{0.3\linewidth}P{0.358\linewidth}}
+\caption{Layer types (\cmd{:AquiferProfiles}, \cmd{.rvp}).}\\
+\toprule\hdr Keyword & MODFLOW 6 setting & Behaviour\\\midrule\endfirsthead
+\caption[]{Layer types (\cmd{:AquiferProfiles}, \cmd{.rvp}) (continued)}\\
+\toprule\hdr Keyword & MODFLOW 6 setting & Behaviour\\\midrule\endhead
+\cmd{AQUIFER}, \cmd{UNCONFINED\_AQUIFER} & \cmd{ICELLTYPE} 1, \cmd{ICONVERT} 1 & convertible: $S_y$ when unconfined, $S_s$ when full; transmissivity from saturated thickness\\
+\cmd{CONFINED\_AQUIFER} & \cmd{ICELLTYPE} 0, \cmd{ICONVERT} 0 & always full: constant transmissivity, storage by $S_s$\\
+\cmd{AQUITARD}, \cmd{CONFINING\_LAYER} & as \cmd{AQUIFER} & leaky layer with the (low) $K$ of its class\\
+\cmd{AQUICLUDE} & \cmd{IDOMAIN} 0 & no flow; not allowed as top layer\\
+thickness \cmd{TO\_BEDROCK} & layer bottom = bedrock & layers below it become pass-through cells\\
+(automatic) pass-through & \cmd{IDOMAIN} $-1$ & layer thinner than 0.5 m or missing in the profile: connects the cells above and below\\\bottomrule
+\end{longtable}
+
+\section{Commands}\label{app:commands}
+\begin{longtable}{P{0.08\linewidth}P{0.4\linewidth}P{0.448\linewidth}}
+\caption{Commands of the groundwater coupling, by input file.}\\
+\toprule\hdr
+File & Command & Meaning (default)\\\midrule\endfirsthead
+\caption[]{Commands of the groundwater coupling, by input file (continued).}\\
+\toprule\hdr
+File & Command & Meaning (default)\\\midrule\endhead
+\cmd{.rvi} & \cmd{:GroundwaterModel NONE|MODFLOW6} & switch the coupling on (\cmd{NONE})\\
+\cmd{.rvi} & \cmd{:rvg\_Filename file} & groundwater file, relative to the \cmd{.rvi} (\cmd{<model>.rvg})\\
+\cmd{.rvh} & \cmd{AQUIFER\_PROFILE} column of \cmd{:HRUs} & profile name or \cmd{[NONE]}\\
+\cmd{.rvh} & \cmd{:SeepageParameters k h} in \cmd{:Reservoir} & reservoir seepage constant; $h$ is replaced by the aquifer head under \cmd{:ReservoirExchange}\\
+\cmd{.rvp} & \cmd{:AquiferClasses} \dots\ \cmd{:EndAquiferClasses} & material table (Section~\ref{app:class})\\
+\cmd{.rvp} & \cmd{:AquiferProfiles} \dots\ \cmd{:EndAquiferProfiles} & name, number of layers, \{class, thickness or \cmd{TO\_BEDROCK}, type\}\\
+\cmd{.rvp} & \cmd{:AquiferProfile\allowbreak Parameters} \dots & per-profile parameters (Section~\ref{app:profile})\\
+\cmd{.rvg} & \cmd{:HRUGeometry file \{field\}} & HRU polygons, GeoJSON FeatureCollection, lon/lat (\cmd{HRU\_ID}); required\\
+\cmd{.rvg} & \cmd{:RiverGeometry file \{field\}} & river lines; subbasin field optional\\
+\cmd{.rvg} & \cmd{:LandSurface file} & DEM, ESRI ASCII grid in lon/lat (HRU elevations)\\
+\cmd{.rvg} & \cmd{:BedrockSurface file} & bedrock elevation grid (\cmd{DEFAULT\_BEDROCK\_DEPTH})\\
+\cmd{.rvg} & \cmd{:GridCellSize m} & cell size, $>0$ (1000)\\
+\cmd{.rvg} & \cmd{:MinCellCoverage f} & coverage for an active column, $(0,1]$ (0.25)\\
+\cmd{.rvg} & \cmd{:GridType REGULAR|QUADTREE|HRU\_MESH|FILE} & kind of grid (\cmd{REGULAR})\\
+\cmd{.rvg} & \cmd{:MF6Simulation file}, \cmd{:MF6Model name} & existing model; which GWF model\\
+\cmd{.rvg} & \cmd{:MF6StartDate yyyy-mm-dd} & date of the model's time zero (required)\\
+\cmd{.rvg} & \cmd{:MF6CRS EPSG:code | TMERC | ALBERS | LCC \dots} & projection of the model's coordinates\\
+\cmd{.rvg} & \cmd{:MF6GridFile file \{ID\}}, \cmd{:OverlapWeights} & cell polygons; or HRU--cell weights\\
+\cmd{.rvg} & \cmd{:RavenTakesOver p \dots}, \cmd{:KeepPackages p \dots} & declared recharge/ET/UZF packages\\
+\cmd{.rvg} & \cmd{:StreamPackage p \{AUX a | DOMINANT\_HRU\}} & RIV/DRN/GHB package to Raven's reaches\\
+\cmd{.rvg} & \cmd{:SeepageToRaven ON|OFF} & \cmd{DRN\_RAVEN} at the model top (\cmd{ON})\\
+\cmd{.rvg} & \cmd{:GridRotation} $\theta$ & degrees counterclockwise, $|\theta|\le360$; regular and quadtree grids (0)\\
+\cmd{.rvg} & \cmd{:GridRefinement RIVERS|WELLS|LAKES s} or \cmd{LINES|POLYGONS file s} & target cell size $0<s<$ \cmd{:GridCellSize}; not for \cmd{FILE}; \cmd{LAKES}: every reservoir's lake HRU\\
+\cmd{.rvg} & \cmd{:GridFile file \{ID\}} & cell polygons for \cmd{:GridType FILE} (\cmd{CELL\_ID})\\
+\cmd{.rvg} & \cmd{:QuadtreeMaxLevel n} & $0\le n\le12$; \cmd{QUADTREE} only (from refinement sizes)\\
+\cmd{.rvg} & \cmd{:FlowCorrection AUTO|XT3D|XT3D\_RHS|NONE} & XT3D (\cmd{AUTO}: off)\\
+\cmd{.rvg} & \cmd{:LayerConnection INDEX|ELEVATION} & layers connected by number or by elevation (\cmd{INDEX})\\
+\cmd{.rvg} & \cmd{:MF6Library path} & MODFLOW 6 library (else \cmd{RAVEN\_MF6\_LIB}, next to the Raven executable, then \cmd{lib/mf6/}, then the system path)\\
+\cmd{.rvg} & \cmd{:SeepageReturnTo SV} & store receiving seepage (lowest soil layer; \cmd{SURFACE\_WATER} for soil-less HRUs)\\
+\cmd{.rvg} & \cmd{:RiverBedDepth m|REFERENCE\_FLOW} & riverbed depth below the DEM (\cmd{REFERENCE\_FLOW})\\
+\cmd{.rvg} & \cmd{:GWInitialization STEADY\_STATE r} & steady-state start, recharge $r\ge0$ mm/d (off); if it does not converge, the initial heads are used\\
+\cmd{.rvg} & \cmd{:SurfaceWater\allowbreak Exchange SV group LEAKANCE L} & store--aquifer exchange, $L>0$ 1/d\\
+\cmd{.rvg} & \cmd{:ReservoirExchange} & reservoir--aquifer exchange (off)\\
+\cmd{.rvg} & \cmd{:Wells} \dots\ \cmd{:EndWells} & ID, \cmd{NAME, LATITUDE, LONGITUDE, SCREEN\_TOP, SCREEN\_BOT}\\
+\cmd{.rvg} & \cmd{:ObservationWells} \dots & ID, \cmd{NAME, LATITUDE, LONGITUDE, SCREEN\_ELEV}\\
+\cmd{.rvg} & \cmd{:GeneralHeadBoundary n file HEAD h CONDUCTANCE c \{LAYERS ALL|TOP\}} & head-dependent boundary; $c>0$ m$^2$/d per cell (\cmd{ALL})\\
+\cmd{.rvg} & \cmd{:SpecifiedHeadBoundary n file HEAD h \{LAYERS ALL|TOP\}} & fixed-head boundary (\cmd{ALL})\\
+\cmd{.rvg} & \cmd{:SolverHead\allowbreak Tolerance m} & Newton target tolerance, $>0$ (0.00001)\\
+\cmd{.rvg} & \cmd{:SolverMax\allowbreak OuterIterations n} & Newton iteration limit, $\ge1$ (500)\\
+\cmd{.rvg} & \cmd{:HeadSaveFrequency n} & steps between saved head fields, $\ge1$ (30)\\
+\cmd{.rvg} & \cmd{:WriteNetCDFHeads} & write \cmd{GWHeads.nc} (off; needs a NetCDF build)\\
+\cmd{.rvg} & \cmd{:LinkageCache file} & linkage cache (\cmd{<output>/mf6/linkage.cache})\\
+\cmd{.rvt} & \cmd{:WellRate id units} \dots\ \cmd{:EndWellRate} & well rate series, m$^3$/d, negative = pumping\\
+\cmd{.rvt} & \cmd{:BoundaryHead name units} \dots & time-varying boundary head\\
+\cmd{.rvt} & \cmd{:ObservationData GW\_HEAD id units} \dots & observed heads for diagnostics\\
+\cmd{.rvc} & \cmd{:InitialGWHeads FROM\_PROFILE|DEPTH\_BELOW\_SURFACE d|ELEVATION z} & initial heads (\cmd{FROM\_PROFILE})\\
+\cmd{.rvc} & \cmd{:GWHeads}, \cmd{:GWRechargeStore}, \cmd{:GWReservoirSeepage}, \cmd{:GWRiverLossCarry} & hotstart blocks written by Raven (Section~\ref{app:hotstart})\\\bottomrule
+\end{longtable}
+
+\section{Options}\label{app:options}
+\begin{longtable}{P{0.28\linewidth}P{0.28\linewidth}P{0.368\linewidth}}
+\caption{Options of the groundwater commands.}\\
+\toprule\hdr Command & Option & Effect\\\midrule\endfirsthead
+\caption[]{Options of the groundwater commands (continued)}\\
+\toprule\hdr Command & Option & Effect\\\midrule\endhead
+\cmd{:GroundwaterModel} & \cmd{NONE} & Raven as before (identical results to Raven 4.15)\\
+ & \cmd{MODFLOW6} & coupled HRUs exchange water with MODFLOW 6\\
+\cmd{:InitialGWHeads} & \cmd{FROM\_PROFILE} & $z_{\mathrm{land}}-$\cmd{INITIAL\_HEAD\_DEPTH} of the column's profile\\
+ & \cmd{DEPTH\_BELOW\_SURFACE d} & $z_{\mathrm{land}}-d$ everywhere\\
+ & \cmd{ELEVATION z} & $z$ everywhere (at least 0.1 m above the lowest active bottom)\\
+\cmd{:GWInitialization} & \cmd{STEADY\_STATE r} & steady state with recharge $r$ over covered areas before day 1; skipped on hotstart\\
+\cmd{:RiverBedDepth} & value & bed = lowest DEM along the river $-$ value\\
+ & \cmd{REFERENCE\_FLOW} & bed = lowest DEM $-$ Raven channel depth at the reference flow (max 20 m)\\
+\cmd{LAYERS} (boundaries) & \cmd{ALL} & every active layer whose bottom is below the head\\
+ & \cmd{TOP} & the first such layer only\\
+\cmd{:SeepageReturnTo} & any storage state variable & e.g.\ \cmd{SOIL[2]}, \cmd{SURFACE\_WATER}, \cmd{DEPRESSION}\\\bottomrule
+\end{longtable}
+
+\section{Exchange algorithms}\label{app:algorithms}
+\begin{longtable}{P{0.13\linewidth}P{0.17\linewidth}P{0.35\linewidth}P{0.26\linewidth}}
+\caption{Exchange algorithms and their safeguards.}\\
+\toprule\hdr Exchange & MODFLOW package (name) & Formulation & Safeguard\\\midrule\endfirsthead
+\caption[]{Exchange algorithms and their safeguards (continued)}\\
+\toprule\hdr Exchange & MODFLOW package (name) & Formulation & Safeguard\\\midrule\endhead
+Recharge & RCH (\cmd{RCH\_RAVEN}) & $V_k=r_kA_k/1000$; optional linear delay; spread by overlap & fixed-head cells skipped; exact per HRU\\
+Seepage & DRN (\cmd{DRN\_RAVEN}) & $C f(h)(h-z_{\mathrm{top}}+d_s)$, $C=L_s\Delta^2$ & returned by overlap; soil-less HRUs to \cmd{SURFACE\_WATER}\\
+Rivers & RIV (\cmd{RIV\_RAVEN}) & $C(s-h)$, or $C(s-z_{\mathrm{bed}})$ below the bed; $C=K_bWL/M_b$ & $C$ limited by channel flow; unsupplied loss carried\\
+Water-table ET & EVT (\cmd{EVT\_RAVEN}) & unmet PET over the cell, linear to $d_x$ & only ET-enabled HRUs; never above unmet demand\\
+Wetlands, lakes & RIV (\cmd{SWX\_RAVEN}) & bed = top, stage = top + store depth & $C$ limited by stored water; one exchange per store\\
+Reservoirs & WEL (\cmd{RES\_RAVEN}) & Raven seepage law, $h_{\mathrm{loc}}=\sum w_i\max(z^{\mathrm{wt}}_i,z_{\mathrm{top},i})$; one-step lag & in-transit volume reported and saved\\
+Wells & WEL (\cmd{WEL\_RAVEN}) & rate split by transmissivity of screened layers & \cmd{AUTO\_FLOW\_REDUCE}\\
+Head boundary & GHB (\cmd{GHB\_RAVEN}) & $C_g(h_g-h)$ & heads kept above cell bottoms\\
+Fixed head & CHD (\cmd{CHD\_RAVEN}) & head held at $h_c$ & heads kept above cell bottoms\\\bottomrule
+\end{longtable}
+
+\section{Solver settings (\texttt{sim.ims})}\label{app:solver}
+\begin{longtable}{P{0.34\linewidth}P{0.2\linewidth}P{0.388\linewidth}}
+\caption{Solver settings written to \cmd{sim.ims}.}\\
+\toprule\hdr Setting & Value & Note\\\midrule\endfirsthead
+\caption[]{Solver settings written to \cmd{sim.ims} (continued)}\\
+\toprule\hdr Setting & Value & Note\\\midrule\endhead
+Formulation & Newton & in \cmd{gwf.nam}, without its \cmd{UNDER\_RELAXATION} keyword (Section~\ref{ch:mf6})\\
+\cmd{OUTER\_DVCLOSE} & 0.00001 m & target; raised to 10$\times$ for the rest of a step after 100 iterations (or half the limit)\\
+\cmd{OUTER\_MAXIMUM} & 500 & \cmd{:SolverMax\allowbreak OuterIterations}\\
+\cmd{UNDER\_RELAXATION} & \cmd{DBD} & theta 0.7, kappa 0.07, gamma 0.1\\
+\cmd{BACKTRACKING\_NUMBER} & 20 & tolerance 1.05, reduction 0.1, residual limit 0.002\\
+\cmd{INNER\_MAXIMUM} & 500 & linear iterations\\
+\cmd{INNER\_DVCLOSE}, \cmd{INNER\_RCLOSE} & $0.1\times$ outer, 1 m$^3$/d & \\
+\cmd{LINEAR\_ACCELERATION} & \cmd{BICGSTAB} & ILU, 5 levels, drop tolerance $10^{-4}$\\\bottomrule
+\end{longtable}
+
+\section{Output: \texttt{GWBudget.csv} columns}\label{app:outputs}
+\begin{longtable}{P{0.44\linewidth}P{0.5\linewidth}}
+\caption{Columns of \cmd{GWBudget.csv}.}\\
+\toprule\hdr
+Column & Meaning\\\midrule\endfirsthead
+\caption[]{Columns of \cmd{GWBudget.csv} (continued).}\\
+\toprule\hdr
+Column & Meaning\\\midrule\endhead
+\cmd{time [d]}, \cmd{date} & end of the step (with time of day for sub-daily steps)\\
+\cmd{Raven recharge [m3/d]} & recharge leaving Raven, before any delay\\
+\cmd{MF6 recharge [m3/d]} & recharge entering MODFLOW\\
+\cmd{seepage to Raven [m3/d]} & drain discharge at the model top\\
+\cmd{storage release [m3/d]} & water released from aquifer storage (negative: stored)\\
+\cmd{MF6 balance error [m3/d]}, \cmd{[\%]} & MODFLOW imbalance; \% of gross flow\\
+\cmd{returned to Raven [m3]} & seepage added to Raven stores\\
+\cmd{outer iterations}, \cmd{converged} & Newton iterations; 1 target, 2 relaxed, 0 not converged\\
+\cmd{recharge delay storage [m3]} & water in delay reservoirs\\
+\cmd{recharge onto CHD cells [m3/d]} & recharge of HRUs lying wholly on fixed-head cells\\
+\cmd{river leakage to aquifer [m3/d]}, \cmd{aquifer discharge to rivers [m3/d]} & river exchange by direction\\
+\cmd{river exchange applied to Raven [m3]} & net volume applied to Raven reaches\\
+\cmd{river loss carried to next step [m3]} & unsupplied loss taken next step (normally 0)\\
+\cmd{water-table ET [m3/d]} & evaporation from the water table\\
+\cmd{wells specified [m3/d]}, \cmd{wells actual [m3/d]} & requested and delivered well rates\\
+\cmd{GHB [m3/d]}, \cmd{CHD [m3/d]} & boundary flows (positive into the aquifer)\\
+\cmd{surface-store leakage to aquifer [m3/d]}, \cmd{aquifer discharge to surface stores [m3/d]} & wetland/lake exchange\\
+\cmd{surface-store exchange applied to Raven [m3]} & net volume applied to Raven stores\\
+\cmd{reservoir seepage sent [m3/d]}, \cmd{delivered [m3/d]}, \cmd{awaiting delivery [m3]} & reservoir exchange\\
+\cmd{reservoir gain not supplied by MODFLOW [m3]} & lake gain a drying cell could not supply; taken back from the reach (normally 0)\\
+\cmd{other model packages [m3/d]} & existing models only: net flow of the model's own packages (wells, boundaries, \dots), positive into the aquifer\\\bottomrule
+\end{longtable}
+Other output files: \cmd{GWHRUState.csv} (water table and depth per coupled HRU), \cmd{GWHeads.csv} (monitoring wells;
+$-1.2345$ when dry), \cmd{GWConnectivity.csv} (wet areas, wet fraction per profile), \cmd{GWModelSummary.txt}, \cmd{GWHeads.nc}
+(optional), \cmd{mf6/} (MODFLOW model, list files, binary heads).
+
+\section{Hotstart blocks (\texttt{solution.rvc})}\label{app:hotstart}
+\begin{longtable}{P{0.3\linewidth}P{0.64\linewidth}}
+\caption{Hotstart blocks written to \cmd{solution.rvc}.}\\
+\toprule\hdr Block & Content\\\midrule\endfirsthead
+\caption[]{Hotstart blocks written to \cmd{solution.rvc} (continued)}\\
+\toprule\hdr Block & Content\\\midrule\endhead
+\cmd{:GWHeads nlay nrow ncol} & MODFLOW head of every cell (raw values, 12 digits); checked against the grid\\
+\cmd{:GWRechargeStore} & HRU ID, water in the recharge-delay reservoir [m$^3$]\\
+\cmd{:GWReservoirSeepage} & subbasin ID, reservoir seepage in transit [m$^3$]\\
+\cmd{:GWRiverLossCarry} & subbasin ID, unsupplied river loss to take next step [m$^3$] (only when non-zero)\\\bottomrule
+\multicolumn{2}{p{\dimexpr\linewidth-2\tabcolsep}}{\footnotesize Each block ends with the matching \cmd{:End} line (\cmd{:EndGWHeads}, \cmd{:EndGWRechargeStore}, \cmd{:EndGWReservoirSeepage}, \cmd{:EndGWRiverLossCarry}).}\\
+\end{longtable}
+
+\section{Error messages}\label{app:errors}
+All stop the run with the message shown (abbreviated) in \cmd{Raven\_errors.txt}.
+\begin{longtable}{P{0.5\linewidth}P{0.44\linewidth}}
+\caption{Error messages and remedies.}\\
+\toprule\hdr
+Message & Remedy\\\midrule\endfirsthead
+\caption[]{Error messages and remedies (continued).}\\
+\toprule\hdr
+Message & Remedy\\\midrule\endhead
+\cmd{:HRUGeometry is required in the .rvg file} & add the HRU polygon file\\
+cannot open GeoJSON / raster file; missing ID field & check paths and the ID field name\\
+HRU \dots\ has an AQUIFER\_PROFILE but no polygon & polygon IDs must match \cmd{.rvh} IDs\\
+HRU \dots\ references unknown AQUIFER\_PROFILE & define the profile in the \cmd{.rvp}\\
+HRU \dots\ does not overlap any active groundwater cell & smaller \cmd{:GridCellSize} or \cmd{:MinCellCoverage}; check bedrock\\
+no HRU has an AQUIFER\_PROFILE; coupled model requires \cmd{:AquiferProfiles} & fill the \cmd{.rvh} column; define profiles\\
+no process moves water into GROUNDWATER & route recharge to \cmd{GROUNDWATER}\\
+process \# removes water from GROUNDWATER in HRU \dots & restrict the process with \cmd{:-->Conditional}\\
+aquifer class/profile \dots\ must be positive / may not be negative / between 0 and 1 & correct the value (Sections~\ref{app:class}, \ref{app:profile})\\
+top layer cannot be an AQUICLUDE; layer thickness must be positive & correct the profile\\
+\cmd{:MinCellCoverage}, \cmd{:GridCellSize}, \cmd{:SolverHead\allowbreak Tolerance}, \cmd{:SolverMax\allowbreak OuterIterations}, \cmd{:HeadSaveFrequency} out of range & correct the value (Section~\ref{app:commands})\\
+improper format of command \dots & correct the command syntax\\
+boundary \dots\ needs a HEAD value / positive CONDUCTANCE & complete the boundary command\\
+two wells / observation wells / boundaries have the same ID or name & make IDs unique\\
+HRU \dots\ is in two \cmd{:SurfaceWater\allowbreak Exchange} groups for the same store & one exchange per store and HRU\\
+well \dots\ is outside the active groundwater model & move the well or enlarge the coupled area\\
+\cmd{:GWHeads} does not match the groundwater grid & hotstart file from a different grid\\
+the model's \emph{type} package \emph{name} would add recharge or ET beside Raven's & list it in \cmd{:RavenTakesOver} or \cmd{:KeepPackages}\\
+\cmd{:MF6StartDate} \dots / the model ends before Raven's run & correct the dates or \cmd{:Duration}\\
+stress period \dots\ is not a whole number of Raven time steps & choose a Raven time step that divides the periods\\
+cells of the grid file differ from the model's cell area & wrong projection, length unit or cell numbering in the file\\
+give one of \cmd{:MF6CRS}, \cmd{:MF6GridFile} or \cmd{:OverlapWeights} & link HRUs in exactly one way\\
+the period data of \emph{package} cannot be renumbered safely & start Raven at \cmd{:MF6StartDate}\\
+\cmd{:GridType FILE} needs \cmd{:GridFile} (and the reverse) & give both, or neither\\
+\cmd{:GridRotation} applies only to REGULAR and QUADTREE grids & remove it, or change the grid type\\
+\cmd{:GridRefinement} size must be positive and smaller than \cmd{:GridCellSize}; RIVERS needs \cmd{:RiverGeometry}; WELLS needs wells & correct the refinement\\
+:GridRefinement LAKES found no reservoir whose lake HRU has a polygon & give the reservoir an \cmd{:HRUID} whose polygon is in \cmd{:HRUGeometry}\\
+grid cell \dots\ must be a single polygon without holes & fix the cell file\\
+HRU mesh exceeds 5 million cells per layer & increase \cmd{:GridCellSize} or the refinement sizes\\
+grid exceeds 5 million cells per layer & increase \cmd{:GridCellSize}\\
+cannot load MODFLOW 6 library & run \cmd{python tools/get\_mf6.py}, or set \cmd{:MF6Library} or \cmd{RAVEN\_MF6\_LIB}\\
+cannot enter MODFLOW 6 folder & output folder removed or not writable during the run\\
+Raven is running more time steps than the MODFLOW 6 simulation holds & check \cmd{:Duration} and \cmd{:TimeStep}\\\bottomrule
+\end{longtable}
+
+\section{Parameter index}\label{app:paramindex}
+Every parameter, its class, and where it is used.
+\begin{longtable}{P{0.348\linewidth}P{0.22\linewidth}P{0.36\linewidth}}
+\caption{Parameter index: every parameter, its class and where it is used.}\\
+\toprule\hdr
+Parameter & Class & Used in\\\midrule\endfirsthead
+\caption[]{Parameter index: every parameter, its class and where it is used (continued).}\\
+\toprule\hdr
+Parameter & Class & Used in\\\midrule\endhead
+\cmd{K\_HORIZ} & aquifer class & flow between cells (Sec.~\ref{ch:concepts}); well split (Sec.~\ref{ch:wells})\\
+\cmd{K\_VERT} & aquifer class & vertical flow between layers (Sec.~\ref{ch:layers})\\
+\cmd{SPEC\_STORAGE}, \cmd{SPEC\_YIELD} & aquifer class & storage (Sec.~\ref{ch:concepts}, \ref{ch:layers})\\
+\cmd{POROSITY} & aquifer class & reserved for transport\\
+layers, thickness, type & aquifer profile & layer construction (Sec.~\ref{ch:layers})\\
+\cmd{INITIAL\_HEAD\_DEPTH} & aquifer profile & initial heads (Sec.~\ref{ch:layers})\\
+\cmd{DEFAULT\_BEDROCK\_DEPTH} & aquifer profile & bedrock without a map (Sec.~\ref{ch:layers})\\
+\cmd{SOIL\_ZONE\_DEPTH} & aquifer profile & model top (Sec.~\ref{ch:layers}); seepage (Sec.~\ref{ch:seepage})\\
+\cmd{SEEPAGE\_LEAKANCE}, \cmd{SEEPAGE\_SMOOTHING\_DEPTH} & aquifer profile & seepage (Sec.~\ref{ch:seepage})\\
+\cmd{RIVERBED\_K}, \cmd{RIVERBED\_THICKNESS} & aquifer profile & river conductance (Sec.~\ref{ch:rivers})\\
+\cmd{EXTINCTION\_DEPTH} & aquifer profile & water-table ET (Sec.~\ref{ch:et})\\
+\cmd{RECHARGE\_DELAY} & aquifer profile & recharge delay (Sec.~\ref{ch:recharge})\\
+\cmd{AQUIFER\_PROFILE} & HRU & coupling of HRUs (Sec.~\ref{ch:grid})\\
+\cmd{:SeepageParameters} & reservoir & reservoir seepage (Sec.~\ref{ch:reservoirs})\\
+\cmd{LEAKANCE} & \cmd{:SurfaceWater\allowbreak Exchange} & wetland and lake exchange (Sec.~\ref{ch:stores})\\
+\cmd{CONDUCTANCE}, \cmd{HEAD} & boundary & GHB and CHD (Sec.~\ref{ch:wells})\\
+\cmd{SCREEN\_TOP}, \cmd{SCREEN\_BOT}, \cmd{:WellRate} & well & pumping (Sec.~\ref{ch:wells})\\
+\cmd{SCREEN\_ELEV}, \cmd{GW\_HEAD} & monitoring well & heads and diagnostics (Sec.~\ref{ch:wells})\\
+\cmd{:GridCellSize}, \cmd{:MinCellCoverage} & groundwater option & grid and active cells (Sec.~\ref{ch:grid})\\
+\cmd{:GridType}, \cmd{:GridRotation}, \cmd{:GridRefinement}, \cmd{:GridFile}, \cmd{:QuadtreeMaxLevel} & groundwater option & grid types (Sec.~\ref{sec:gridtypes})\\
+\cmd{:FlowCorrection}, \cmd{:LayerConnection} & groundwater option & XT3D; layer connections (Sec.~\ref{sec:gridtypes})\\
+\cmd{:MF6Simulation}, \cmd{:MF6CRS}, \cmd{:MF6GridFile}, \cmd{:OverlapWeights}, \cmd{:RavenTakesOver}, \cmd{:KeepPackages}, \cmd{:StreamPackage}, \cmd{:SeepageToRaven}, \cmd{:MF6StartDate}, \cmd{:MF6Model} & existing-model option & Chapter~\ref{ch:existing}\\
+\cmd{:RiverBedDepth}, \cmd{:SeepageReturnTo} & groundwater option & rivers, seepage (Sec.~\ref{ch:rivers}, \ref{ch:seepage})\\
+\cmd{:SolverHead\allowbreak Tolerance}, \cmd{:SolverMax\allowbreak OuterIterations} & groundwater option & Newton solution (Sec.~\ref{ch:mf6})\\\bottomrule
+\end{longtable}
+
+\section{Notation}\label{app:notation}
+\begin{longtable}{P{0.2\linewidth}P{0.6\linewidth}P{0.12\linewidth}}
+\caption{Notation.}\\
+\toprule\hdr Symbol & Meaning & Unit\\\midrule\endfirsthead
+\caption[]{Notation (continued)}\\
+\toprule\hdr Symbol & Meaning & Unit\\\midrule\endhead
+$A_k$, $A_{k,i}$ & HRU area (\cmd{.rvh}); overlap of HRU $k$ and column $i$ & m$^2$\\
+$C$ & conductance & m$^2$/d\\
+$d_s$, $d_x$, $d_0$ & seepage smoothing depth; ET extinction depth; initial depth to water & m\\
+$\Delta$, $\dt$ & cell size; time step & m, d\\
+$h$, $z^{\mathrm{wt}}$ & head; water table of a column (highest wet cell) & m\\
+$K$, $K_h$, $K_v$, $K_b$ & hydraulic conductivity; horizontal; vertical; riverbed & m/d\\
+$k$ & reservoir seepage constant & m$^3$/s/m\\
+$L$, $L_s$ & leakance (stores); seepage leakance & 1/d\\
+$Q$, $q$ & flow (positive into the aquifer for boundaries) & m$^3$/d\\
+$r_k$ & recharge depth of HRU $k$ in a step & mm\\
+$s$, $s_k$ & river stage; store depth & m\\
+$S_s$, $S_y$ & specific storage; specific yield & 1/m, --\\
+$T$ & transmissivity & m$^2$/d\\
+$\tau$ & recharge delay time constant & d\\
+$V$ & volume & m$^3$\\
+$z_{\mathrm{land}}$, $z_{\mathrm{top}}$, $z_{\mathrm{br}}$, $z_{\mathrm{bed}}$ & land surface, model top, bedrock, riverbed elevations & m\\\bottomrule
+\end{longtable}

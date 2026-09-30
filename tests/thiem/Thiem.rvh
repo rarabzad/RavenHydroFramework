@@ -1,0 +1,10 @@
+:SubBasins
+  :Attributes, NAME, DOWNSTREAM_ID, PROFILE, REACH_LENGTH, GAUGED
+  :Units, none, none, none, km, none
+  1, box, -1, NONE, ZERO-, 0
+:EndSubBasins
+:HRUs
+  :Attributes, AREA, ELEVATION, LATITUDE, LONGITUDE, BASIN_ID, LAND_USE_CLASS, VEG_CLASS, SOIL_PROFILE, AQUIFER_PROFILE, TERRAIN_CLASS, SLOPE, ASPECT
+  :Units, km2, m, deg, deg, none, none, none, none, none, none, deg, deg
+  1, 400.0, 100.0, 55.000000, -120.000000, 1, OPEN, GRASS, SOILP, CONF, [NONE], 0, 0
+:EndHRUs

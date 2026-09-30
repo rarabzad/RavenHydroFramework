@@ -1,0 +1,255 @@
+\chapter{Introduction and overview}\label{ch:c1}\label{ch:intro}
+This chapter explains what the coupling does, how its parts fit together, and what a Raven user needs to know before
+starting.
+
+\section{The problem this solves}
+Raven \cite{craig2020raven} simulates the water cycle of a watershed: rain and snow, soil moisture, evaporation,
+runoff and flow in rivers and lakes. It divides a watershed into subbasins, and each subbasin into Hydrologic
+Response Units (HRUs) --- areas that behave alike (for example, forest on till, or a wetland). Raven describes
+groundwater with simple ``buckets'' (linear reservoirs): water enters, and leaves at a rate proportional to what is
+stored. Buckets are fast and easy to calibrate, but they cannot say \emph{where} groundwater flows, how deep the water
+table is at a well, how a pumping well lowers nearby streamflow, or whether a stream gains water from the aquifer or
+loses water to it.
+
+MODFLOW~6 \cite{langevin2017mf6} is the U.S. Geological Survey's groundwater model and the international standard for
+those questions. It divides the underground into a three-dimensional grid of cells and calculates the water level
+(the \emph{head}) in every cell from the physics of flow through soil and rock. But MODFLOW has no snow, soil or
+evaporation processes of its own; it needs to be told how much water reaches the water table.
+
+The coupling joins the two so that each does what it is good at: Raven calculates everything at and near the land
+surface; MODFLOW calculates the saturated groundwater below; and the two exchange water every day.
+
+\begin{plain}
+Raven decides how much water soaks down to the water table. MODFLOW moves that water sideways and downwards through
+the aquifer. Wherever the aquifer overflows --- into rivers, wetlands, lakes or back to the soil --- MODFLOW hands the
+water back to Raven. Pumping wells and other stresses act on MODFLOW's side. Both models keep exact accounts, so not
+a drop is created or lost at the boundary between them.
+\end{plain}
+
+\section{Two ways to use the coupling}\label{sec:twoways}
+Most users are in one of two situations (Figure~\ref{fig:twoways}).
+\begin{itemize}
+\item \textbf{You already have a MODFLOW~6 model} --- perhaps one calibrated over years. Raven connects to it and uses it
+      as it is: same grid, same layers, same wells and boundaries (Chapter~\ref{ch:existing}).
+\item \textbf{You have a Raven model but no groundwater model.} Raven builds one for you from your HRUs and a short
+      description of the soil and rock layers under them (Chapter~\ref{ch:c3}).
+\end{itemize}
+Everything else --- how water is exchanged, how the accounts are kept, the outputs and the tests --- is the same in both cases.
+
+\begin{figure}[!htbp]\centering\input{figures/tikz_two_ways}
+\caption{Which chapter to start from: connecting Raven to an existing MODFLOW~6 model, or letting Raven build one.}\label{fig:twoways}
+\end{figure}
+
+\section{How to read this manual}
+\begin{table}[!htbp]\centering\small
+\caption{Where to find what.}\label{tab:readguide}
+\begin{tabularx}{\linewidth}{P{0.34\linewidth}Y}\toprule\hdr
+If you want to\dots & Read\\\midrule
+understand the idea & this chapter and Chapter~\ref{ch:c2} (groundwater in plain terms)\\
+connect Raven to your MODFLOW model & Chapter~\ref{ch:existing}; example \cmd{Liard\_existing\_model}\\
+let Raven build a groundwater model & Chapter~\ref{ch:c3}; example \cmd{Liard\_groundwater}\\
+know what water moves where, and how & Chapters~\ref{ch:c4} and~\ref{ch:c5}\\
+look up a command or an output column & Chapter~\ref{ch:c6} and Appendix~\ref{app:tables}\\
+set up, calibrate or fix a model & Chapter~\ref{ch:c7}\\
+see how the code was tested & Chapter~\ref{ch:c8}\\
+change the code & Chapter~\ref{ch:c9}\\\bottomrule
+\end{tabularx}
+\end{table}
+Every chapter starts with a box \emph{In plain words} that says what it covers without technical terms; technical words
+are explained in the glossary below.
+
+\section{What the user does --- and what Raven does}
+The user works only with Raven's familiar text files:
+\begin{enumerate}
+\item marks which HRUs have groundwater underneath (\cmd{AQUIFER\_PROFILE} in the \cmd{.rvh} file);
+\item describes the aquifer materials and their layering (\cmd{.rvp} file);
+\item gives the map of HRUs (a GeoJSON file) and, optionally, land-surface and bedrock maps, rivers, wells,
+monitoring wells and boundaries (a new \cmd{.rvg} file);
+\item switches the coupling on (\cmd{:GroundwaterModel MODFLOW6} in the \cmd{.rvi} file).
+\end{enumerate}
+Raven then does everything else automatically: it lays a grid over the HRUs, works out how much of each HRU lies in
+each grid cell, builds the layers from the land surface down to bedrock, writes a standard MODFLOW~6 model, starts
+MODFLOW, exchanges water every time step, and writes results next to its usual outputs. MODFLOW is used as a
+\emph{library} (a program part that another program can call); Raven talks to it through MODFLOW's official
+programming interface \cite{hughes2022xmi}. No MODFLOW source code is changed.
+
+\section{Main features}
+\begin{itemize}
+\item Any number of \emph{aquifer profiles} (layer stacks), each with any number of layers; layer types aquifer,
+confined aquifer, aquitard (confining layer) and aquiclude.
+\item Land surface and bedrock from raster maps; layers that thin out against bedrock are handled automatically.
+\item Coupling to an existing MODFLOW 6 model: Raven links its HRUs to the model's top active layer and leaves the model
+      intact, with built-in map projections, unit conversion and safeguards against double counting (Chapter~\ref{ch:existing}).
+\item Five grid options: the default regular grid, rotated and refined regular grids, quadtree grids, meshes whose cells
+      follow HRU boundaries, and imported cells; layers can be connected by elevation (Section~\ref{sec:gridtypes}).
+\item Water exchanges: recharge (with optional delay), groundwater seepage at the land surface, rivers (gaining and
+losing), evaporation from a shallow water table, wetlands and lakes held in Raven stores, Raven reservoirs, pumping and
+injection wells, head-dependent and fixed-head boundaries.
+\item Cells can dry out and rewet; areas of aquifer can disconnect and reconnect by themselves.
+\item Monitoring wells: simulated heads are written out and scored against observations like streamflow, so the
+groundwater parameters can be calibrated (for example with Ostrich).
+\item Hotstart (continuing a run from where another ended), ensembles, NetCDF output of the whole head field.
+\item Exact water accounting on both sides, checked automatically by an audit tool supplied with the code.
+\end{itemize}
+
+\section{Glossary}
+\begin{longtable}{P{0.24\linewidth}P{0.708\linewidth}}
+\caption{Glossary.}\\
+\toprule\hdr
+Term & Meaning\\\midrule\endfirsthead
+\caption[]{Glossary (continued).}\\
+\toprule\hdr
+Term & Meaning\\\midrule\endhead
+Active cell & A cell that MODFLOW calculates. Cells outside the aquifer, or switched off in the model, are inactive.\\
+API, library & MODFLOW~6 comes as a program library (\cmd{libmf6}) that Raven loads and controls step by step, instead of running it as a separate program.\\
+Aquiclude & A layer that, for practical purposes, does not let water through.\\
+Aquifer & A soil or rock layer that holds and passes on useful amounts of groundwater (gravel, sand).\\
+Aquitard & A layer that lets water through only slowly (clay, till); water leaks through it.\\
+Auxiliary variable & An extra column of numbers attached to each entry of a MODFLOW package --- here, for example, the Raven subbasin that a river cell belongs to.\\
+Bedrock & The base of the groundwater system in this model; below it no flow is simulated.\\
+Cell & One box of the MODFLOW grid. A \emph{column} is the stack of cells at one map location.\\
+Conductance & How easily water passes a connection, in m$^2$/d; flow = conductance $\times$ difference in water level.\\
+Confined / unconfined & An unconfined aquifer has a free water table; a confined one is completely full and under pressure.\\
+Converged & MODFLOW solves each day by repeated improvement; a day has \emph{converged} when the answer stops changing within a small tolerance.\\
+Coupled HRU & An HRU that has groundwater underneath it in the model and so exchanges water with MODFLOW.\\
+DIS, DISV, DISU & MODFLOW's three ways of describing a grid: rows and columns; layers of any-shaped cells; fully free cells.\\
+EPSG code & A standard number for a map projection, e.g.\ EPSG:32610 is UTM zone 10 North. Used with \cmd{:MF6CRS}.\\
+Existing-model mode & Using the coupling with a MODFLOW~6 model you already have (Chapter~\ref{ch:existing}).\\
+Grid & The set of cells MODFLOW calculates in: squares of one size by default, or other shapes (Section~\ref{sec:gridtypes}).\\
+Head ($h$) & The level to which water rises in a well, in metres above sea level. Water flows from high to low head.\\
+Hotstart, restart & Starting a run from the saved end state (\cmd{solution.rvc}) of an earlier run, so a long run can be split or continued.\\
+HRU & Hydrologic Response Unit: Raven's basic land unit, an area that behaves alike.\\
+Hydraulic conductivity ($K$) & How easily water moves through a material, in m/d.\\
+Leakance & How easily water passes a thin layer (a riverbed, the ground surface), per square metre, in 1/d.\\
+Linkage, overlap & How much of each HRU lies in each grid cell. It decides where each HRU's water goes.\\
+Newton method & The way MODFLOW solves its equations here; it copes well with cells drying out and filling up again.\\
+Overlap weight & The share of a cell covered by an HRU (0 to 1); a table of them can replace the map of cells (\cmd{:OverlapWeights}).\\
+Package & One component of a MODFLOW model, in its own file: wells (WEL), rivers (RIV), recharge (RCH) and so on.\\
+Pass-through cell & A very thin cell where a layer is missing; water passes straight through it from the layer above to the layer below.\\
+Profile & A stack of aquifer layers assigned to HRUs (used when Raven builds the model).\\
+Projection & The rule that turns positions on the round Earth into flat map coordinates in metres; MODFLOW models use one, usually without saying which.\\
+Quadtree, mesh & Grids with cells of different sizes: a quadtree cuts squares into four where detail is wanted; a mesh (here) has cells shaped to follow HRU boundaries.\\
+Recharge & Water that reaches the water table from above.\\
+Seepage & Groundwater flowing out at the land surface where the water table reaches it.\\
+Specific storage ($S_s$) & Water released per m$^3$ of aquifer per metre of head fall when the aquifer stays full [1/m].\\
+Specific yield ($S_y$) & Water released per m$^2$ of water table per metre of fall when the aquifer drains [--].\\
+Stage & Water level in a river, lake or reservoir [m].\\
+Steady state & A calculation as if conditions never changed --- the long-term balance. Often used for the first period of a model.\\
+Stress period & A stretch of time in a MODFLOW model (often a month) during which inputs such as pumping rates stay the same.\\
+Time step & One step of the calculation; in the coupling, one Raven time step (usually a day).\\
+Transmissivity ($T$) & $K$ times saturated thickness, in m$^2$/d.\\
+Water table & The top of the saturated zone in an unconfined aquifer.\\
+Working copy & The copy of an existing MODFLOW model that Raven runs, in \cmd{output/mf6/}; your own files are never changed.\\
+XT3D & An optional, more exact way for MODFLOW to calculate flow between cells of odd shapes; slower and off by default.\\\bottomrule
+\end{longtable}
+
+\section{The big picture}\label{ch:overview}
+\subsection{Who owns which water}
+Every drop of water in the coupled system belongs to exactly one of the two models at any time:
+\begin{itemize}
+\item \textbf{Raven} owns snow, canopy, soil and vadose-zone stores, depressions and wetlands, rivers, lakes and
+reservoirs.
+\item \textbf{MODFLOW} owns the saturated groundwater below the \emph{model top}. By default the model top is the land
+surface (as in GSFLOW \cite{markstrom2008gsflow}); users with physically based soil layers can lower it with
+\cmd{SOIL\_ZONE\_DEPTH}.
+\end{itemize}
+Water moves between the two only through the exchanges described in Chapter~\ref{ch:c4}, and each exchange is recorded on both
+sides. In a coupled HRU, Raven's \cmd{GROUNDWATER} store is a \emph{pass-through}: whatever enters it during a day is
+handed to MODFLOW as recharge that day.
+
+\subsection{The pieces of the software}
+Figure~\ref{fig:arch} shows the parts. The \emph{model builder} runs once at the start: it reads the inputs and writes a
+standard MODFLOW~6 model. The \emph{exchange} runs every time step.
+
+\begin{figure}[!htbp]\centering
+\begin{tikzpicture}[box/.style={draw,rounded corners,align=center,minimum height=11mm,text width=34mm,font=\small},
+ ar/.style={-{Stealth[length=2.2mm]},thick}]
+\node[box,fill=teal!12] (in) at (0,1.1) {Raven inputs\\ \cmd{rvi rvh rvp rvg rvc rvt}};
+\node[box,fill=gray!12] (geo) at (0,-1.1) {Maps: HRU polygons, DEM, bedrock, rivers};
+\node[box,fill=gray!20] (bld) at (5,0) {Model builder\\ grid, layers, links,\\ MODFLOW 6 files};
+\node[box,fill=violet!12] (mf) at (10,0) {\cmd{libmf6}\\ MODFLOW 6};
+\node[box,fill=teal!12] (rv) at (10,-3.2) {Raven solver\\ HRU processes, routing};
+\node[box,fill=teal!6] (out) at (5,-3.2) {Outputs\\ diagnostics, hotstart,\\ budget, heads};
+\draw[ar] (in) -- (bld); \draw[ar] (geo) -- (bld);
+\draw[ar] (bld) -- node[above,font=\scriptsize]{once} (mf);
+\draw[ar,<->] (mf) -- node[right,font=\scriptsize,align=left]{water and heads\\ every time step} (rv);
+\draw[ar] (rv) -- (out);
+\end{tikzpicture}
+\caption{The software pieces. The builder runs once per simulation (or per ensemble member); the exchange runs every
+time step.}\label{fig:arch}
+\end{figure}
+
+\subsection{One day in the life of the coupled model}
+The following happens every time step (one day in the examples); Section~\ref{ch:timestep} gives the exact algorithm.
+\begin{enumerate}
+\item \textbf{Raven's land-surface day.} Raven calculates snowmelt, infiltration, evaporation and flow between its soil
+layers. In coupled HRUs, water that percolates past the soil ends up in \cmd{GROUNDWATER}.
+\item \textbf{Recharge handed over.} The water in each HRU's \cmd{GROUNDWATER} is spread over the grid cells under that
+HRU, in proportion to how much of the HRU lies in each cell.
+\item \textbf{Stresses set.} River levels (from Raven's rivers at the start of the day), well pumping rates,
+boundary heads, wetland and lake levels, and the evaporation demand not met by Raven are passed to MODFLOW.
+\item \textbf{MODFLOW's day.} MODFLOW calculates new heads everywhere, including the flows to and from rivers,
+drains, wells and boundaries.
+\item \textbf{Water handed back.} Groundwater that seeps out at the land surface is added to a Raven store of the HRUs
+above; groundwater that discharges to rivers is added to the river inflow of the subbasin; river losses are taken from
+the river; wetland and lake exchanges change those Raven stores.
+\item \textbf{Raven's river day.} Raven routes water down the river network, now including the groundwater
+contributions. Reservoirs compute their seepage using the aquifer head beneath them.
+\item \textbf{Accounts.} Both models update their water balances, and the groundwater outputs are written.
+\end{enumerate}
+
+\subsection{Design principles}
+\begin{enumerate}
+\item \textbf{Raven is the single user interface.} All inputs are Raven files; MODFLOW files are generated.
+\item \textbf{Standard MODFLOW only.} Only standard MODFLOW~6 packages are used; the generated model can be opened in
+FloPy or ModelMuse.
+\item \textbf{Each fact is entered once.} Geometry comes from maps, hydrogeology from profiles, time-varying stresses
+from time series.
+\item \textbf{Generic.} Nothing is specific to a basin; any Raven model can couple any subset of its HRUs.
+\item \textbf{Exact accounting.} Every exchanged volume is computed once and applied identically on both sides.
+\item \textbf{No surprise for existing users.} Models without groundwater give bit-for-bit the same results as
+Raven~4.15 (the version this coupling is built on); Raven still builds and runs without MODFLOW installed.
+\end{enumerate}
+
+\section{Scope and assumptions}
+\begin{itemize}
+\item \textbf{What is simulated by MODFLOW:} saturated groundwater flow (Darcy flow, storage change) in a layered aquifer
+system under the coupled HRUs, including dry and rewetting cells.
+\item \textbf{What stays in Raven:} everything above the model top --- snow, canopy, soil and unsaturated zone, surface
+runoff, depressions, rivers, lakes and reservoirs --- and all HRUs without an aquifer profile.
+\item \textbf{Water density and temperature} are constant; there is no salt-water or heat transport.
+\item \textbf{The grid} is regular (square cells); the model area is the part of the rectangle around the coupled HRUs
+that those HRUs cover.
+\item \textbf{Time}: both models use Raven's time step (daily or shorter). Exchanges are explicit between the models at
+the step level, but every head-dependent exchange is implicit inside MODFLOW.
+\end{itemize}
+
+\section{When to use the coupling --- and when not to}
+Use it when the question involves the \emph{spatial} behaviour of groundwater: water-table depth at a location, effects of
+pumping on streams, gaining and losing reaches, groundwater flow between subbasins, wetlands fed by groundwater, drought
+recession of large aquifers, or when head measurements should constrain the model. Raven's conceptual baseflow remains the
+better choice for fast screening, very large ensembles, or basins without a significant aquifer.
+
+\section{What changes for an existing Raven model}
+\begin{itemize}
+\item Nothing, unless \cmd{:GroundwaterModel MODFLOW6} is added: results stay bit-for-bit identical.
+\item With the coupling on, coupled HRUs lose their conceptual deep-groundwater behaviour (their \cmd{GROUNDWATER} store
+becomes a pass-through), and their baseflow now comes from the aquifer via seepage and river exchange.
+\item Run times increase: the 20-year Liard run (3\,252 active columns) takes about 15 minutes instead of 35 seconds on one processor core.
+\end{itemize}
+
+\section{Files at a glance}
+\begin{table}[!htbp]\centering
+\caption{Input and output files of the coupling.}
+\begin{tabular}{P{0.2\linewidth}P{0.748\linewidth}}\toprule\hdr
+File & Role in the coupling\\\midrule
+\cmd{.rvi} & switch on (\cmd{:GroundwaterModel MODFLOW6}); route recharge into \cmd{GROUNDWATER}\\
+\cmd{.rvh} & \cmd{AQUIFER\_PROFILE} per HRU; reservoirs with \cmd{:SeepageParameters}\\
+\cmd{.rvp} & aquifer classes, profiles and profile parameters\\
+\cmd{.rvg} & geometry (HRU polygons, maps, rivers), grid, wells, monitoring wells, boundaries, options\\
+\cmd{.rvt} & well rates, boundary heads, observed heads\\
+\cmd{.rvc} & initial heads; hotstart blocks written by Raven\\
+GeoJSON, ASCII grids & HRU polygons, river lines, boundary shapes; DEM and bedrock maps\\
+\cmd{<output>/mf6/} & generated MODFLOW 6 model and its own outputs\\\bottomrule
+\end{tabular}
+\end{table}

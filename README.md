@@ -33,3 +33,14 @@ So that the ```cmake``` command to build Raven as solely a dynamic library becom
 cmake -DCOMPILE_LIB=ON -DCOMPILE_EXE=OFF ../
 ```
 Raven can alternately be bullt in unix/MacOS using the makefile provided with the source code (g++ must be installed on the machine). Lastly, it may be compiled within Visual Studio Community Edition 2022.
+
+## MODFLOW 6 groundwater coupling
+
+Raven can simulate groundwater with MODFLOW 6: it either builds a MODFLOW 6 model from its HRUs
+(`:GroundwaterModel MODFLOW6`) or couples an existing one (`:MF6Simulation`), and exchanges recharge, seepage, river
+leakage and other fluxes every time step. MODFLOW 6 is loaded at run time; `python tools/get_mf6.py` (or a CMake build)
+downloads the library into `lib/mf6/`, where Raven finds it. Raven builds and runs unchanged without it.
+
+* User guide: `docs/Raven_MF6_Groundwater_UserGuide.md`; manual: `docs/manual/` (LaTeX, with `main.pdf`)
+* Examples: `examples/Liard_groundwater` (Raven builds the model), `examples/Liard_existing_model` (existing model)
+* Tests: `python3 tests/run_all.py` (see `tests/README.md`); audit: `docs/AUDIT_REPORT.md`

@@ -1,6 +1,7 @@
 ﻿/*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #ifndef MODEL_H
 #define MODEL_H
@@ -27,7 +28,6 @@
 #include "ForcingGrid.h"
 #include "ModelEnsemble.h"
 #include "GroundwaterModel.h"
-#include "GWSWProcesses.h"
 #include "ChannelXSect.h"
 #include "Convolution.h"
 #include "DemandOptimization.h"
@@ -168,6 +168,9 @@ private:/*------------------------------------------------------*/
   int     _nTotalLatConnections;  ///< total number of between-HRU connections in model
   double            _CumulInput;  ///< cumulative water added to watershed (precipitation, basin inflows, etc.) [mm]
   double           _CumulOutput;  ///< cumulative outflow of water from system [mm]
+  vector<vector<double> > _initQinHist,_initQlatHist; ///< routing memory at the first initialization, restored for later ensemble members
+  vector<vector<double> > _initResState;              ///< reservoir dynamic state at the first initialization
+  vector<double>          _initQlatLast;              ///< last lateral inflow at the first initialization [m3/s]
   double             _initWater;  ///< initial water in system [mm]
 
   //Output
@@ -578,7 +581,8 @@ public:/*-------------------------------------------------------*/
   void         ApplyForcingPerturbation  (const forcing_type f, force_struct &F, const int k, const optStruct& Options, const time_struct& tt);
 
   //water/energy/mass balance routines
-  void   CalculateInitialWaterStorage (const optStruct   &Options);
+  void   CalculateInitialWaterStorage (const optStruct   &Options);
+  void    RestoreInitialDynamicState(const double &tstep); ///< ensemble members: routing memory and reservoir states of the first initialization
   void        IncrementBalance        (const int q_star,
                                        const int k,
                                        const double moved);//[mm] or [MJ/m2] or [mg]

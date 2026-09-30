@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #include "RavenInclude.h"
 #include "Model.h"
@@ -72,9 +73,12 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     pModel->InitializeBasins(Options,true); //resets all flow rates to autocalc version
     for(int p=0;p<pModel->GetNumSubBasins();p++) {
       if(pModel->GetSubBasin(p)->GetReservoir()!=NULL) {
-        pModel->GetSubBasin(p)->GetReservoir()->SetReservoirStage(0.0,0.0);
+        CReservoir *pR=pModel->GetSubBasin(p)->GetReservoir(); //default stage: crest for absolute stages, 0 for relative
+        pR->SetReservoirStage(pR->GetDefaultInitialStage(),pR->GetDefaultInitialStage());
       }
     }
+    pModel->RestoreInitialDynamicState(Options.timestep); //same routing memory and reservoir states as the first run (a .rvc read below overrides them)
+    if (pModel->GetGroundwaterModel()!=NULL){pModel->GetGroundwaterModel()->ClearHotstartData();} //groundwater hotstart values come only from this member's .rvc
   }
   //--Sift through file-----------------------------------------------
   bool end_of_file=pp->Tokenize(s,Len);
@@ -107,6 +111,11 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":UniformInitialTemperature"   )){code=3; concname="TEMPERATURE";}
 
     else if  (!strcmp(s[0],":HRUStateVariableTable"       )){code=4; concname="";}
+    else if  (!strcmp(s[0],":InitialGWHeads"              )){code=50; }
+    else if  (!strcmp(s[0],":GWHeads"                     )){code=51; }
+    else if  (!strcmp(s[0],":GWRechargeStore"             )){code=52; }
+    else if  (!strcmp(s[0],":GWReservoirSeepage"          )){code=53; }
+    else if  (!strcmp(s[0],":GWRiverLossCarry"            )){code=54; }
     else if  (!strcmp(s[0],":EndHRUStateVariableTable"    )){code=-2; }
     else if  (!strcmp(s[0],":InitialConcentrationTable"   )){code=4; concname=s[1]; }
     else if  (!strcmp(s[0],":EndInitialConcentrationTable")){code=-2; }
@@ -905,6 +914,58 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
           done=true;
         }
       } while(!done);
+      break;
+    }
+    case(50):  //----------------------------------------------
+    {/*:InitialGWHeads [FROM_PROFILE | DEPTH_BELOW_SURFACE value | ELEVATION value] */
+      if (Len<2){ExitGracefully(("improper format of groundwater command "+string(s[0])).c_str(),BAD_DATA); break;}
+      string mode=s[1];
+      ExitGracefullyIf((mode!="FROM_PROFILE") && (mode!="DEPTH_BELOW_SURFACE") && (mode!="ELEVATION"),
+        "ParseInitialConditionsFile: :InitialGWHeads must be FROM_PROFILE, DEPTH_BELOW_SURFACE or ELEVATION",BAD_DATA);
+      ExitGracefullyIf((mode!="FROM_PROFILE") && (Len<3),"ParseInitialConditionsFile: :InitialGWHeads needs a value",BAD_DATA);
+      pModel->GetGroundwaterModel()->SetInitialHeads(mode,(Len>=3)?s_to_d(s[2]):0.0);
+      break;
+    }
+    case(51):  //----------------------------------------------
+    {/*:GWHeads [nlay] [nrow] [ncol]
+         {head} x nlay*nrow*ncol
+       :EndGWHeads   (written by Raven into solution.rvc for hotstart) */
+      if (Len<4){ExitGracefully(("improper format of groundwater command "+string(s[0])).c_str(),BAD_DATA); break;}
+      int nl=s_to_i(s[1]),nr=s_to_i(s[2]),nc=s_to_i(s[3]);
+      vector<double> h; h.reserve((size_t)nl*nr*nc);
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWHeads")){break;}
+        for (int i=0;i<Len;i++){h.push_back(s_to_d(s[i]));}
+      }
+      pModel->GetGroundwaterModel()->SetHotstartHeads(nl,nr,nc,h);
+      break;
+    }
+    case(52):  //----------------------------------------------
+    {/*:GWRechargeStore  {HRU ID, volume [m3]} x n  :EndGWRechargeStore  (hotstart of recharge-delay reservoirs) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWRechargeStore")){break;}
+        if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRechargeStore(s_to_ll(s[0]),s_to_d(s[1]));}
+      }
+      break;
+    }
+    case(53):  //----------------------------------------------
+    {/*:GWReservoirSeepage  {subbasin ID, volume [m3]} x n  :EndGWReservoirSeepage  (reservoir seepage in transit, hotstart) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWReservoirSeepage")){break;}
+        if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartReservoirSeepage(s_to_ll(s[0]),s_to_d(s[1]));}
+      }
+      break;
+    }
+    case(54):  //----------------------------------------------
+    {/*:GWRiverLossCarry  {subbasin ID, volume [m3]} x n  :EndGWRiverLossCarry  (unsupplied river loss, hotstart) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWRiverLossCarry")){break;}
+        if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRiverLossCarry(s_to_ll(s[0]),s_to_d(s[1]));}
+      }
       break;
     }
     case(13):  //----------------------------------------------

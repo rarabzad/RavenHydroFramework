@@ -44,3 +44,24 @@ Raven_errors.txt
 
 # JetBrains
 .idea
+
+# Python caches and test scratch (MODFLOW 6 coupling tests)
+__pycache__/
+*.pyc
+tests/_work/
+# LaTeX build files of the manual
+docs/manual/*.aux
+docs/manual/*.bbl
+docs/manual/*.blg
+docs/manual/*.fdb_latexmk
+docs/manual/*.fls
+docs/manual/*.log
+docs/manual/*.toc
+docs/manual/*.out
+
+# MODFLOW 6 library fetched by tools/get_mf6.py or CMake (not part of the repository)
+lib/mf6/libmf6*
+!lib/mf6/README.md
+
+# make dependency file
+src/.depend

@@ -1,0 +1,18 @@
+:HRUGeometry hru.geojson HRU_ID
+:GridCellSize 1000
+:MinCellCoverage 0.25
+:GWInitialization STEADY_STATE 0.0
+:SolverHeadTolerance 0.000001
+:SpecifiedHeadBoundary EDGE edge.geojson HEAD 80.0
+:Wells
+  :Attributes, NAME, LATITUDE, LONGITUDE, SCREEN_TOP, SCREEN_BOT
+  1, PW, 55.000000000, -120.000000000, 100, 50
+:EndWells
+:ObservationWells
+  :Attributes, NAME, LATITUDE, LONGITUDE, SCREEN_ELEV
+  101, OW300, 55.000000000, -119.995296241, 75
+  102, OW600, 55.000000000, -119.990592482, 75
+  103, OW1200, 55.000000000, -119.981184963, 75
+  104, OW2400, 55.000000000, -119.962369926, 75
+:EndObservationWells
+:HeadSaveFrequency 1

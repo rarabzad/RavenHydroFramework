@@ -1,0 +1,44 @@
+#########################################################################
+# Liard.rvg - Raven-MODFLOW 6 groundwater file (Liard River test case)
+#   Groundwater under Central Liard subbasins 52 -> 48 -> 43 (85 HRUs).
+#   Hydrogeology (aquifer classes, profiles) is in Liard.rvp;
+#   which HRUs have groundwater is set by AQUIFER_PROFILE in Liard.rvh.
+#########################################################################
+
+# --- geometry (stand-in data built by tools_build_standin_inputs.py; replace with real data) ---
+:HRUGeometry        Liard_HRUs_standin.geojson  HRU_ID    # HRU polygons, lon/lat
+:RiverGeometry      Liard_rivers.geojson                  # river lines (subbasin assigned automatically)
+:LandSurface        Liard_dem_standin.asc                 # DEM, ESRI ASCII, lon/lat
+:BedrockSurface     Liard_bedrock_standin.asc             # bedrock elevation, same format
+
+# --- grid and coupling settings ---
+:GridCellSize       2000.0     # m
+:MinCellCoverage    0.25       # fraction of a cell covered by coupled HRUs to activate it
+
+# --- grid options (uncomment to try; see the manual, "Grid types") ---
+# :GridType QUADTREE                  # REGULAR (default) | QUADTREE | HRU_MESH | FILE
+# :GridRefinement RIVERS 500          # finer cells along the rivers [m]
+# :GridRefinement WELLS 250           # finer cells around wells and monitoring wells [m]
+# :GridRotation 20                    # regular and quadtree grids, degrees counterclockwise
+# :GridType FILE
+# :GridFile my_cells.geojson CELL_ID  # imported cells (GeoJSON, lon/lat)
+# :FlowCorrection AUTO                # AUTO | XT3D | XT3D_RHS | NONE
+# :LayerConnection ELEVATION          # connect layers of neighbouring profiles by elevation
+:HeadSaveFrequency  365        # steps between saves of the full head field (mf6/gwf.hds)
+# :MF6Library       /path/to/libmf6.so    # or set the RAVEN_MF6_LIB environment variable
+
+# --- optional features (uncomment to use; see the user guide) ---
+# :GWInitialization  STEADY_STATE 0.45            # steady-state start, uniform recharge [mm/d]
+# :SurfaceWaterExchange DEPRESSION WetlandHRUs LEAKANCE 0.01   # wetlands <-> aquifer
+# :WriteNetCDFHeads                               # GWHeads.nc (Raven built with -Dnetcdf)
+# :ReservoirExchange                              # Raven reservoirs (with :SeepageParameters) <-> aquifer
+# :Wells
+#   :Attributes, NAME, LATITUDE, LONGITUDE, SCREEN_TOP, SCREEN_BOT
+#   1, PW_1, 59.27310, -124.73460, 1199.7, 1188.7
+# :EndWells                                        # rates: :WellRate 1 m3/d ... in Liard.rvt
+# :ObservationWells
+#   :Attributes, NAME, LATITUDE, LONGITUDE, SCREEN_ELEV
+#   101, OW_NEAR, 59.27310, -124.73060, 1192.7
+# :EndObservationWells                             # data: :ObservationData GW_HEAD 101 m ... in Liard.rvt
+# :GeneralHeadBoundary   GHB1 boundary_line.geojson HEAD 1146.85 CONDUCTANCE 5000.0 LAYERS TOP
+# :SpecifiedHeadBoundary LAKE1 lake.geojson HEAD 1226.5 LAYERS TOP

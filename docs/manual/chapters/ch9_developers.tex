@@ -1,0 +1,171 @@
+\chapter{Developer guide and limitations}\label{ch:c9}\label{ch:dev}
+This chapter is for those who maintain or extend the code.
+
+\begin{plain}
+This chapter is for programmers: which file does what, how one time step passes through the code, how to add a new
+exchange or grid type, and how to test changes. Users of the coupling can skip it.
+\end{plain}
+
+\section{Source files}
+\begin{table}[!htbp]\centering
+\caption{Source files.}
+\begin{tabular}{P{0.36\linewidth}P{0.588\linewidth}}\toprule\hdr
+File & Content\\\midrule
+\cmd{GroundwaterModel.h/.cpp} & class \cmd{CGroundwaterModel}: parse-time setters, model builder, per-step exchange, outputs, hotstart\\
+\cmd{GWExternal.cpp} & coupling to an existing MODFLOW 6 model: reads the simulation through the MF6 API, copies it, rewrites the time discretization (and renumbers periods on restarts), links HRUs (cell outlines with \cmd{:MF6CRS}, polygon file, or overlap weights), writes \cmd{RCH\_RAVEN}/\cmd{DRN\_RAVEN}, maps the stream package to reaches, collects the other packages' flows\\
+\cmd{GWUtil.h} & small helpers shared by the coupling's files (absolute paths, MODFLOW array writer, number formatting)\\
+\cmd{legacy/mfusg/} & L.~Scantlebury's MODFLOW-USG coupling as in Raven 4.15, preserved unchanged outside the build\\
+\cmd{GWGrid.h/.cpp} & \cmd{CGWGrid}: cells of one layer as polygons with areas, centres, neighbours (face length, centre-to-face distances, face direction); generators for regular (rotation, variable spacing), quadtree, Voronoi and imported grids; point location, candidate search, exact clipping of polygons and segments; cache serialization\\
+\cmd{GWGeometry.h/.cpp} & \cmd{CGWProjection} (equal-area projection), \cmd{CGWCRS} (projections of existing models: Transverse Mercator, Albers, Lambert conformal conic), \cmd{CGWRaster} (ESRI ASCII, bilinear sampling), minimal JSON/GeoJSON reader, polygon clipping and areas\\
+\cmd{MF6Engine.h/.cpp} & \cmd{CMF6Engine}: loads \cmd{libmf6} at run time (\cmd{dlopen}/\cmd{LoadLibrary}); initialize, time step, Newton loop, memory access; switches to the MODFLOW folder around every call\\
+\cmd{ParseGWFile.cpp} & \cmd{.rvg} parser\\\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Order of calls}
+\begin{enumerate}
+\item \cmd{CModel} constructor creates an empty \cmd{CGroundwaterModel}. The \cmd{.rvp} parser fills aquifer classes and
+profiles; the \cmd{.rvh} parser stores \cmd{AQUIFER\_PROFILE} on each HRU; the \cmd{.rvt} parser stores well-rate and
+boundary-head series; the \cmd{.rvc} parser stores initial or hotstart heads; \cmd{ParseGWFile} reads the \cmd{.rvg}.
+\item \cmd{CModel::CalculateInitialWaterStorage} (called once, and again for each ensemble member) calls
+\cmd{CGroundwaterModel::\allowbreak Initialize}: \cmd{CheckProcesses}, \cmd{BuildGeometry} (grid generation by \cmd{CGWGrid} and HRU--cell overlaps, with cache), \cmd{BuildVertical},
+\cmd{BuildLinks}, \cmd{BuildRivers}, \cmd{BuildStresses} (wells, monitoring wells, GHB/CHD, surface stores, reservoirs),
+\cmd{WriteMF6Files}, \cmd{ConnectEngine}, \cmd{OpenOutputs}, \cmd{WriteSummary}, \cmd{RunSteadyState}.
+\item Every step, \cmd{MassEnergyBalance} (\cmd{Solvers.cpp}) calls \cmd{Exchange} after the lateral processes, then
+\cmd{ApplyRiverExchange} before routing, and \cmd{TakeRiverLossFromInflow} inside the routing loop.
+\cmd{IncrementCumulInput} adds \cmd{GetStepReturnVolume}; \cmd{UpdateDiagnostics} asks \cmd{GetObservationWellHead}.
+\item \cmd{WriteMajorOutput} calls \cmd{WriteHotstart}; the destructor closes outputs and finalizes MODFLOW.
+\end{enumerate}
+
+\section{MODFLOW 6 memory used}
+All are read or written through \cmd{get\_value\_ptr} after \cmd{prepare\_time\_step} (pointers are refreshed every step).
+\begin{table}[!htbp]\centering
+\caption{MODFLOW 6 memory used.}
+\begin{tabular}{P{0.2\linewidth}P{0.388\linewidth}P{0.34\linewidth}}\toprule\hdr
+Package (name) & Arrays & Use\\\midrule
+GWF & \cmd{X} & heads\\
+STO & \cmd{STRGSS}, \cmd{STRGSY} & storage flows\\
+SLN\_1 & \cmd{MXITER} & iteration limit\\
+RCH (\cmd{RCH\_RAVEN}) & \cmd{RECHARGE}, \cmd{HCOF}, \cmd{RHS} & recharge\\
+DRN (\cmd{DRN\_RAVEN}) & \cmd{HCOF}, \cmd{RHS} (aux \cmd{DDRN} in file) & seepage\\
+RIV (\cmd{RIV\_RAVEN}) & \cmd{STAGE}, \cmd{COND}, \cmd{RBOT}, \cmd{HCOF}, \cmd{RHS} & rivers\\
+EVT (\cmd{EVT\_RAVEN}) & \cmd{RATE}, \cmd{HCOF}, \cmd{RHS} & water-table ET\\
+WEL (\cmd{WEL\_RAVEN}) & \cmd{Q}, \cmd{HCOF}, \cmd{RHS} & wells\\
+GHB (\cmd{GHB\_RAVEN}) & \cmd{BHEAD}, \cmd{COND}, \cmd{HCOF}, \cmd{RHS} & head boundaries\\
+CHD (\cmd{CHD\_RAVEN}) & \cmd{HEAD}, \cmd{SIMVALS} & fixed heads\\
+RIV (\cmd{SWX\_RAVEN}) & \cmd{STAGE}, \cmd{COND}, \cmd{RBOT}, \cmd{HCOF}, \cmd{RHS} & wetlands and lakes\\
+WEL (\cmd{RES\_RAVEN}) & \cmd{Q}, \cmd{HCOF}, \cmd{RHS} & reservoir seepage\\\bottomrule
+\end{tabular}
+\end{table}
+For MODFLOW versions before 6.5 the values are written to the columns of \cmd{BOUND} instead.
+
+\section{Changes to existing Raven files}\label{sec:coreflix}
+The source files are in \cmd{src/}; the changes are against Raven~4.15.
+\begin{table}[!htbp]\centering
+\caption{Changes to existing Raven files.}
+\begin{tabular}{P{0.4\linewidth}P{0.548\linewidth}}\toprule\hdr
+File & Change\\\midrule
+\cmd{Solvers.cpp} & groundwater hook after lateral processes; river exchange before routing; losses from reach inflow\\
+\cmd{Model.cpp/.h} & always creates the groundwater object; returned water counted as input; \cmd{GW\_HEAD} diagnostics; stored first routing state\\
+\cmd{ModelInitialize.cpp} & groundwater initialized after all inputs; cumulative inputs and outputs reset per ensemble member (Raven~4.15's \cmd{RebootTimeVariables} resets the balance arrays); routing memory and reservoir states of the first run snapshotted and restored before each member's .rvc is read (\cmd{RestoreInitialDynamicState}); per ensemble member\\
+\cmd{StandardOutput.cpp} & hotstart blocks in \cmd{solution.rvc}\\
+\cmd{ParseInput.cpp} & \cmd{:GroundwaterModel}; \cmd{:rvg\_Filename} relative to the \cmd{.rvi}; obsolete USG commands give clear errors\\
+\cmd{ParsePropertyFile.cpp} & \cmd{:AquiferClasses}, \cmd{:AquiferProfiles}, \cmd{:AquiferProfile\allowbreak Parameters}\\
+\cmd{ParseHRUFile.cpp}, \cmd{HydroUnits.h} & \cmd{AQUIFER\_PROFILE} stored on each HRU\\
+\cmd{ParseTimeSeriesFile.cpp} & \cmd{:WellRate}, \cmd{:BoundaryHead}; constituent name captured before parsing\\
+\cmd{ParseInitialConditionFile.cpp} & \cmd{:InitialGWHeads}, \cmd{:GWHeads}, \cmd{:GWRechargeStore}, \cmd{:GWReservoirSeepage}\\
+\cmd{SubBasin.cpp/.h} & channel depth at a given flow\\
+\cmd{Reservoir.h/.cpp} & accessors for the seepage constant and local head; reservoirs with absolute stages start at their crest when no initial condition is given; dynamic-state get/set for ensemble members; a drying reservoir books only the water available; constraint initialised\\
+\cmd{RavenInclude.h}, \cmd{CommonFunctions.cpp} & references to the MODFLOW-USG coupling removed; \cmd{RC\_UNSET} (reservoir constraint before the first step)\\
+\cmd{CMakeLists.txt}, \cmd{src/Makefile}, \cmd{src/Raven.vcxproj(.filters)} & new files; link \cmd{-ldl} (CMake: \cmd{CMAKE\_DL\_LIBS})\\
+\cmd{Drain.cpp}, \cmd{GWRecharge.cpp}, \cmd{GWRiverConnection.*}, \cmd{GWSWProcessABC.cpp}, \cmd{GWSWProcesses.h}, \cmd{MFUSGpp.h}, \cmd{RiverReach.*} & moved unchanged to \cmd{legacy/mfusg/} (with the old \cmd{GroundwaterModel.*} and \cmd{ParseGWFile.cpp}); not part of the build\\\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Building}
+The source files are in \cmd{src/}. Linux/macOS: CMake (\cmd{mkdir build; cd build; cmake ..; make}; links \cmd{-ldl} and
+NetCDF when found) or \cmd{make} in \cmd{src/} (links \cmd{-ldl}; for NetCDF head output add \cmd{-Dnetcdf} to
+\cmd{CXXFLAGS} and \cmd{-lnetcdf} to \cmd{LDLIBS}, as the Makefile's commented lines show). Windows: Visual Studio 2022 with
+\cmd{src/Raven.sln}. MODFLOW is not
+needed to build; it is loaded only when a model uses \cmd{:GroundwaterModel MODFLOW6}.
+
+\section{Getting MODFLOW 6}\label{sec:getmf6}
+The MODFLOW~6 shared library (\cmd{libmf6.so}, \cmd{libmf6.dll} or \cmd{libmf6.dylib}, about 15--55~MB) is not part of
+the repository. One command in the source folder downloads it:
+\begin{lstlisting}
+python tools/get_mf6.py                   # MODFLOW 6.8.1, the tested version, for this computer
+python tools/get_mf6.py --latest          # the newest release instead (or --version 6.x.y)
+python tools/get_mf6.py --zip mf6.8.1_win64.zip   # from a release zip downloaded by hand (offline)
+\end{lstlisting}
+The script (standard Python only) picks the release zip for the computer from
+\url{https://github.com/MODFLOW-ORG/modflow6/releases} (\cmd{mf6.8.1\_linux.zip}, \cmd{mf6.8.1\_win64.zip},
+\cmd{mf6.8.1\_macarm.zip}; \cmd{\_mac.zip} for Intel Macs where one is released), keeps only the library in
+\cmd{lib/mf6/}, and records its version, source and SHA-256 in \cmd{lib/mf6/libmf6\_version.txt}. It does nothing when the
+library is already there (\cmd{--force} replaces it). The default is the tested version rather than the newest release,
+so that a new MODFLOW release cannot change a model's results unnoticed; with MODFLOW~6.6, for example, the Newton
+option behaved differently (Section~\ref{sec:relaudit}).
+
+A CMake build does the same while configuring (option \cmd{RAVEN\_GET\_MF6}, on by default; version
+\cmd{RAVEN\_MF6\_VERSION}, default 6.8.1) and copies the library next to the executable. Without internet access
+the build continues with a warning.
+
+Raven looks for the library in this order: \cmd{:MF6Library} in the \cmd{.rvg} file; the environment variable
+\cmd{RAVEN\_MF6\_LIB}; next to the Raven executable; \cmd{lib/mf6/} beside it or one or two folders up (so
+\cmd{src/Raven.exe}, \cmd{build/Raven} and \cmd{build/Release/Raven.exe} of a source checkout all find the checkout's
+\cmd{lib/mf6/}); finally the platform's name on the system library path. \cmd{GWModelSummary.txt} names the library used
+and its version; when none loads, the message lists the places searched.
+
+\section{Adding a new exchange}
+\begin{enumerate}
+\item Choose the MODFLOW package (a new package name, e.g.\ \cmd{XYZ\_RAVEN}) and decide which Raven quantity drives it.
+\item Parse its inputs in \cmd{ParseGWFile.cpp} (or the \cmd{.rvp}/\cmd{.rvt} parsers) and store them in \cmd{CGroundwaterModel}.
+\item Select its cells in \cmd{BuildStresses}; write the package file and its line in \cmd{gwf.nam} in \cmd{WriteMF6Files}.
+\item Fetch its arrays in \cmd{RefreshPointers} (named arrays first, \cmd{BOUND} as fallback).
+\item Set its values in \cmd{Exchange} (or \cmd{SetBoundaryArrays}) after \cmd{prepare\_time\_step}.
+\item After the solve, compute its flow as $\mathrm{HCOF}\cdot h-\mathrm{RHS}$; apply the matching volume on the Raven side
+and add it to \cmd{GetStepReturnVolume} if it changes Raven's storage.
+\item Add the flow to the balance error $\varepsilon$, the gross-flow scale, the \cmd{GWBudget.csv} header and line, and the
+non-convergence cap if it is an inflow.
+\item Add a test, extend \cmd{tools\_audit.py} and the list-file cross-check.
+\end{enumerate}
+\section{Adding a grid type}
+A grid type only has to produce cells: add a generator to \cmd{CGWGrid} that fills the cell polygons (counterclockwise, in the
+grid's local frame) and, if it knows them exactly, the neighbours; \cmd{Finish} computes areas, centres, bounding boxes,
+spatial bins and welded vertices, and finds neighbours from shared edges otherwise. Choose the MODFLOW format in
+\cmd{Initialize} (DISU works for any cells) and the XT3D default in \cmd{UseXT3D}. Everything else --- overlaps, rivers,
+boundaries, wells, outputs, restarts --- works through the cell polygons and needs no change. Add the new type to the grid unit
+test (\cmd{tests/gridtest.cpp}), the Thiem test (\cmd{tests/thiem/}) and the randomized tests.
+
+\section{Testing procedure}
+\begin{enumerate}
+\item Uncoupled regression: run a model without groundwater with the new build and compare \cmd{Hydrographs.csv} and
+\cmd{Watershed\allowbreak Storage.csv} byte for byte with the previous version.
+\item Build with \cmd{-Wall -Wextra -Wshadow} and run cppcheck on the new files.
+\item Run the feature tests and \cmd{tools\_audit.py} on each output folder.
+\item Compare with MODFLOW's list-file budget.
+\item Build with \cmd{-fsanitize=address,undefined} and run the feature tests.
+\end{enumerate}
+
+\section{Limitations and future work}\label{ch:limits}
+\paragraph{Current limitations.}
+\begin{itemize}
+\item Refinement of a regular grid spans whole rows and columns; use a quadtree or HRU mesh for local refinement.
+\item XT3D (optional) makes each iteration more expensive and can slow the Newton method badly where cells dry and rewet; it is off by default.
+\item Imported grid files must hold one single-ring polygon per cell in longitude/latitude.
+\item Maps must be ESRI ASCII grids in longitude/latitude; the same vertical datum must be used for DEM, bedrock,
+reservoir stages and wells.
+\item Layer $\ell$ connects sideways only to layer $\ell$ of neighbouring columns.
+\item River stage uses Raven's channel depth at the start of the step; reservoir seepage reaches the aquifer one step
+later (both exactly accounted).
+\item A layer that starts completely dry can cause isolated non-converged steps; start from a steady state or realistic
+heads.
+\item MODFLOW stops the program on invalid input (Fortran \cmd{stop}); the reason is in \cmd{mf6/mfsim.lst}.
+\item Raven's channel-storage bookkeeping (\cmd{:ChannelStorage} in \cmd{solution.rvc}) can be negative in some subbasins; this
+already happens in Raven~4.1.1 without groundwater (17 subbasins of the Liard model) and is left unchanged here, as it belongs
+to Raven's routing, not to the coupling.
+
+\end{itemize}
+\paragraph{Planned extensions.}
+Groundwater transport (MODFLOW~6 GWT) linked to Raven constituents; particle tracking (PRT) for well capture zones and
+time-of-travel zones; wells driven by Raven water demands (irrigation); frozen-ground control of recharge from Raven's soil
+temperature; importing an existing hand-built MODFLOW~6 model instead of generating one.

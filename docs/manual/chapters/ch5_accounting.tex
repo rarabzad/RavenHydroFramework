@@ -1,0 +1,147 @@
+\chapter{Water accounting and time stepping}\label{ch:c5}
+This chapter explains how the two models keep their water accounts consistent, what exactly happens in each time step,
+and how runs are started, restarted and repeated.
+
+\begin{plain}
+Every day the two models take turns: Raven works out how much water goes down; MODFLOW moves it through the aquifer and
+reports what comes back up; Raven then books the returned water. Both keep a running account, and the two accounts are
+compared every day. This chapter also explains how to stop a run and carry on later (a restart), and how to run many
+versions of a model at once (an ensemble).
+\end{plain}
+
+\section{Keeping the books: water balance}\label{ch:balance}
+\subsection{MODFLOW's balance}
+For every step Raven computes all boundary flows from MODFLOW's own matrix terms ($q=\mathrm{HCOF}\cdot h-\mathrm{RHS}$)
+and the storage change from MODFLOW's storage package, and reports the imbalance
+\begin{multline}
+\varepsilon=Q^{\mathrm{rch}}+Q^{\mathrm{sto}}-Q^{\mathrm{seep}}+Q^{\mathrm{riv}}_{\mathrm{in}}-Q^{\mathrm{riv}}_{\mathrm{out}}-Q^{\mathrm{evt}}
++Q^{\mathrm{wel}}+Q^{\mathrm{ghb}}+Q^{\mathrm{chd}}\\+Q^{\mathrm{swx}}_{\mathrm{in}}-Q^{\mathrm{swx}}_{\mathrm{out}}+Q^{\mathrm{res}},
+\end{multline}
+where $Q^{\mathrm{sto}}$ is water released from storage. It is written in m$^3$/d and as a percentage of the gross flow
+(the sum of the absolute values of all terms). In the tests of Chapter~\ref{ch:verification} the worst single-day error is about $5\times10^{-6}$\% and the
+cumulative error about $10^{-10}$.
+
+\subsection{Raven's balance}
+Raven tracks cumulative input $I$ and output $O$ and reports $\mathrm{MB}=\left(S-S_0\right)+\left(O-I\right)$ in mm over
+the watershed. The coupling adds:
+\begin{itemize}
+\item \textbf{to output}: recharge (the end-of-day \cmd{GROUNDWATER} value of coupled HRUs, as Raven already does), and
+reservoir seepage (already counted by Raven as a reservoir loss);
+\item \textbf{to input}: every volume the coupling adds to Raven in the step --- seepage returned to HRU stores, the net
+river exchange applied to reaches, and the net surface-store exchange. A net loss (for example a losing river) is a
+negative input.
+\end{itemize}
+With these, Raven's own balance closes exactly as without groundwater (0.43--0.52 mm maximum over 20 years in the Liard
+example, the same as uncoupled).
+
+\subsection{The whole system}
+The water that leaves Raven as recharge enters MODFLOW (directly or via the delay store); the water MODFLOW sends back
+enters Raven. Reservoir seepage enters MODFLOW one day after leaving Raven. Therefore
+\begin{equation}
+\sum V^{\mathrm{Raven}}_{\mathrm{rch}}=\sum V^{\mathrm{MF6}}_{\mathrm{rch}}+\Delta S^{\mathrm{delay}}+\sum V^{\mathrm{CHD}}_{\mathrm{rch}},
+\end{equation}
+and the audit tool checks this identity, the river, seepage and store bookkeeping, and MODFLOW's balance for every run.
+
+\section{A real day of water accounts}
+\begin{example}[: 15 June 1996 in the Liard run]
+From \cmd{GWBudget.csv} (all in m$^3$/d):
+\begin{center}\begin{tabular}{lr}\toprule\hdr
+Inflows to the aquifer & \\\midrule
+recharge from Raven & 21\,365\,037\\
+river leakage & 2\,978\,677\\\midrule\hdr
+Outflows from the aquifer & \\\midrule
+seepage to Raven & 19\,087\,047\\
+discharge to rivers & 1\,331\,456\\\midrule
+storage release (negative = stored) & $-$3\,925\,212\\\bottomrule
+\end{tabular}\end{center}
+Inflows $-$ outflows $+$ release $=24\,343\,714-20\,418\,502-3\,925\,212=0.00003$ m$^3$/d, i.e.\ a relative error of
+about $10^{-10}$. Raven recorded the same numbers on its side: 21.4 million m$^3$ of recharge leaving its stores, 19.1 million m$^3$
+of seepage entering them, and a net river exchange of $-1.65$ million m$^3$ applied to its reaches (the rivers lost more than
+they gained that day). The aquifer stored the difference: a water-table rise of about 1 mm on average.
+\end{example}
+
+\section{How to read the balance outputs}
+\begin{enumerate}
+\item \emph{MF6 balance error [\%]} should stay well below 0.1\% every step; larger values point to a non-converged step or a
+too-loose head tolerance (\cmd{:SolverHead\allowbreak Tolerance}, default 0.00001 m).
+\item \emph{Raven recharge} and \emph{MF6 recharge} are equal unless a recharge delay or fixed-head cells are used.
+\item \emph{returned to Raven} equals \emph{seepage to Raven}.
+\item \emph{river loss carried to next step} is normally zero; when not, it is taken from the river the next day.
+\item Raven's \cmd{Watershed\allowbreak Storage.csv} MB error should be as small as without groundwater.
+\end{enumerate}
+The tool \cmd{tools\_audit.py} checks all of these automatically.
+
+\section{The coupled time step, start-up and restarts}\label{ch:timestep}
+\subsection{The algorithm}
+\begin{figure}[!htbp]\centering
+\begin{tikzpicture}[x=1cm,y=1cm,b/.style={draw,rounded corners,font=\scriptsize,align=center,minimum height=8mm,text width=23mm}]
+\node[b,fill=teal!12] (a) at (0,0) {Raven HRU\\processes};
+\node[b,fill=gray!15] (b) at (2.9,0) {recharge and\\stresses to MF6};
+\node[b,fill=violet!12] (c) at (5.8,0) {MODFLOW\\Newton solve};
+\node[b,fill=gray!15] (d) at (8.7,0) {seepage, stores,\\river terms back};
+\node[b,fill=teal!12] (e) at (11.6,0) {Raven routing\\and balance};
+\foreach \u/\v in {a/b,b/c,c/d,d/e} \draw[-{Stealth[length=2mm]},thick] (\u) -- (\v);
+\draw[->,thick,gray] (-1.2,-0.8) -- (12.8,-0.8) node[right,font=\scriptsize]{time};
+\end{tikzpicture}
+\caption{Order of work within one time step.}\label{fig:timeline}
+\end{figure}
+
+Algorithm~\ref{alg:step} lists exactly what happens in one Raven time step of a coupled model.
+
+\begin{algorithm}[h]\caption{One coupled time step}\label{alg:step}
+\begin{algorithmic}[1]
+\State Raven: vertical and lateral processes of all HRUs; coupled HRUs' \cmd{GROUNDWATER} now holds the day's recharge
+\State Complete yesterday's line of \cmd{GWBudget.csv} (river and reservoir terms are final only after routing)
+\State Recharge: delay reservoirs (Ch.~\ref{ch:recharge}); spread over cells; skip fixed-head cells
+\State MODFLOW \cmd{prepare\_time\_step}; set RCH rates
+\State Set river stages and conductances, well rates, GHB/CHD heads (Ch.~\ref{ch:rivers},\ref{ch:wells})
+\State Set water-table ET rates from PET left unmet by Raven (Ch.~\ref{ch:et})
+\State Deliver yesterday's reservoir seepage (Ch.~\ref{ch:reservoirs}); set surface-store levels and limited conductances (Ch.~\ref{ch:stores})
+\State MODFLOW \cmd{prepare\_solve}; \textbf{repeat} \cmd{solve} \textbf{until} converged or the iteration limit; \cmd{finalize\_solve}; \cmd{finalize\_time\_step}
+\State Compute every package flow as $\mathrm{HCOF}\cdot h-\mathrm{RHS}$; reservoir local heads for today's routing
+\State Surface-store exchange applied to Raven stores; seepage and river flows computed
+\If{the step did not converge} limit seepage and river gains returned to Raven to the step's total inflow; warn \EndIf
+\State Seepage added to Raven stores; balance, heads, connectivity and NetCDF output written
+\State Raven: before routing, river gains added to / losses taken from each subbasin's in-catchment inflow
+\State Raven routing; losses not covered are taken from the flow entering each reach; reservoirs compute seepage
+\State Raven: water balance (recharge out, all returned water in); diagnostics including \cmd{GW\_HEAD}
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Starting conditions}\label{sec:init}
+Initial heads are chosen in this order: (1) a hotstart block \cmd{:GWHeads} in the \cmd{.rvc} file; (2)
+\cmd{:InitialGWHeads} in the \cmd{.rvc} file (\cmd{DEPTH\_BELOW\_SURFACE d} or \cmd{ELEVATION z}); (3) each profile's
+\cmd{INITIAL\_HEAD\_DEPTH}. Guessed initial heads can be far from reality; \cmd{:GWInitialization STEADY\_STATE r}
+first solves a steady state before Raven's first day, with recharge $r$ [mm/d] over the area covered by coupled HRUs
+(cell $i$ receives $r\,a_i/1000$ m$^3$/d) and the initial river stages, well rates and boundary heads. This is skipped on a hotstart. A steady state may not
+exist --- for example when wells pump more than the aquifer can supply --- and then the solve does not converge; Raven
+warns and starts from the initial heads instead, as if \cmd{:GWInitialization} had not been given. The groundwater model is built after \emph{all} input files,
+including the \cmd{.rvc}, have been read.
+
+\subsection{Restarting a run (hotstart)}
+At the end of a run Raven writes \cmd{solution.rvc}. Besides Raven's own states it contains \cmd{:GWHeads} (the head in
+every cell), \cmd{:GWRechargeStore} (recharge delay stores, if used), \cmd{:GWRiverLossCarry} (river loss carried, if any) and \cmd{:GWReservoirSeepage} (reservoir seepage in
+transit, if used). Using this file as the \cmd{.rvc} of a new run --- with \cmd{:StartDate} set to the end of the first
+run --- continues exactly: in the tests the restarted run matched a continuous run to within $6\times10^{-6}$ in all flows.
+
+\subsection{Ensembles}
+Raven's ensemble modes (Monte Carlo, DDS, EnKF) run the model several times in one program run. For every member the
+groundwater model is rebuilt from scratch, MODFLOW is restarted, and its files go to that member's output folder.
+Raven itself was corrected so that each member starts with a fresh water balance and, unless its own \cmd{.rvc} says
+otherwise, from the routing memory and reservoir states of the first run (stage, outflow, loss terms). These defaults are
+restored before the member's \cmd{.rvc} is read, so member-specific initial conditions (as used by EnKF forecasting) still
+apply; groundwater hotstart values are likewise cleared, so each member uses only its own \cmd{.rvc}, and the steady-state
+start is decided for each member separately
+(Section~\ref{sec:coreflix}).
+
+\subsection{Safeguards}\label{sec:guard}
+\begin{itemize}
+\item \textbf{Non-converged steps.} All water returned to Raven in such a step (seepage plus river gains) is limited to
+the water that entered the aquifer in that step (recharge, river and store leakage, reservoir injection and boundary
+inflows); discharge into wetland and lake stores is limited the same way. The step is flagged and a warning written.
+\item \textbf{Rivers and stores} can never lose more water than they hold (Sections~\ref{ch:rivers},\ref{ch:stores}).
+\item \textbf{Wells} cannot pump from a dry cell (\cmd{AUTO\_FLOW\_REDUCE}).
+\item \textbf{Step count}: Raven stops if it would run past MODFLOW's last step.
+\item \textbf{MODFLOW folder}: if Raven cannot enter the MODFLOW folder, the call fails with a clear message instead of
+running MODFLOW in the wrong place.
+\end{itemize}

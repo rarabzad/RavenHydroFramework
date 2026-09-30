@@ -339,10 +339,19 @@
     <ClCompile Include="ParseEnsembleFile.cpp">
       <Filter>Source Files\_Driver\Input Parsing</Filter>
     </ClCompile>
-    <ClCompile Include="Drain.cpp">
-      <Filter>Source Files\Hydrological Processes</Filter>
-    </ClCompile>
     <ClCompile Include="GroundwaterModel.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
+    <ClCompile Include="GWGeometry.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
+    <ClCompile Include="GWGrid.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
+    <ClCompile Include="GWExternal.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
+    <ClCompile Include="MF6Engine.cpp">
       <Filter>Source Files\Groundwater</Filter>
     </ClCompile>
     <ClCompile Include="ParseLiveFile.cpp">
@@ -389,18 +398,6 @@
     </ClCompile>
     <ClCompile Include="EnergyTransport.cpp">
       <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="GWRecharge.cpp">
-      <Filter>Source Files\Groundwater</Filter>
-    </ClCompile>
-    <ClCompile Include="GWRiverConnection.cpp">
-      <Filter>Source Files\Groundwater</Filter>
-    </ClCompile>
-    <ClCompile Include="GWSWProcessABC.cpp">
-      <Filter>Source Files\Groundwater</Filter>
-    </ClCompile>
-    <ClCompile Include="RiverReach.cpp">
-      <Filter>Source Files\Groundwater</Filter>
     </ClCompile>
     <ClCompile Include="ParseGWFile.cpp">
       <Filter>Source Files\_Driver\Input Parsing</Filter>
@@ -650,19 +647,19 @@
     <ClInclude Include="IsotopeTransport.h">
       <Filter>Header Files\Transport</Filter>
     </ClInclude>
-    <ClInclude Include="MFUSGpp.h">
-      <Filter>Header Files\Groundwater</Filter>
-    </ClInclude>
-    <ClInclude Include="GWSWProcesses.h">
-      <Filter>Header Files\Groundwater</Filter>
-    </ClInclude>
     <ClInclude Include="GroundwaterModel.h">
       <Filter>Header Files\Groundwater</Filter>
     </ClInclude>
-    <ClInclude Include="GWRiverConnection.h">
+    <ClInclude Include="GWGeometry.h">
       <Filter>Header Files\Groundwater</Filter>
     </ClInclude>
-    <ClInclude Include="RiverReach.h">
+    <ClInclude Include="GWGrid.h">
+      <Filter>Header Files\Groundwater</Filter>
+    </ClInclude>
+    <ClInclude Include="GWUtil.h">
+      <Filter>Header Files\Groundwater</Filter>
+    </ClInclude>
+    <ClInclude Include="MF6Engine.h">
       <Filter>Header Files\Groundwater</Filter>
     </ClInclude>
     <ClInclude Include="ControlStructures.h">

@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------
   Reservoir.h
   ------------------------------------------------------------------
@@ -9,6 +10,7 @@
 #ifndef RESERVOIR_H
 #define RESERVOIR_H
 
+#include <vector>
 #include "RavenInclude.h"
 #include "ParseLib.h"
 #include "HydroUnits.h"
@@ -103,7 +105,8 @@ private:/*-------------------------------------------------------*/
   int           _dry_timesteps;      //< number of time steps this reservoir dried out  during simulation
 
   //state variables :
-  double       _stage;               ///< current stage [m] (actual state variable)
+  double       _stage;               ///< current stage [m] (actual state variable)
+  double    _default_init_stage; ///< initial stage when no initial condition is given: crest for absolute stages, else 0 [m]
   double       _stage_last;          ///< stage at beginning of current time step [m]
   double       _Qout;                ///< outflow corresponding to current stage [m3/s]
   double       _Qout_last;           ///< outflow at beginning of current time step [m3/s]
@@ -117,6 +120,8 @@ private:/*-------------------------------------------------------*/
   double       _AET;                 ///< losses through AET only [m3]
   double       _Precip;              ///< gains through precipitation [m3]
   double       _GW_seepage;          ///< losses to GW only [m3] (negative for GW gains)
+  mutable double _dry_loss_cap;      /// water [m3] available for evaporation + seepage in a step the reservoir dried out; <0: no cap
+  mutable bool   _dry_seep_off;      /// the step's outflow already took all remaining water: no seepage is booked
 
   res_constraint _constraint;        ///< current constraint type
 
@@ -190,6 +195,11 @@ public:/*-------------------------------------------------------*/
   double            GetReservoirLosses       (const double &tstep) const; //[m3]
   double            GetReservoirEvapLosses   (const double &tstep) const; //[m3]
   double            GetReservoirGWLosses     (const double &tstep) const; //[m3]
+  void              GetDynamicState          (std::vector<double> &v) const; ///< stage, flows and loss terms (for resetting ensemble members)
+  void              SetDynamicState          (const std::vector<double> &v);
+  double            GetDefaultInitialStage   () const {return _default_init_stage;} ///< stage used when no initial condition is given [m]
+  double            GetSeepageConstant       () const {return _seepage_const;} ///< [m3/s/m]; 0 if no :SeepageParameters
+  double            GetLocalGWHead           () const {return _local_GW_head;} ///< [m]
   double            GetReservoirPrecipGains  (const double &tstep) const; //[m3]
   double            GetResStage              () const; //[m]
   double            GetOldStage              () const; //[m]

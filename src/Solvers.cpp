@@ -1,11 +1,11 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2025 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 
 #include "RavenInclude.h"
 #include "Model.h"
-#include "GWRiverConnection.h"
 #include "AgeTracers.h"
 
 ///////////////////////////////////////////////////////////////////
@@ -37,7 +37,6 @@ void MassEnergyBalance( CModel            *pModel,
   CHydroUnit        *pHRU;        //pointer to current HRU
   CSubBasin         *pBasin;      //pointer to current SubBasin
   CGroundwaterModel *pGWModel;    //pointer to GW model
-  CGWRiverConnection*pGW2River;   //pointer to GW model river connection
 
   static double    **aPhi=NULL;   //[mm;C;mg/m2;MJ/m2] state variable arrays at initial, intermediate times;
   static double    **aPhinew;     //[mm;C;mg/m2;MJ/m2] state variable arrays at end of timestep; value after convergence
@@ -137,12 +136,7 @@ void MassEnergyBalance( CModel            *pModel,
     rates_of_change    =new double[maxConns   ];
   }//end static memory if
 
-  if(Options.modeltype == MODELTYPE_COUPLED)
-  {
-    // Get pointer to GW model
-    pGWModel  = pModel->GetGroundwaterModel();
-    pGW2River = pGWModel->GetRiverConnection();
-  }
+  pGWModel = pModel->GetGroundwaterModel();
   // Initialize variables============================================
   for (i=0;i<maxTotConns;i++)
   {
@@ -445,28 +439,11 @@ void MassEnergyBalance( CModel            *pModel,
   //-----------------------------------------------------------------
   //      GROUNDWATER SOLVER
   //-----------------------------------------------------------------
-  // Following solution to SW system at end of timestep, solve GW system for lateral flow
+  // After vertical and lateral processes, before routing: exchange with MODFLOW 6
   if (Options.modeltype == MODELTYPE_COUPLED)
-	{
-    // Update River water levels
-    if (pGW2River->GetNumSegments() > 0){
-      for (p = 0; p < NB; p++)
-      {
-        pBasin = pModel->GetSubBasin(p);
-        pGW2River->UpdateRiverLevelsBySB(p, pBasin);
-      }
-    }
-    // Add in Raven Flux for each HRU (non-GWSW Process contribution)
-    for (k=0;k<nHRUs;k++) {
-      pHRU=pModel->GetHydroUnit(k);
-      pGWModel->FluxToGWEquation(pHRU, aPhinew[k][iGW]);
-    }
-
-    pGWModel->Solve(t);               // Run MODFLOW-USG
-    pGWModel->PostSolve(tstep);       // Post-solve MFUSG Routines, Budget update, etc
-    pGW2River->UpdateRiverFlux();     // Update River Fluxes (for routing)
-    pGWModel->ClearMatrix();
-  } // End of Groundwater processes
+  {
+    pGWModel->Exchange(aPhinew,tstep,Options,tt);
+  }
 
 
   //-----------------------------------------------------------------
@@ -510,6 +487,11 @@ void MassEnergyBalance( CModel            *pModel,
     }
   }
 
+  //groundwater discharge to / leakage from reaches (Raven-MODFLOW 6)
+  if (Options.modeltype == MODELTYPE_COUPLED)
+  {
+    pGWModel->ApplyRiverExchange(aRouted,tstep);
+  }
   //Update demands
   for(p=0;p<NB;p++)
   {
@@ -542,11 +524,7 @@ void MassEnergyBalance( CModel            *pModel,
     //User-specified inflows to upstream end of subbasin reach
     aQinnew[p]+=pBasin->GetSpecifiedInflow(t+tstep);
 
-    //groundwater contributions to reach
-    if (Options.modeltype == MODELTYPE_COUPLED)
-	  {
-      aRouted[p]+= pGW2River->CalcRiverFlowBySB(p)*tstep;      // [m3]
-    }
+    
 
     //preparatory step prior to routing: used to assimilate lake levels and update routing hydrograph for timestep
     pBasin->UpdateSubBasin(tt,Options);
@@ -569,6 +547,9 @@ void MassEnergyBalance( CModel            *pModel,
     pBasin=pModel->GetSubBasin(p);
     if(pBasin->IsEnabled())
     {
+      if (Options.modeltype == MODELTYPE_COUPLED){ //river leakage to the aquifer not covered by local runoff
+        aQinnew[p]=pGWModel->TakeRiverLossFromInflow(p,aQinnew[p],tstep);
+      }
       pBasin->UpdateInflow(aQinnew[p]);              // from upstream, diversions, and specified flows
 
       pBasin->UpdateLateralInflow(aRouted[p]/(tstep*SEC_PER_DAY));//[m3/d]->[m3/s]
