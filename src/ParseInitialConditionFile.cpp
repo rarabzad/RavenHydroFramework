@@ -74,9 +74,11 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     pModel->InitializeBasins(Options,true); //resets all flow rates to autocalc version
     for(int p=0;p<pModel->GetNumSubBasins();p++) {
       if(pModel->GetSubBasin(p)->GetReservoir()!=NULL) {
-        pModel->GetSubBasin(p)->GetReservoir()->SetReservoirStage(0.0,0.0);
+        CReservoir *pR=pModel->GetSubBasin(p)->GetReservoir(); //default stage: crest for absolute stages, 0 for relative
+        pR->SetReservoirStage(pR->GetDefaultInitialStage(),pR->GetDefaultInitialStage());
       }
     }
+    pModel->RestoreInitialDynamicState(Options.timestep); //same routing memory and reservoir states as the first run (a .rvc read below overrides them)
   }
   //--Sift through file-----------------------------------------------
   bool end_of_file=pp->Tokenize(s,Len);

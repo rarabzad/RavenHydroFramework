@@ -177,6 +177,10 @@ void CModel::Initialize(const optStruct &Options)
     pRes=_pSubBasins[p]->GetReservoir();
     if(pRes!=NULL){
       if(pRes->GetHRUIndex()!=DOESNT_EXIST){
+        //the lake HRU must lie in the reservoir's own subbasin: its water is handed to that subbasin's reservoir (a lake HRU
+        //in another subbasin made the solver use a subbasin without reservoir and crash)
+        ExitGracefullyIf(_pHydroUnits[pRes->GetHRUIndex()]->GetSubBasinIndex()!=p,
+          ("CModel::Initialize: the :HRUID of reservoir "+pRes->GetReservoirName()+" is an HRU of another subbasin; it must be an HRU of subbasin "+to_string(_pSubBasins[p]->GetID())).c_str(),BAD_DATA);
         _pHydroUnits[pRes->GetHRUIndex()]->LinkToReservoir(_pSubBasins[p]->GetID());
       }
     }
@@ -420,6 +424,18 @@ void CModel::CalculateInitialWaterStorage(const optStruct &Options)
 
   if (!Options.silent){cout<<"  Calculating initial system water storage..."<<endl;}
   _initWater=0.0;
+  //routing memory and reservoir states: saved at the first call. Ensemble members get them back in
+  //ParseInitialConditions (before their .rvc is read), so a member-specific .rvc still overrides them.
+  if (_initQinHist.size()==0){
+    _initQinHist.resize(_nSubBasins); _initQlatHist.resize(_nSubBasins); _initResState.resize(_nSubBasins); _initQlatLast.resize(_nSubBasins);
+    for (int p=0;p<_nSubBasins;p++){
+      const double *qi=_pSubBasins[p]->GetInflowHistory(); const double *ql=_pSubBasins[p]->GetLatHistory();
+      if (qi!=NULL){_initQinHist [p].assign(qi,qi+_pSubBasins[p]->GetInflowHistorySize());}
+      if (ql!=NULL){_initQlatHist[p].assign(ql,ql+_pSubBasins[p]->GetLatHistorySize());}
+      _initQlatLast[p]=_pSubBasins[p]->GetQlatLast();
+      if (_pSubBasins[p]->GetReservoir()!=NULL){_pSubBasins[p]->GetReservoir()->GetDynamicState(_initResState[p]);}
+    }
+  }
   double S=0;
   for (int i=0;i<_nStateVars;i++)
   {
@@ -1084,6 +1100,19 @@ void CModel::GenerateGaugeWeights(double **&aWts, const forcing_type forcing, co
   }
 
   delete[] has_data;
+}
+
+//////////////////////////////////////////////////////////////////
+/// \brief restores the routing memory and reservoir states of the first initialization (ensemble members)
+//
+void CModel::RestoreInitialDynamicState(const double &tstep)
+{
+  if (_initQinHist.size()!=(size_t)_nSubBasins){return;} //first initialization not done yet
+  for (int p=0;p<_nSubBasins;p++){
+    if (_initQinHist [p].size()>0){_pSubBasins[p]->SetQinHist ((int)_initQinHist[p].size(),&_initQinHist[p][0],tstep,tstep);}
+    if (_initQlatHist[p].size()>0){_pSubBasins[p]->SetQlatHist((int)_initQlatHist[p].size(),&_initQlatHist[p][0],_initQlatLast[p],tstep,tstep);}
+    if ((_pSubBasins[p]->GetReservoir()!=NULL) && (_initResState[p].size()>0)){_pSubBasins[p]->GetReservoir()->SetDynamicState(_initResState[p]);}
+  }
 }
 //////////////////////////////////////////////////////////////////
 /// \brief reboots all necessary variables for ensemble mode

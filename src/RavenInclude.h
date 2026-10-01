@@ -838,7 +838,8 @@ enum res_constraint
   RC_OVERRIDE_FLOW,
   RC_DRY_RESERVOIR,
   RC_MANAGEMENT,    //from management optimization
-  RC_DZTR
+  RC_DZTR,
+  RC_UNSET          //before the first time step (no constraint applied yet)
 };
 
 ////////////////////////////////////////////////////////////////////

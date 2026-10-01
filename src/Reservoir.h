@@ -10,6 +10,7 @@
 #ifndef RESERVOIR_H
 #define RESERVOIR_H
 
+#include <vector>
 #include "RavenInclude.h"
 #include "ParseLib.h"
 #include "HydroUnits.h"
@@ -105,6 +106,7 @@ private:/*-------------------------------------------------------*/
 
   //state variables :
   double       _stage;               ///< current stage [m] (actual state variable)
+  double       _default_init_stage;  ///< initial stage when no initial condition is given: crest for absolute stages, else 0 [m]
   double       _stage_last;          ///< stage at beginning of current time step [m]
   double       _Qout;                ///< outflow corresponding to current stage [m3/s]
   double       _Qout_last;           ///< outflow at beginning of current time step [m3/s]
@@ -118,6 +120,8 @@ private:/*-------------------------------------------------------*/
   double       _AET;                 ///< losses through AET only [m3]
   double       _Precip;              ///< gains through precipitation [m3]
   double       _GW_seepage;          ///< losses to GW only [m3] (negative for GW gains)
+  mutable double _dry_loss_cap;      /// water [m3] available for evaporation + seepage in a step the reservoir dried out; <0: no cap
+  mutable bool   _dry_seep_off;      /// the step's outflow already took all remaining water: no seepage is booked
 
   res_constraint _constraint;        ///< current constraint type
 
@@ -230,6 +234,7 @@ public:/*-------------------------------------------------------*/
   string            GetControlName           (const int i) const;
 
   int               GetNumDryTimesteps       () const;
+  double            GetDefaultInitialStage   () const {return _default_init_stage;} ///< stage used when no initial condition is given [m]
 
   //Manipulators
   void              SetMinStage              (const double &min_z);
@@ -277,6 +282,8 @@ public:/*-------------------------------------------------------*/
   void              SetHRU                   (const CHydroUnit *pHRU);
   void              DisableOutflow           ();
   void              ClearTimeSeriesData      (const optStruct& Options);
+  void              GetDynamicState          (std::vector<double> &v) const; ///< stage, flows and loss terms (for resetting ensemble members)
+  void              SetDynamicState          (const std::vector<double> &v);
 
   //Called during initialization:
   void              Initialize               (const optStruct &Options);
