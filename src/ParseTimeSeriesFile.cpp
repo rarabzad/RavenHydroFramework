@@ -450,11 +450,12 @@ bool ParseTimeSeriesFile(CModel *&pModel, const optStruct &Options)
       bool period_ending =ishyd;
       //Hydrographs are internally stored as period-ending!
       //pTimeSer=CTimeSeries::Parse(p,(ishyd || isinflow || isnetinflow),to_string(s[1]),s_to_ll(s[2]),"none",Options,period_ending);
+      string constit_name=(Len>=4)?string(s[3]):string(""); int Len0=Len; //capture before Parse(), which re-tokenizes into s[]
       pTimeSer=CTimeSeries::Parse(p,true,to_string(s[1]),s_to_ll(s[2]),"none",Options,period_ending);
 
       if(isconc) {
-        ExitGracefullyIf(Len<4,"ParseTimeSeriesFile: STREAM_CONCENTRATION observation must include constituent name",BAD_DATA_WARN);
-        int c = pModel->GetTransportModel()->GetConstituentIndex(s[3]);
+        ExitGracefullyIf(Len0<4,"ParseTimeSeriesFile: STREAM_CONCENTRATION observation must include constituent name",BAD_DATA_WARN);
+        int c = pModel->GetTransportModel()->GetConstituentIndex(constit_name);
         if(c==DOESNT_EXIST) {
           warn="ParseTimeSeries:: Invalid/unused constituent name in observation stream concentration time series ["+pTimeSer->GetSourceFile()+"]. Will be ignored";
           WriteWarning(warn.c_str(),Options.noisy); break;
@@ -524,11 +525,12 @@ bool ParseTimeSeriesFile(CModel *&pModel, const optStruct &Options)
       bool islakearea =!strcmp(s[1], "LAKE_AREA");
       bool invalidSB=(pModel->GetSubBasinByID(s_to_ll(s[2]))==NULL);
 
+      string constit_name=(Len>=4)?string(s[3]):string(""); int Len0=Len; //capture before Parse(), which re-tokenizes into s[]
       pTimeSer=CTimeSeries::Parse(p,true,to_string(s[1]),s_to_ll(s[2]),"none",Options);
 
       if(isconc) {
-        ExitGracefullyIf(Len<4,"ParseTimeSeriesFile: STREAM_CONCENTRATION observation must include constituent name",BAD_DATA_WARN);
-        int c = pModel->GetTransportModel()->GetConstituentIndex(s[3]);
+        ExitGracefullyIf(Len0<4,"ParseTimeSeriesFile: STREAM_CONCENTRATION observation must include constituent name",BAD_DATA_WARN);
+        int c = pModel->GetTransportModel()->GetConstituentIndex(constit_name);
         if(c==DOESNT_EXIST) {
           warn="ParseTimeSeries:: Invalid/unused constituent name in observation stream concentration time series ["+pTimeSer->GetSourceFile()+"]. Will be ignored";
           WriteWarning(warn.c_str(),Options.noisy); break;
