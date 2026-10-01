@@ -176,6 +176,10 @@ void CModel::Initialize(const optStruct &Options)
     pRes=_pSubBasins[p]->GetReservoir();
     if(pRes!=NULL){
       if(pRes->GetHRUIndex()!=DOESNT_EXIST){
+        //the lake HRU must lie in the reservoir's own subbasin: its water is handed to that subbasin's reservoir (a lake HRU
+        //in another subbasin made the solver use a subbasin without reservoir and crash)
+        ExitGracefullyIf(_pHydroUnits[pRes->GetHRUIndex()]->GetSubBasinIndex()!=p,
+          ("CModel::Initialize: the :HRUID of reservoir "+pRes->GetReservoirName()+" is an HRU of another subbasin; it must be an HRU of subbasin "+to_string(_pSubBasins[p]->GetID())).c_str(),BAD_DATA);
         _pHydroUnits[pRes->GetHRUIndex()]->LinkToReservoir(_pSubBasins[p]->GetID());
       }
     }

@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2025 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #include "Reservoir.h"
 #include "Model.h"     // needed to define CModel
@@ -24,6 +25,7 @@ void CReservoir::BaseConstructor(const string Name,const long long SBID)
   _lake_convcoeff=2.0;
 
   _stage     =0.0;
+  _default_init_stage=0.0;
   _stage_last=0.0;
   _min_stage =0.0;
   _max_stage =0.0;
@@ -33,6 +35,8 @@ void CReservoir::BaseConstructor(const string Name,const long long SBID)
   _AET		   =0.0;
   _Precip    =0.0;
   _GW_seepage=0.0;
+  _dry_loss_cap=-1.0;
+  _dry_seep_off=false;
   _aQstruct=NULL;
   _aQstruct_last=NULL;
 
@@ -97,6 +101,7 @@ void CReservoir::BaseConstructor(const string Name,const long long SBID)
   _DAadjust_last=0.0;
 
   _dry_timesteps=0;
+  _constraint=RC_UNSET;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -145,6 +150,7 @@ CReservoir::CReservoir(const string Name, const long long SBID,
 
   double ht,dh;
   _crest_ht  =crestht;       // zero by default
+  if (crestht!=0.0){_stage=_stage_last=_default_init_stage=_crest_ht;} //absolute stages: without an initial condition, start at the crest (as stage 0 does for relative stages)
   _min_stage =_crest_ht-depth;
   _max_stage =_crest_ht+6.0; // a postive value relative to _crest_ht
   dh=(_max_stage-_min_stage)/(double)(_Np-1);
@@ -224,6 +230,7 @@ CReservoir::CReservoir(const string Name, const long long SBID,
       ExitGracefully(warn.c_str(),BAD_DATA_WARN);return;
     }
   }
+  if ((_Np>0) && (_aStage[0]>0.0)){_stage=_stage_last=_default_init_stage=_crest_ht;} //absolute stage table: start at the crest unless an initial condition is given
   _max_capacity=_aVolume[_Np-1];
 }
 
@@ -301,6 +308,7 @@ CReservoir::CReservoir(const string Name, const long long SBID,
       ExitGracefully(warn.c_str(),BAD_DATA_WARN);
     }
   }
+  if ((_Np>0) && (_aStage[0]>0.0)){_stage=_stage_last=_default_init_stage=_crest_ht;} //absolute stage table: start at the crest unless an initial condition is given
   _max_capacity=_aVolume[_Np-1];
 }
 //////////////////////////////////////////////////////////////////
@@ -324,6 +332,7 @@ CReservoir::CReservoir(const string Name,
 
   _crest_width=crestw;
   _crest_ht   =crestht;
+  if (crestht!=0.0){_stage=_stage_last=_default_init_stage=_crest_ht;} //absolute stages: without an initial condition, start at the crest (as stage 0 does for relative stages)
   _min_stage  =-depth+_crest_ht;
   _max_stage  =5.0+_crest_ht; //reasonable default?
   ExitGracefullyIf(depth <=0, "CReservoir::Constructor (Lake): cannot have negative maximum lake depth",BAD_DATA_WARN);
@@ -795,6 +804,7 @@ void CReservoir::Initialize(const optStruct &Options)
     _aQstruct[i]=_aQstruct_last[i]=0.0;
   }
   _dry_timesteps=0;
+  _constraint=RC_UNSET;
   double Qoverride=0.0;
   double Qmin=0.0;
   if (_pOverrideQ!=NULL){
@@ -1308,6 +1318,20 @@ void CReservoir::UpdateMassBalance(const time_struct &tt,const double &tstep, co
 
   if(_seepage_const>0) {
     _GW_seepage=_seepage_const*(0.5*(_stage+_stage_last)-_local_GW_head)*SEC_PER_DAY*tstep;
+  }
+  if ((_dry_loss_cap>=0.0) && _dry_seep_off){ //outflow took the rest: evaporation limited to what it left, no seepage
+    if (_seepage_const>0){_GW_seepage=0.0;}
+    if (_AET>_dry_loss_cap){_MB_losses-=_AET; _AET=_dry_loss_cap; _MB_losses+=_AET;}
+  }
+  else if (_dry_loss_cap>=0.0){ //reservoir dried out this step: book only the water that could actually leave
+    double aet=max(_AET,0.0), seep=max(_GW_seepage,0.0);
+    if (aet+seep>_dry_loss_cap){
+      double f=(aet+seep>0)?_dry_loss_cap/(aet+seep):0.0;
+      _MB_losses-=_AET; _AET=aet*f; _MB_losses+=_AET;
+      if (_GW_seepage>0){_GW_seepage=seep*f;}
+    }
+  }
+  if(_seepage_const>0) {
     _MB_losses+=_GW_seepage;
   }
 
@@ -1538,6 +1562,7 @@ double  CReservoir::RouteWater(const double &Qin_old,
                                res_constraint &constraint,
                                double *aQstruct) const
 {
+  _dry_loss_cap=-1.0; _dry_seep_off=false; //set again below only if the reservoir dries out in this step
   if ((Options.assimilate_stage) && (_assimilate_stage) && (!_assim_blank))
   {
     if ((Options.management_optimization) && (_Qoptimized != RAV_BLANK_DATA)) {
@@ -1657,6 +1682,9 @@ double  CReservoir::RouteWater(const double &Qin_old,
    //only remaining filling action is via seepage, which is likely not enough, and Q_out_new can't be negative
     constraint=RC_DRY_RESERVOIR;
     res_outflow=0.0;
+    //the water that can actually leave by evaporation and seepage this step (the lake ends at its bottom, volume
+    //GetVolume(_min_stage)); UpdateMassBalance books no more than this, so the water balance stays closed
+    _dry_loss_cap=max(V_old-GetVolume(_min_stage)+((Qin_old+Qin_new)-_Qout+2.0*precip-(ext_old+ext_new))/2.0*(tstep*SEC_PER_DAY),0.0);
     return _min_stage;
   }
 
@@ -1803,6 +1831,9 @@ double  CReservoir::RouteWater(const double &Qin_old,
         V_new= V_old+((Qin_old+Qin_new)-(_Qout+res_outflow)+2.0*precip-ET*(A_old+A_guess)-(seep_old+seep_guess)-(ext_old+ext_new))/2.0*(tstep*SEC_PER_DAY);
         if(V_new<0) {
           V_new=0;
+          //all remaining water leaves as outflow below; that outflow already removed evaporation ET*A_old/2*dt (and no
+          //seepage), so exactly this evaporation and no seepage is booked in UpdateMassBalance
+          _dry_loss_cap=max(0.5*ET*A_old*(tstep*SEC_PER_DAY),0.0); _dry_seep_off=true;
           constraint=RC_DRY_RESERVOIR; //drying out reservoir
           res_outflow = -2.0 * (V_new - V_old) / (tstep*SEC_PER_DAY) + (-_Qout + 2.0*precip + (Qin_old + Qin_new) - ET*(A_old + 0.0) - (ext_old + ext_new));//[m3/s] //dry it out
         }
@@ -1854,11 +1885,13 @@ double  CReservoir::RouteWater(const double &Qin_old,
 //
 void CReservoir::WriteToSolutionFile (ofstream &RVC) const
 {
+  std::streamsize prec=RVC.precision(12); //full precision: a restart continues the reservoir exactly
   RVC<<"    :ResFlow, "<<_Qout<<","<<_Qout_last<<endl;
   RVC<<"    :ResStage, "<<_stage<<","<<_stage_last<<endl;
   if((_DAadjust_last!=0.0) || (_DAadjust!=0.0)){
     RVC<<"    :ResDAadj, "<<_DAadjust<<","<<_DAadjust_last<<endl;
   }
+  RVC.precision(prec);
   for (int i = 0; i < _nControlStructures; i++) {
     RVC<<"    :ControlFlow, "<<i<<","<<_aQstruct[i]<<","<<_aQstruct_last[i]<<endl;
   }
