@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #ifndef SUBBASIN_H
 #define SUBBASIN_H
@@ -215,6 +216,7 @@ public:/*-------------------------------------------------------*/
   double               GetTemperatureCorrection () const;
   int                  GetReachHRUIndex     () const;
   double               GetRiverDepth        () const;
+  double               GetRiverDepthAtFlow  (const double &Q) const; ///< channel depth [m] at flow Q [m3/s]
   double               GetXSectArea         () const;
   double               GetWaterLevel        () const;
   double               GetHyporheicFlux     () const;

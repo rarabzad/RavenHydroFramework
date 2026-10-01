@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #include "RavenInclude.h"
 #include "Properties.h"
@@ -289,6 +290,8 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
     else if  (!strcmp(s[0],":VegetationTransition"   )){code=208; }
     //--------------------AQUIFER PARAMS -----------------------'
     else if  (!strcmp(s[0],":AquiferClasses"         )){code=300;}
+    else if  (!strcmp(s[0],":AquiferProfiles"        )){code=301;}
+    else if  (!strcmp(s[0],":AquiferProfileParameters")){code=302;}
     //--------------------RIVER CHANNEL PARAMS -------------------
     else if  (!strcmp(s[0],":ChannelProfile"         )){code=500;}
     else if  (!strcmp(s[0],":ChannelRatingCurves"    )){code=501;}
@@ -828,7 +831,91 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
        :AquiferClasses
        {string tag, soil_type, thickness}xNumAquiferClasses
        :EndAquiferClasses*/
-      if (Options.noisy) {cout <<"Aquifer Classes (OBSOLETE)"<<endl;}
+      if (Options.noisy) {cout <<"Aquifer Classes"<<endl;}
+      CGroundwaterModel *pGW=pModel->GetGroundwaterModel();
+      vector<string> attrs;
+      while (!p->Tokenize(s,Len))
+      {
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndAquiferClasses")){break;}
+        if (!strcmp(s[0],":Units")){continue;}
+        if (!strcmp(s[0],":Attributes")){attrs.clear(); for (int i=1;i<Len;i++){attrs.push_back(s[i]);} continue;}
+        ExitGracefullyIf(attrs.size()==0,"ParseClassPropertiesFile: :AquiferClasses requires an :Attributes line",BAD_DATA);
+        ExitGracefullyIf(Len!=(int)attrs.size()+1,"ParseClassPropertiesFile: :AquiferClasses row has the wrong number of values",BAD_DATA);
+        gw_aquifer_class c; c.name=s[0]; c.Kh=-1; c.Kv=-1; c.Ss=1e-5; c.Sy=0.1; c.porosity=0.3; bool kvGiven=false;
+        for (size_t i=0;i<attrs.size();i++){
+          double v=s_to_d(s[i+1]);
+          if      (attrs[i]=="K_HORIZ"     ){c.Kh=v;}
+          else if (attrs[i]=="K_VERT"      ){c.Kv=v; kvGiven=true;}
+          else if (attrs[i]=="SPEC_STORAGE"){c.Ss=v;}
+          else if (attrs[i]=="SPEC_YIELD"  ){c.Sy=v;}
+          else if (attrs[i]=="POROSITY"    ){c.porosity=v;}
+          else {ExitGracefully(("ParseClassPropertiesFile: unknown :AquiferClasses attribute "+attrs[i]).c_str(),BAD_DATA);}
+        }
+        ExitGracefullyIf(c.Kh<=0,("ParseClassPropertiesFile: aquifer class "+c.name+" needs a positive K_HORIZ").c_str(),BAD_DATA);
+        if (!kvGiven){c.Kv=c.Kh/10.0;} //default only when K_VERT is absent; given values are checked at start-up
+        pGW->AddAquiferClass(c);
+      }
+      break;
+    }
+    case(301):  //----------------------------------------------
+    {/*:AquiferProfiles
+       {name, nLayers, {class, thickness[m] or TO_BEDROCK, layer type} x nLayers} x nProfiles
+       :EndAquiferProfiles
+       layer types: AQUIFER, CONFINED_AQUIFER, AQUITARD, CONFINING_LAYER, AQUICLUDE */
+      if (Options.noisy) {cout <<"Aquifer Profiles"<<endl;}
+      CGroundwaterModel *pGW=pModel->GetGroundwaterModel();
+      while (!p->Tokenize(s,Len))
+      {
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndAquiferProfiles")){break;}
+        if ((!strcmp(s[0],":Attributes")) || (!strcmp(s[0],":Units"))){continue;}
+        ExitGracefullyIf(Len<2,"ParseClassPropertiesFile: bad :AquiferProfiles row",BAD_DATA);
+        int nL=s_to_i(s[1]);
+        ExitGracefullyIf((nL<1) || (Len!=2+3*nL),
+          ("ParseClassPropertiesFile: aquifer profile "+string(s[0])+" must list name, nLayers, then class, thickness or TO_BEDROCK, and layer type for each layer").c_str(),BAD_DATA);
+        gw_profile P=CGroundwaterModel::DefaultProfile(s[0]);
+        for (int l=0;l<nL;l++)
+        {
+          gw_layer L; string cls=s[2+3*l],th=s[3+3*l],ty=s[4+3*l];
+          L.iclass=pGW->GetAquiferClassIndex(cls);
+          ExitGracefullyIf(L.iclass==DOESNT_EXIST,("ParseClassPropertiesFile: unknown aquifer class "+cls+" (define :AquiferClasses before :AquiferProfiles)").c_str(),BAD_DATA);
+          L.to_bedrock=(th=="TO_BEDROCK");
+          L.thickness=L.to_bedrock?0.0:s_to_d(th.c_str());
+          ExitGracefullyIf((!L.to_bedrock) && (L.thickness<=0),("ParseClassPropertiesFile: layer thickness must be positive in aquifer profile "+P.name).c_str(),BAD_DATA);
+          if      ((ty=="AQUIFER") || (ty=="UNCONFINED_AQUIFER")){L.type=GWL_AQUIFER;}
+          else if  (ty=="CONFINED_AQUIFER")                      {L.type=GWL_CONFINED_AQUIFER;}
+          else if ((ty=="AQUITARD") || (ty=="CONFINING_LAYER"))   {L.type=GWL_AQUITARD;}
+          else if  (ty=="AQUICLUDE")                             {L.type=GWL_AQUICLUDE;}
+          else {ExitGracefully(("ParseClassPropertiesFile: unknown layer type "+ty+" in aquifer profile "+P.name).c_str(),BAD_DATA);}
+          P.layers.push_back(L);
+        }
+        pGW->AddProfile(P);
+      }
+      break;
+    }
+    case(302):  //----------------------------------------------
+    {/*:AquiferProfileParameters
+       :Attributes, INITIAL_HEAD_DEPTH, DEFAULT_BEDROCK_DEPTH, RIVERBED_K, RIVERBED_THICKNESS, SEEPAGE_LEAKANCE, RECHARGE_DELAY, SOIL_ZONE_DEPTH
+       {profile name, values} x nProfiles
+       :EndAquiferProfileParameters */
+      if (Options.noisy) {cout <<"Aquifer Profile Parameters"<<endl;}
+      CGroundwaterModel *pGW=pModel->GetGroundwaterModel();
+      vector<string> attrs;
+      while (!p->Tokenize(s,Len))
+      {
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndAquiferProfileParameters")){break;}
+        if (!strcmp(s[0],":Units")){continue;}
+        if (!strcmp(s[0],":Attributes")){attrs.clear(); for (int i=1;i<Len;i++){attrs.push_back(s[i]);} continue;}
+        ExitGracefullyIf(attrs.size()==0,"ParseClassPropertiesFile: :AquiferProfileParameters requires an :Attributes line",BAD_DATA);
+        ExitGracefullyIf(Len!=(int)attrs.size()+1,"ParseClassPropertiesFile: :AquiferProfileParameters row has the wrong number of values",BAD_DATA);
+        for (size_t i=0;i<attrs.size();i++){
+          if (!pGW->SetProfileParameter(s[0],attrs[i],s_to_d(s[i+1]))){
+            ExitGracefully(("ParseClassPropertiesFile: unknown aquifer profile "+string(s[0])+" in :AquiferProfileParameters").c_str(),BAD_DATA);
+          }
+        }
+      }
       break;
     }
     case(500):  //----------------------------------------------

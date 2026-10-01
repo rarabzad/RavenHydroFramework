@@ -1,6 +1,7 @@
 ﻿/*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2025 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #include "RavenInclude.h"
 #include "Model.h"
@@ -95,6 +96,8 @@ bool ParseTimeSeriesFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":TemperatureCorrection"       )){code=33;}
     //-------------------OBSERVATIONS---------------------------
     else if  (!strcmp(s[0],":ObservationData"             )){code=40; }
+    else if  (!strcmp(s[0],":WellRate"                    )){code=150;}
+    else if  (!strcmp(s[0],":BoundaryHead"                )){code=151;}
     else if  (!strcmp(s[0],":IrregularObservations"       )){code=41; }
     else if  (!strcmp(s[0],":ObservationWeights"          )){code=42; }
     else if  (!strcmp(s[0],":IrregularWeights"            )){code=43; }
@@ -2126,6 +2129,25 @@ bool ParseTimeSeriesFile(CModel *&pModel, const optStruct &Options)
       break;
     }
 
+    case (150): //---------------------------------------------
+    {/*:WellRate [well ID] {units m3/d}
+         {yyyy-mm-dd} {hh:mm:ss.0} {timestep} {nValues}
+         {rate [m3/d], negative = withdrawal} x nValues
+       :EndWellRate */
+      if (Len<2){ExitGracefully(("improper format of groundwater command "+string(s[0])).c_str(),BAD_DATA); break;}
+      long long wid=s_to_ll(s[1]); //capture before Parse(), which re-tokenizes into s[]
+      pTimeSer=CTimeSeries::Parse(p,true,"WELL_RATE_"+to_string(wid),wid,"none",Options);
+      pModel->GetGroundwaterModel()->SetWellRateSeries(wid,pTimeSer);
+      break;
+    }
+    case (151): //---------------------------------------------
+    {/*:BoundaryHead [boundary name] {units m}  ... :EndBoundaryHead */
+      if (Len<2){ExitGracefully(("improper format of groundwater command "+string(s[0])).c_str(),BAD_DATA); break;}
+      string bname=s[1]; //capture before Parse(), which re-tokenizes into s[]
+      pTimeSer=CTimeSeries::Parse(p,true,"BOUNDARY_HEAD_"+bname,DOESNT_EXIST,"none",Options);
+      pModel->GetGroundwaterModel()->SetBoundaryHeadSeries(bname,pTimeSer);
+      break;
+    }
     default: //----------------------------------------------
     {
       char firstChar = *(s[0]);

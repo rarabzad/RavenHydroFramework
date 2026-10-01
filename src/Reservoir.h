@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------
   Reservoir.h
   ------------------------------------------------------------------
@@ -207,6 +208,8 @@ public:/*-------------------------------------------------------*/
   double            GetObsStage              (const int nn) const;//[m]
   bool              UseInStageAssimilation   () const;
   double            GetDryStage              () const;
+  double            GetSeepageConstant       () const {return _seepage_const;} ///< [m3/s/m]; 0 if no :SeepageParameters
+  double            GetLocalGWHead           () const {return _local_GW_head;} ///< [m]
 
   int               GetNumWaterDemands       () const;
   CDemand          *GetWaterDemandObj        (const int ii) const;

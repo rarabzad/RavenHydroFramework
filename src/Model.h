@@ -1,6 +1,7 @@
 ﻿/*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #ifndef MODEL_H
 #define MODEL_H
@@ -27,7 +28,6 @@
 #include "ForcingGrid.h"
 #include "ModelEnsemble.h"
 #include "GroundwaterModel.h"
-#include "GWSWProcesses.h"
 #include "ChannelXSect.h"
 #include "Convolution.h"
 #include "DemandOptimization.h"

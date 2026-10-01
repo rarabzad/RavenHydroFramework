@@ -49,6 +49,7 @@ endif()
 if(COMPILE_LIB)
   add_library(ravenbmi SHARED ${SOURCE})
   target_compile_definitions(ravenbmi PUBLIC BMI_LIBRARY)
+  target_link_libraries(ravenbmi ${CMAKE_DL_LIBS})
 endif()
 
 # creates an executable - file extension is OS dependent (Linux: none, Windows: .exe)
@@ -58,6 +59,9 @@ if(COMPILE_EXE)
     ${HEADER}
   )
   set_target_properties(Raven PROPERTIES LINKER_LANGUAGE CXX)
+
+  # MODFLOW 6 groundwater coupling: libmf6 is loaded at run time (dlopen on Linux/macOS)
+  target_link_libraries(Raven ${CMAKE_DL_LIBS})
 
   # Remove deprecation warnings for GCC
   IF(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

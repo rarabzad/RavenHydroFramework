@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #include "RavenInclude.h"
 #include "Model.h"
@@ -334,6 +335,7 @@ bool ParseHRUPropsFile(CModel *&pModel, const optStruct &Options, bool terrain_r
                                pLULT);
           ExitGracefullyIf(pHRU==NULL,"ParseHRUPropsFile",OUT_OF_MEMORY);
           pModel->AddHRU(pHRU);
+          pHRU->SetAquiferProfileName(string(s[9]));
           pSB=pModel->GetSubBasinByID(SBID);
           if (pSB!=NULL){pSB->AddHRU(pHRU);}
           else          {

@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #include "Model.h"
 #include "EnergyTransport.h"
@@ -138,12 +139,10 @@ CModel::CModel(const int        nsoillayers,
   _aShouldApplyProcess=NULL; //Initialized in Initialize
 
   _pTransModel=new CTransportModel(this);
-  _pGWModel = NULL; //GW MIGRATE -should initialize with empty GW model
+  _pGWModel = NULL;
   _pDO =NULL;
 
-#ifdef _MODFLOW_USG_
-  _pGWModel = new CGroundwaterModel(this);
-#endif
+_pGWModel = new CGroundwaterModel(this); //inactive unless :GroundwaterModel MODFLOW6
 
   _pEnsemble = NULL;
   _pStateVar = NULL;
@@ -159,6 +158,7 @@ CModel::~CModel()
 
   CloseOutputStreams();
 
+  delete _pGWModel; _pGWModel=NULL; //first: it finishes its outputs using subbasins and HRUs
   for (p=0;p<_nSubBasins;    p++){delete _pSubBasins    [p];} delete [] _pSubBasins;    _pSubBasins=NULL;
   for (k=0;k<_nHydroUnits;   k++){delete _pHydroUnits   [k];} delete [] _pHydroUnits;   _pHydroUnits=NULL;
   for (g=0;g<_nGauges;       g++){delete _pGauges       [g];} delete [] _pGauges;       _pGauges=NULL;
@@ -235,7 +235,6 @@ CModel::~CModel()
 
   delete _pTransModel;
   delete _pEnsemble;
-  delete _pGWModel;
   delete _pStateVar;
   delete _pDO;
 
@@ -2568,9 +2567,9 @@ void CModel::IncrementCumulInput(const optStruct &Options, const time_struct &tt
       area=_pHydroUnits[k]->GetArea();
       if (GW<0){_CumulInput-=GW*area/_WatershedArea;} //negative recharge
     }
-    /*for(int p=0;p<_nSubBasins;p++) {
-      _CumulInput+=max(pGW2River->CalcRiverFluxBySB(p),0.0)*Options.timestep*area/MM_PER_METER; ///m3/d baseflow
-    }*/
+    if ((Options.modeltype==MODELTYPE_COUPLED) && (_pGWModel!=NULL)){ //groundwater discharge returned to Raven stores
+      _CumulInput+=_pGWModel->GetStepReturnVolume()/(_WatershedArea*M2_PER_KM2)*MM_PER_METER;
+    }
   }
 
   _pTransModel->IncrementCumulInput(Options,tt);
@@ -3117,7 +3116,11 @@ void CModel::UpdateDiagnostics(const optStruct   &Options,
 
     invalid_data=false;
     pBasin=GetSubBasinByID (_pObservedTS[i]->GetLocID());
-    if ((pBasin==NULL) && (svtyp==UNRECOGNIZED_SVTYPE))
+    if (datatype=="GW_HEAD") //the location ID is a monitoring-well ID, not a subbasin
+    {
+      pBasin=NULL;
+    }
+    else if ((pBasin==NULL) && (svtyp==UNRECOGNIZED_SVTYPE))
     {
       invalid_data=true;
     }
@@ -3138,6 +3141,10 @@ void CModel::UpdateDiagnostics(const optStruct   &Options,
     if (invalid_data)
     {
       value=RAV_BLANK_DATA;
+    }
+    else if (datatype=="GW_HEAD")//=================================================
+    { //monitoring-well head (Raven-MODFLOW 6); matched to observations below like any other type
+      value=(_pGWModel!=NULL)?_pGWModel->GetObservationWellHead(_pObservedTS[i]->GetLocID()):RAV_BLANK_DATA;
     }
     else if (datatype=="HYDROGRAPH")//===============================================
     {

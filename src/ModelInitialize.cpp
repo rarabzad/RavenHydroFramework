@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2023 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #include "Model.h"
 #include "IrregularTimeSeries.h"
@@ -235,11 +236,7 @@ void CModel::Initialize(const optStruct &Options)
   // Initialize Groundwater
   //--------------------------------------------------------------
   if (Options.modeltype == MODELTYPE_COUPLED) {
-    _pGWModel->Initialize(Options);
-    // Ensure duration matches between models
-    if (_pGWModel->GetTotalTSteps() != (int)(Options.duration/Options.timestep)) {
-      ExitGracefully("CModel::Initialize: groundwater model total time steps not equal to Raven time steps", BAD_DATA);
-    }
+    //groundwater model is initialized in CalculateInitialWaterStorage(), after the .rvc file has been read
     // Eventually - more checks on time step compatability
   }
 
@@ -418,6 +415,9 @@ void CModel::InitializePostRVM(const optStruct& Options)
 //
 void CModel::CalculateInitialWaterStorage(const optStruct &Options)
 {
+  //Raven-MODFLOW 6: build and start the groundwater model once all input files, including initial conditions (.rvc), are read
+  if (Options.modeltype==MODELTYPE_COUPLED){_pGWModel->Initialize(Options);}
+
   if (!Options.silent){cout<<"  Calculating initial system water storage..."<<endl;}
   _initWater=0.0;
   double S=0;

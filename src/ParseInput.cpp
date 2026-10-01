@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 
 #include "RavenInclude.h"
@@ -29,7 +30,6 @@
 #include "LatAdvection.h"
 #include "PrairieSnow.h"
 #include "ProcessGroup.h"
-#include "GWSWProcesses.h"
 #include "HeatConduction.h"
 #include "SurfaceEnergyExchange.h"
 #include "FrozenLake.h"
@@ -504,9 +504,6 @@ bool ParseMainInputFile (CModel     *&pModel,
     else if  (!strcmp(s[0],":NetCDFUseBasinFullname"    )){code=115;}
     else if  (!strcmp(s[0],":UncertaintyAnalysis"       )){code=116;}
 
-    else if  (!strcmp(s[0],":WriteGroundwaterHeads"     )){code=510;}//GWMIGRATE -TO REMOVE
-    else if  (!strcmp(s[0],":WriteGroundwaterFlows"     )){code=511;}//GWMIGRATE -TO REMOVE
-    else if  (!strcmp(s[0],":rvg_Filename"              )){code=512;}//GWMIGRATE -TO REMOVE
 
 	  if       (in_ifmode_statement)                        {code=-6; }
     else if  (Len==0)                                     {code=-1; }
@@ -633,6 +630,7 @@ bool ParseMainInputFile (CModel     *&pModel,
     //...
     //-------------------GROUNDWATER -------------------------
     else if  (!strcmp(s[0],":ModelType"                 )){code=500; }//AFTER SoilModel Commmand
+    else if  (!strcmp(s[0],":GroundwaterModel"          )){code=504;}
     else if  (!strcmp(s[0],":rvg_Filename"              )){code=501;}
     else if  (!strcmp(s[0],":Drain"                     )){code=503;}
 
@@ -3010,15 +3008,15 @@ bool ParseMainInputFile (CModel     *&pModel,
       if(Options.noisy) { cout <<"Recharge process"<<endl; }
       if(Len<4) { ImproperFormatWarning(":Recharge",p,Options.noisy); break; }
       recharge_type   rech_type =RECHARGE_FROMFILE;
-      gwrecharge_type rech_type2=RECHARGE_FLUX;
+      //(obsolete MODFLOW-USG recharge classes removed)
       int rech_typ=1;
 
       if     (!strcmp(s[1],"RECHARGE_CONSTANT"        )) { rech_type=RECHARGE_CONSTANT; }
       else if(!strcmp(s[1],"RECHARGE_FROMFILE"        )) { rech_type=RECHARGE_FROMFILE; }
       else if(!strcmp(s[1],"RAVEN_DEFAULT"            )) { rech_type=RECHARGE_FROMFILE; }
       else if(!strcmp(s[1],"RECHARGE_CONSTANT_OVERLAP")) { rech_type=RECHARGE_CONSTANT_OVERLAP; }
-      else if(!strcmp(s[1],"RECHARGE_DATA"            )) {rech_type2=RECHARGE_HRU_DATA; rech_typ=2;}
-      else if(!strcmp(s[1],"RECHARGE_FLUX"            )) {rech_type2=RECHARGE_FLUX;     rech_typ=2;}
+      else if(!strcmp(s[1],"RECHARGE_DATA"            )) {rech_typ=2;}
+      else if(!strcmp(s[1],"RECHARGE_FLUX"            )) {rech_typ=2;}
       else {
         ExitGracefully("ParseMainInputFile: Unrecognized recharge process representation",BAD_DATA);
       }
@@ -3041,17 +3039,9 @@ bool ParseMainInputFile (CModel     *&pModel,
         }
         AddProcess(pModel, pMover, pProcGroup);
       }
-      else //Groundwater recharge class
+      else
       {
-        CGWRecharge::GetParticipatingStateVarList(tmpS,tmpLev,tmpN);
-        pModel->AddStateVariables(tmpS,tmpLev,tmpN);
-        tmpS[0] = pModel->GetStateVarInfo()->StringToSVType(s[2],tmpLev[0],true);
-        pModel->AddStateVariables(tmpS,tmpLev,1);
-
-        pGW = pModel->GetGroundwaterModel();
-        pMover = new CGWRecharge(pGW, rech_type2, ParseSVTypeIndex(s[2], pModel, pStateVar), pModel);
-        AddProcess(pModel,pMover,pProcGroup);
-        pGW->AddProcess(GWRECHARGE,pMover);
+        ExitGracefully("ParseInput: :Recharge RECHARGE_FLUX/RECHARGE_DATA are obsolete. With :GroundwaterModel MODFLOW6, route recharge into GROUNDWATER with any process (e.g. :Percolation ... GROUNDWATER)",BAD_DATA);
       }
       break;
     }
@@ -3719,37 +3709,25 @@ bool ParseMainInputFile (CModel     *&pModel,
       else {ExitGracefully("ParseInput:ModelType: Unrecognized method",BAD_DATA_WARN);}
       break;
     }
-    case(501) :  //-------------------------------------------- //GWMIGRATE move to 60s?
-    {/*:rvg_Filename */
+    case(501) :  //----------------------------------------------
+    {/*:rvg_Filename [file]  groundwater (.rvg) file, relative to the .rvi file */
+      if (Len<2){ImproperFormatWarning(":rvg_Filename",p,Options.noisy); break;}
       if (Options.noisy) { cout << "rvg filename: " << s[1] << endl; }
-      Options.rvg_filename = s[1];
-      break;
-    }
-    case(502) :
-    {
+      Options.rvg_filename = CorrectForRelativePath(s[1],Options.rvi_filename);
       break;
     }
     case(503) :  //----------------------------------------------
-    {/*:Drain
-     :Drain RAVEN_DEFAULT GROUNDWATER SOIL[?] or SURFACE_WATER */
-      if (Options.noisy){ cout << "Drain Process" << endl; }
-      if (Len<2){ ImproperFormatWarning(":Drain", p, Options.noisy); break; }
-      /*   //GWUPDATE
-      CmvDrain::GetParticipatingStateVarList(tmpS, tmpLev, tmpN);
-      pModel->AddStateVariables(tmpS,tmpLev,tmpN);
-
-      pMover=new CmvDrain(); // Needs TO sv
-      pModel->AddProcess(pMover);
-      */
-      CGWDrain::GetParticipatingStateVarList(tmpS, tmpLev, tmpN);
-      pModel->AddStateVariables(tmpS, tmpLev, tmpN);
-      tmpS[0] = pModel->GetStateVarInfo()->StringToSVType(s[3], tmpLev[0], true);
-      pModel->AddStateVariables(tmpS, tmpLev, 1);
-
-      pGW = pModel->GetGroundwaterModel();
-      pMover = new CGWDrain(pGW, pModel);
-      AddProcess(pModel, pMover, pProcGroup);
-      pGW->AddProcess(DRAIN, pMover);
+    {/*:Drain (obsolete MODFLOW-USG process) */
+      ExitGracefully("ParseInput: :Drain is obsolete. With :GroundwaterModel MODFLOW6, groundwater seepage returns to Raven automatically (see :SeepageReturnTo in .rvg)",BAD_DATA);
+      break;
+    }
+    case(504):  //----------------------------------------------
+    {/*:GroundwaterModel MODFLOW6 */
+      if (Options.noisy){ cout << "Groundwater model" << endl; }
+      if (Len<2){ ImproperFormatWarning(":GroundwaterModel", p, Options.noisy); break; }
+      if      (!strcmp(s[1],"MODFLOW6")){Options.modeltype=MODELTYPE_COUPLED;}
+      else if (!strcmp(s[1],"NONE"    )){Options.modeltype=MODELTYPE_SURFACE;}
+      else {ExitGracefully("ParseInput: :GroundwaterModel must be MODFLOW6 or NONE",BAD_DATA);}
       break;
     }
 

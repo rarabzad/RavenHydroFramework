@@ -1,6 +1,7 @@
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2008-2026 the Raven Development Team
+  Modified 2026 by Rezgar Arabzadeh (Raven-MODFLOW 6 coupling; see NOTICE.md)
   ----------------------------------------------------------------*/
 #include "SubBasin.h"
 
@@ -1035,6 +1036,14 @@ double CSubBasin::GetRiverDepth() const
   if (_pChannel==NULL){return ALMOST_INF;}
   const double MIN_CHANNEL_DEPTH=0.01;
   return max(_pChannel->GetDepth(_aQout[_nSegments-1],_slope,_mannings_n),MIN_CHANNEL_DEPTH);
+}
+//////////////////////////////////////////////////////////////////
+/// \brief Returns channel depth [m] at a given flow [m3/s] (e.g., reference/bankfull flow)
+//
+double CSubBasin::GetRiverDepthAtFlow(const double &Q) const
+{
+  if (_pChannel==NULL){return 0.0;}
+  return _pChannel->GetDepth(Q,_slope,_mannings_n);
 }
 //////////////////////////////////////////////////////////////////
 /// \brief Returns channel area, in m2
