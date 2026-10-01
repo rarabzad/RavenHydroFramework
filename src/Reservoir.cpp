@@ -1913,3 +1913,23 @@ void CReservoir::ClearTimeSeriesData(const optStruct& Options)
   delete _pQmaxTS; _pQmaxTS=NULL;
   delete _pQdownTS; _pQdownTS=NULL;
 }
+
+//////////////////////////////////////////////////////////////////
+/// \brief dynamic state (stage, flows, loss terms, structure flows): used to start every ensemble member alike
+//
+void CReservoir::GetDynamicState(vector<double> &v) const
+{
+  v.clear();
+  v.push_back(_stage); v.push_back(_stage_last); v.push_back(_Qout); v.push_back(_Qout_last);
+  v.push_back(_MB_losses); v.push_back(_AET); v.push_back(_Precip); v.push_back(_GW_seepage);
+  v.push_back(_DAadjust); v.push_back(_DAadjust_last); v.push_back((double)_dry_timesteps); v.push_back((double)_constraint);
+  for (int i=0;i<_nControlStructures;i++){v.push_back(_aQstruct[i]); v.push_back(_aQstruct_last[i]);}
+}
+void CReservoir::SetDynamicState(const vector<double> &v)
+{
+  if (v.size()!=(size_t)(12+2*_nControlStructures)){return;}
+  _stage=v[0]; _stage_last=v[1]; _Qout=v[2]; _Qout_last=v[3];
+  _MB_losses=v[4]; _AET=v[5]; _Precip=v[6]; _GW_seepage=v[7];
+  _DAadjust=v[8]; _DAadjust_last=v[9]; _dry_timesteps=(int)v[10]; _constraint=(res_constraint)(int)v[11];
+  for (int i=0;i<_nControlStructures;i++){_aQstruct[i]=v[12+2*i]; _aQstruct_last[i]=v[13+2*i];}
+}

@@ -75,6 +75,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         pModel->GetSubBasin(p)->GetReservoir()->SetReservoirStage(0.0,0.0);
       }
     }
+    pModel->RestoreInitialDynamicState(Options.timestep); //same routing memory and reservoir states as the first run (a .rvc read below overrides them)
   }
   //--Sift through file-----------------------------------------------
   bool end_of_file=pp->Tokenize(s,Len);

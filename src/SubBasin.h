@@ -236,6 +236,7 @@ public:/*-------------------------------------------------------*/
   const double   *GetLatHistory            () const;
   const double   *GetOutflowArray          () const;
   int             GetLatHistorySize        () const;
+  double          GetQlatLast              () const {return _QlatLast;} ///< [m3/s] (ensemble snapshots)
   int             GetInflowHistorySize     () const;
   int             GetOutflowArraySize      () const;
   int             GetNumDiversions         () const;

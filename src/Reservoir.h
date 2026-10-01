@@ -9,6 +9,7 @@
 #ifndef RESERVOIR_H
 #define RESERVOIR_H
 
+#include <vector>
 #include "RavenInclude.h"
 #include "ParseLib.h"
 #include "HydroUnits.h"
@@ -274,6 +275,8 @@ public:/*-------------------------------------------------------*/
   void              SetHRU                   (const CHydroUnit *pHRU);
   void              DisableOutflow           ();
   void              ClearTimeSeriesData      (const optStruct& Options);
+  void              GetDynamicState          (std::vector<double> &v) const; ///< stage, flows and loss terms (for resetting ensemble members)
+  void              SetDynamicState          (const std::vector<double> &v);
 
   //Called during initialization:
   void              Initialize               (const optStruct &Options);
