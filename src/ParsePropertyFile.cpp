@@ -861,8 +861,9 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
     case(301):  //----------------------------------------------
     {/*:AquiferProfiles
        {name, nLayers, {class, thickness[m] or TO_BEDROCK, layer type} x nLayers} x nProfiles
+       (nLayers may be 0 when coupling an existing MODFLOW 6 model, whose own layers are used)
        :EndAquiferProfiles
-       layer types: AQUIFER, CONFINED_AQUIFER, AQUITARD, CONFINING_LAYER, AQUICLUDE */
+       layer types: AQUIFER, CONFINED_AQUIFER, AQUITARD, AQUICLUDE */
       if (Options.noisy) {cout <<"Aquifer Profiles"<<endl;}
       CGroundwaterModel *pGW=pModel->GetGroundwaterModel();
       while (!p->Tokenize(s,Len))
@@ -872,7 +873,7 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
         if ((!strcmp(s[0],":Attributes")) || (!strcmp(s[0],":Units"))){continue;}
         ExitGracefullyIf(Len<2,"ParseClassPropertiesFile: bad :AquiferProfiles row",BAD_DATA);
         int nL=s_to_i(s[1]);
-        ExitGracefullyIf((nL<1) || (Len!=2+3*nL),
+        ExitGracefullyIf((nL<0) || (Len!=2+3*nL),
           ("ParseClassPropertiesFile: aquifer profile "+string(s[0])+" must list name, nLayers, then class, thickness or TO_BEDROCK, and layer type for each layer").c_str(),BAD_DATA);
         gw_profile P=CGroundwaterModel::DefaultProfile(s[0]);
         for (int l=0;l<nL;l++)
@@ -885,7 +886,7 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
           ExitGracefullyIf((!L.to_bedrock) && (L.thickness<=0),("ParseClassPropertiesFile: layer thickness must be positive in aquifer profile "+P.name).c_str(),BAD_DATA);
           if      ((ty=="AQUIFER") || (ty=="UNCONFINED_AQUIFER")){L.type=GWL_AQUIFER;}
           else if  (ty=="CONFINED_AQUIFER")                      {L.type=GWL_CONFINED_AQUIFER;}
-          else if ((ty=="AQUITARD") || (ty=="CONFINING_LAYER"))   {L.type=GWL_AQUITARD;}
+          else if  (ty=="AQUITARD")                              {L.type=GWL_AQUITARD;}
           else if  (ty=="AQUICLUDE")                             {L.type=GWL_AQUICLUDE;}
           else {ExitGracefully(("ParseClassPropertiesFile: unknown layer type "+ty+" in aquifer profile "+P.name).c_str(),BAD_DATA);}
           P.layers.push_back(L);
