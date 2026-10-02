@@ -27,7 +27,7 @@ struct gw_well       ///< pumping/injection well
 {
   long long id; string name;
   double lat,lon,screen_top,screen_bot;  ///< [deg],[m]
-  CTimeSeries *pRate;                    ///< [m3/d], negative = withdrawal (from .rvt :WellRate)
+  CTimeSeries *pRate;                    ///< [m3/d], negative = withdrawal (from .rvt :WellFlowRate)
 };
 struct gw_obswell    ///< monitoring well
 {
@@ -51,7 +51,7 @@ enum gw_layer_type
 {
   GWL_AQUIFER,          ///< convertible (unconfined when head below top)
   GWL_CONFINED_AQUIFER, ///< confined, constant transmissivity
-  GWL_AQUITARD,         ///< explicit low-K leaky layer (also CONFINING_LAYER)
+  GWL_AQUITARD,         ///< explicit low-K leaky layer
   GWL_AQUICLUDE         ///< no-flow barrier (IDOMAIN=0)
 };
 
@@ -356,7 +356,7 @@ public:/*-------------------------------------------------------*/
   void   AddWell              (const gw_well &w){_aWells.push_back(w);}
   void   AddObservationWell   (const gw_obswell &o){_aObsWells.push_back(o);}
   void   AddBoundary          (const gw_boundary &b){_aBounds.push_back(b);}
-  void   SetWellRateSeries    (const long long id,CTimeSeries *pTS){_wellTS[id]=pTS;}
+  void   SetWellFlowRateSeries    (const long long id,CTimeSeries *pTS){_wellTS[id]=pTS;}
   void   SetBoundaryHeadSeries(const string &name,CTimeSeries *pTS){_headTS[name]=pTS;}
   void   SetSteadyStateInit   (const double &rch_mm_d){_steadyInit=true;_ssRecharge=rch_mm_d;}
   void   SetInitialHeads      (const string &mode,const double &value){_initMode=mode;_initValue=value;}

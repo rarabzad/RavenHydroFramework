@@ -360,8 +360,6 @@ int CGroundwaterModel::GetAquiferClassIndex(const string &name) const
 void CGroundwaterModel::AddProfile(const gw_profile &p)
 {
   ExitGracefullyIf(GetProfileIndex(p.name)!=DOESNT_EXIST,("duplicate aquifer profile "+p.name).c_str(),BAD_DATA);
-  ExitGracefullyIf(p.layers.size()==0,("aquifer profile "+p.name+" has no layers").c_str(),BAD_DATA);
-  ExitGracefullyIf(p.layers[0].type==GWL_AQUICLUDE,("aquifer profile "+p.name+": top layer cannot be an AQUICLUDE").c_str(),BAD_DATA);
   _aProfiles.push_back(p);
 }
 int CGroundwaterModel::GetProfileIndex(const string &name) const
@@ -636,11 +634,18 @@ void CGroundwaterModel::ValidateInputs() const
     ExitGracefullyIf(_writeNC && (_owTable.size()>0),"CGroundwaterModel: :WriteNetCDFHeads needs the cell outlines (:MF6CRS or :MF6GridFile); an :OverlapWeights table has no coordinates",BAD_DATA);
     ExitGracefullyIf(_riverFile!="",(string(msg)+":RiverGeometry (rivers are the model's stream package, :StreamPackage)").c_str(),BAD_DATA);
     ExitGracefullyIf((_aObsWells.size()>0) && (_owTable.size()>0),"CGroundwaterModel: monitoring wells need :MF6CRS or :MF6GridFile (to locate them)",BAD_DATA);
+    bool layersGiven=false;
     for (size_t i=0;i<_aProfiles.size();i++){
       ExitGracefullyIf(_aProfiles[i].extinction_depth>0,"CGroundwaterModel: water-table ET (EXTINCTION_DEPTH) is not yet available with an existing model",BAD_DATA);
+      if (_aProfiles[i].layers.size()>0){layersGiven=true;}
     }
+    if (layersGiven){WriteWarning("CGroundwaterModel: with :MF6Simulation the layers of the aquifer profiles are ignored (the model's own layers are used); a profile can be given as: name, 0",false);}
   }
   else {
+    for (size_t i=0;i<_aProfiles.size();i++){ //Raven builds the model from the profiles' layers
+      ExitGracefullyIf(_aProfiles[i].layers.size()==0,("CGroundwaterModel: aquifer profile "+_aProfiles[i].name+" has no layers (layers may be left out only with :MF6Simulation)").c_str(),BAD_DATA);
+      ExitGracefullyIf(_aProfiles[i].layers[0].type==GWL_AQUICLUDE,("CGroundwaterModel: aquifer profile "+_aProfiles[i].name+": top layer cannot be an AQUICLUDE").c_str(),BAD_DATA);
+    }
     ExitGracefullyIf((_extGridFile!="") || _extCRS.IsSet() || (_owTable.size()>0) || (_takeOver.size()>0) || (_streamPkg!=""),
       "CGroundwaterModel: :MF6CRS, :MF6GridFile, :OverlapWeights, :RavenTakesOver and :StreamPackage need :MF6Simulation",BAD_DATA);
   }
@@ -1169,7 +1174,7 @@ void CGroundwaterModel::BuildStresses()
     gw_well &W=_aWells[w];
     map<long long,CTimeSeries*>::iterator it=_wellTS.find(W.id);
     W.pRate=(it==_wellTS.end())?NULL:it->second;
-    if (W.pRate==NULL){WriteWarning("CGroundwaterModel: well "+W.name+" has no :WellRate time series in the .rvt file; rate set to zero",false);}
+    if (W.pRate==NULL){WriteWarning("CGroundwaterModel: well "+W.name+" has no :WellFlowRate time series in the .rvt file; rate set to zero",false);}
     double x,y; _proj.Forward(W.lon,W.lat,x,y);
     int ic=LocateWorld(x,y);
     ExitGracefullyIf((ic<0) || (_colProfile[ic]==DOESNT_EXIST),("CGroundwaterModel: well "+W.name+" is outside the active groundwater model").c_str(),BAD_DATA);
@@ -2273,7 +2278,9 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
   else if (_hotHeads.size()>0){S<<"  initialization        : hotstart heads from .rvc"<<endl;}
   for (size_t p=0;p<_aProfiles.size();p++){
     int n=0; for (int ic=0;ic<_ncpl;ic++){if (_colProfile[ic]==(int)p){n++;}}
-    S<<"  profile "<<_aProfiles[p].name<<": "<<_aProfiles[p].layers.size()<<" layers, "<<n<<" columns"<<endl;
+    S<<"  profile "<<_aProfiles[p].name<<": ";
+    if (IsExternal()){S<<"layers from the model, ";} else {S<<_aProfiles[p].layers.size()<<" layers, ";}
+    S<<n<<" columns"<<endl;
   }
   S<<endl<<"HRU_ID,profile,rvh_area_km2,polygon_area_km2,linked_area_km2,linked_fraction_of_polygon,n_cells"<<endl;
   for (size_t i=0;i<_aqHRUs.size();i++){

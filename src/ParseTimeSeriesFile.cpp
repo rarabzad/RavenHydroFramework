@@ -96,7 +96,7 @@ bool ParseTimeSeriesFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":TemperatureCorrection"       )){code=33;}
     //-------------------OBSERVATIONS---------------------------
     else if  (!strcmp(s[0],":ObservationData"             )){code=40; }
-    else if  (!strcmp(s[0],":WellRate"                    )){code=150;}
+    else if  (!strcmp(s[0],":WellFlowRate"                )){code=150;}
     else if  (!strcmp(s[0],":BoundaryHead"                )){code=151;}
     else if  (!strcmp(s[0],":IrregularObservations"       )){code=41; }
     else if  (!strcmp(s[0],":ObservationWeights"          )){code=42; }
@@ -2130,14 +2130,14 @@ bool ParseTimeSeriesFile(CModel *&pModel, const optStruct &Options)
     }
 
     case (150): //---------------------------------------------
-    {/*:WellRate [well ID] {units m3/d}
+    {/*:WellFlowRate [well ID] {units m3/d}
          {yyyy-mm-dd} {hh:mm:ss.0} {timestep} {nValues}
          {rate [m3/d], negative = withdrawal} x nValues
-       :EndWellRate */
+       :EndWellFlowRate */
       if (Len<2){ExitGracefully(("improper format of groundwater command "+string(s[0])).c_str(),BAD_DATA); break;}
       long long wid=s_to_ll(s[1]); //capture before Parse(), which re-tokenizes into s[]
       pTimeSer=CTimeSeries::Parse(p,true,"WELL_RATE_"+to_string(wid),wid,"none",Options);
-      pModel->GetGroundwaterModel()->SetWellRateSeries(wid,pTimeSer);
+      pModel->GetGroundwaterModel()->SetWellFlowRateSeries(wid,pTimeSer);
       break;
     }
     case (151): //---------------------------------------------
