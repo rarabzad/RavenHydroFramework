@@ -291,7 +291,9 @@ namespace gwsz
     double ovf=0.0; for (size_t c=0;c<nc;c++){ovf+=w[c]*carry[c];}
     if (moved){ //water that ended in a layer above Raven's target for it (percolation no column could take moved up)
       *moved=0.0;
-      for (size_t j=0;j<n;j++){double m=0.0; for (size_t c=0;c<nc;c++){m+=w[c]*cols[c][j];} *moved+=std::max(m-target[j],0.0);}
+      //(none with one layer: what it cannot hold overflows; excesses at round-off level are not moves)
+      if (n>1){for (size_t j=0;j<n;j++){double m=0.0; for (size_t c=0;c<nc;c++){m+=w[c]*cols[c][j];}
+        const double x=m-target[j]; if (x>1e-9*std::max(L[j].phimax,1.0)){*moved+=x;}}}
     }
     return ovf;
   }
