@@ -1762,7 +1762,7 @@ void CGroundwaterModel::RefreshPointers()
     a=_mf6.GetVarAddress(_mname,"SZD_RAVEN","ELEV");
     if (_mf6.HasVar(a)){_szdNcol=0; _szdElev=_mf6.GetDoublePtr(a); _szdCond=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZD_RAVEN","COND"));}
     else {_szdNcol=2; _szdElev=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZD_RAVEN","BOUND")); _szdCond=(_szdElev==NULL)?NULL:_szdElev+1;}
-    //(one auxiliary variable, DDRN; MODFLOW >= 6.5 reads it from the input context, AUXVAR_IDM, not from AUXVAR)
+    //(one auxiliary variable, DDRN; MODFLOW >= 6.4.3 reads it from the input context, AUXVAR_IDM, not from AUXVAR)
     a=_mf6.GetVarAddress(_mname,"SZD_RAVEN","AUXVAR_IDM");
     _szdAux=_mf6.GetDoublePtr(_mf6.HasVar(a)?a:_mf6.GetVarAddress(_mname,"SZD_RAVEN","AUXVAR"));
     _szdHcof=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZD_RAVEN","HCOF")); _szdRhs=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZD_RAVEN","RHS"));

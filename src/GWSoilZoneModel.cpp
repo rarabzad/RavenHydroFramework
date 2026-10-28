@@ -468,7 +468,9 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
       else if (Cg>cap){ //only where the line could take more than the column holds: one-sided, if at least 10 MODFLOW
                         //solves follow; with fewer MODFLOW did not settle on the changed boundary, and the line stays,
                         //as limited as the secant floor allows (a reversal can then still overdraw)
-        if (_szOneOK){_szxOne[e]=1;}
+        //(not in a cell dry at the head of linearization: a drain there is inactive at that head, MODFLOW's first Newton
+        //iterate sees no boundary and its head runs away)
+        if (_szOneOK && (h>bot+1e-3)){_szxOne[e]=1;}
         else {Cg=max(cap,sec);}
       }
     }
