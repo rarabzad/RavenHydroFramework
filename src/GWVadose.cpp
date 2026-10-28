@@ -12,6 +12,8 @@
 #include <vector>
 
 static double DTHMAX=0.02;  //largest content change in one substep (time accuracy; SetAccuracy)
+static int    REFMODE=0;    //reference contents: 0 hydrostatic, 1 residual ths - Sy (SetReference; to be honoured by
+                            // Build, MoveBottom, RelStorage for KINEMATIC)
 static const double PSIMIN=1.0e5; //[m] the driest suction considered (about 1000 MPa, beyond air-dry)
 namespace gwvz
 {
@@ -56,6 +58,8 @@ namespace gwvz
   }
   double ThEq(const vz_mat &m,const double height){return Theta(m,-std::max(height,0.0));}
   void   SetAccuracy(const double dthmax){if (dthmax>0.0){DTHMAX=dthmax;}}
+  void   SetReference(const int ref){REFMODE=ref;}
+  int    GetReference(){return REFMODE;}
   double GetAccuracy(){return DTHMAX;}
 
   //-- grid --------------------------------------------------------------------------------------------------

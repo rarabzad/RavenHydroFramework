@@ -363,6 +363,12 @@
     <ClCompile Include="GWVadose.cpp">
       <Filter>Source Files\Groundwater</Filter>
     </ClCompile>
+    <ClCompile Include="GWVadoseKW.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
+    <ClCompile Include="GWVadoseLag.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
     <ClCompile Include="GWVadoseModel.cpp">
       <Filter>Source Files\Groundwater</Filter>
     </ClCompile>

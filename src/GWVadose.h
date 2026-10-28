@@ -53,6 +53,10 @@ namespace gwvz
   double Kof   (const vz_mat &m,const double psi,double *dK_dpsi=0);   ///< conductivity of pressure head
   double ThEq  (const vz_mat &m,const double height);                  ///< hydrostatic content at a height above the water table
   void   SetAccuracy(const double dthmax);  ///< largest change of a content in one substep (default 0.02)
+  ///< reference contents of the columns (what RelStorage, MoveBottom and Build count from): 0 the hydrostatic profile
+  ///< (RICHARDS, LAG; default), 1 the residual content ths - Sy everywhere (KINEMATIC, whose no-flow state it is)
+  void   SetReference(const int ref);
+  int    GetReference();
   double GetAccuracy();
 
   // -- column management --------------------------------------------------------------------------------
@@ -74,6 +78,14 @@ namespace gwvz
   struct vz_step_info { int substeps,newton,fails; };
   double Step(vz_column &c,const vz_strat &S,const double dt,const double qtop,double &rejected,vz_step_info *info=0,const bool noUp=false);
   ///< (noUp: no upward flow through the bottom, for a top cell MODFLOW has dried)
+
+  ///< the same contract (storage change = (qtop_applied - qbot) dt exactly, rejected as for Step) for the cheaper methods,
+  ///< on the same column (grid, contents, hydrostatic reference profile; MoveBottom and RelStorage apply unchanged). Water
+  ///< only moves down (qbot >= 0; an upward demand qtop < 0 is rejected); capillary rise is the water table's (steady).
+  ///<   StepKinematic: gravity-only kinematic wave (:SoilZoneVadose KINEMATIC), GWVadoseKW.cpp
+  ///<   StepLag:       linear storage cascade (:SoilZoneVadose LAG; par its parameter, 0 = default), GWVadoseLag.cpp
+  double StepKinematic(vz_column &c,const vz_strat &S,const double dt,const double qtop,double &rejected,vz_step_info *info=0);
+  double StepLag      (vz_column &c,const vz_strat &S,const double dt,const double qtop,double &rejected,vz_step_info *info=0,const double par=0.0);
 
   ///< capillary rise into the soil zone [m/d] (upward positive): the steady upward flux (RiseBetween) from the column's
   ///< top node to a soil layer at suction psis [m] whose middle is dzs [m] above the column top, through the soil (its
