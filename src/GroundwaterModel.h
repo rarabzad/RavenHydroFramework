@@ -300,6 +300,8 @@ private:/*----------------------------------------------------*/
   vector<double>         _szSyncOvf;     ///< per HRU: overflow when Raven's gains were shared among full columns this step [m3]
   bool                   _szCapUpd;      ///< the current update is the last before the interface freezes (boundary supply-limited)
   double                 _szMovedV;      ///< water moved up between soil-zone layers when Raven's changes were shared this step [m3]
+  double                 _szWithheldV;   ///< discharge to Raven withheld this step for MODFLOW's residual and the soil-zone shortfall [m3]
+  int                    _szGuardN;      ///< warnings written by that guard
   vector<char>           _szRchByArea;   ///< per HRU: recharge leaves the bottom layer at a constant rate (PERC_CONSTANT): columns give it up by area
   vector<double>         _szxFw;         ///< per SZX entry: the recharge its column gave up this step [m3] (recharge shares)
   vector<double>         _szxHq,_szxQq;  ///< per SZX entry: head [m] and exchange [m3/d] of the last local solve this step (_szxHq -HUGE_VAL: none)
@@ -356,6 +358,7 @@ private:/*----------------------------------------------------*/
   void   SZSetArrays    (const bool steady);                   ///< SZX head/conductance, RCH and EVT rates
   bool   SZIterate      (double **aPhinew,const int iter,const bool mf6conv,const bool steady,double &prevQ,const bool last);
   void   SZApply        (double **aPhinew,const double &tstep);///< final exchange, rejection and overflow to Raven
+  double SZTrialShortfall(const double &tstep) const;          ///< shortfall [m3] the booked exchange would leave (SZApply without changing anything)
   void   SZWriteStep    (const double &t,const string &dstr);
 
   //-- engine -----------------------------------------------------

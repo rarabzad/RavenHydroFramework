@@ -633,6 +633,25 @@ void CGroundwaterModel::SZApply(double **aPhinew,const double &tstep)
 }
 
 //////////////////////////////////////////////////////////////////
+/// \brief shortfall [m3] the booked exchange (_szxQ) and rejected recharge would leave in the columns: SZApply's
+///  booking without changing anything (for the guard in Exchange, which withholds it from the discharge to Raven)
+//
+double CGroundwaterModel::SZTrialShortfall(const double &tstep) const
+{
+  const int n=_szNLayers; double S=0.0;
+  vector<double> phi(n);
+  for (size_t e=0;e<_szxLink.size();e++){
+    if (!(_szxQ[e]>0.0)){continue;}                                              //only flow out of the column can fall short
+    int c=_szxCol[e],k=_aLinks[_szxLink[e]].k; double a=_szColA[c];
+    for (int j=0;j<n;j++){phi[j]=_szColPhi[c*n+j];}
+    gwsz::Fill(_szLay[k],phi,_szxRej[e]/a*MM_PER_METER);
+    double sh=0.0; gwsz::Apply(_szLay[k],phi,-_szxQ[e]*tstep/a*MM_PER_METER,sh);
+    S+=sh/MM_PER_METER*a;
+  }
+  return S;
+}
+
+//////////////////////////////////////////////////////////////////
 /// \brief GWSoilExchange.csv rows of this step (HRU values: area-weighted over its exchange columns)
 //
 void CGroundwaterModel::SZWriteStep(const double &t,const string &dstr)

@@ -68,7 +68,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szGuardN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
 }
 CGroundwaterModel::~CGroundwaterModel()
@@ -96,7 +96,7 @@ void CGroundwaterModel::ResetState()
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szxOne.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szGuardN=0;
 }
 void CGroundwaterModel::Reinitialize(const optStruct &Options)
 {
@@ -1548,7 +1548,7 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
     if (SZPhysical() && (_colCover[ic]>0)){cond*=_colCoverNS[ic]/_colCover[ic];}
     //MODFLOW refuses a drain whose smoothing interval reaches below the cell bottom: limit it to the top layer (less a
     //margin: written to 10 digits, top minus the full thickness could round below the bottom)
-    double dsm=min(_aProfiles[_colProfile[ic]].seep_smooth_depth,max(_top[ic]-_botm[UserNode(0,ic)]-1e-6*max(1.0,fabs(_top[ic])),0.0));
+    double dsm=min(_aProfiles[_colProfile[ic]].seep_smooth_depth,max(_top[ic]-_botm[UserNode(0,ic)]-1e-8*max(1.0,fabs(_top[ic])),0.0));
     F<<"  "<<CellID(0,ic)<<" "<<_top[ic]<<" "<<cond<<" "<<-dsm<<endl;
   }
   F<<"END PERIOD\n"; F.close();
@@ -2009,30 +2009,40 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   }
   else {_Qsto=_Qseep_tot-_Qrch-_Qriv_in+_Qriv_out+_Qevt-_Qwel-_Qghb-_Qchd-_Qswx_in+_Qswx_out-_Qres-_Qother-_Qsz_in+_Qsz_out; _Qerr=0.0;}
 
-  //-- guard: an unconverged solution can produce spurious flows. Seepage returned to Raven is then limited to
-  //   the water that entered the aquifer this step (recharge + river leakage), scaled down uniformly
-  if (!_lastConverged && SZPhysical() && (_Qerr<0.0)){
-    //:SoilZone PHYSICAL: MODFLOW's last iterate booked more outflow than its inflows and storage release supply (its
-    //residual): that water is not given to Raven. All discharge to Raven (seepage, river and surface-store gains, and
-    //the soil zone's share of the exchange from the aquifer) is reduced in proportion by it. (On such steps the soil zone
-    //otherwise received flows far beyond its local solve, which overflowed: outflow 17 times the
-    //iterated run's with an outer-iteration limit of 12.)
-    double gains=0.0; for (size_t p=0;p<_sbGain.size();p++){gains+=max(_sbGain[p],0.0);}
-    for (size_t e=0;e<_swxQ.size();e++){gains+=max(-_swxQ[e],0.0);}
-    double up=0.0; for (size_t e=0;e<_szxQ.size();e++){up+=max(-_szxQ[e],0.0);}
-    double D=_Qseep_tot+gains+up;
-    if (D>0.0){
-      double f=max(1.0+_Qerr/D,0.0);
-      for (int ic=0;ic<_ncpl;ic++){_Qseep[ic]*=f;} _Qseep_tot*=f;
-      for (size_t p=0;p<_sbGain.size();p++){if (_sbGain[p]>0){_sbGain[p]*=f;}}
-      for (size_t e=0;e<_swxQ.size();e++){if (_swxQ[e]<0){_swxQ[e]*=f;}}
-      _Qsz_out=0.0; for (size_t e=0;e<_szxQ.size();e++){if (_szxQ[e]<0){_szxQ[e]*=f;} if (_szxQ[e]<0){_Qsz_out-=_szxQ[e];}}
-      WriteWarning("CGroundwaterModel: unconverged step ending "+EndDate(tt.model_time+tstep)+": discharge to Raven reduced by MODFLOW's residual, from "+
-                   ToStr(D)+" to "+ToStr(D*f)+" m3/d",false);
+  //-- :SoilZone PHYSICAL guard: water that MODFLOW's books do not back is not handed to Raven. Two sources: on an
+  //   unconverged step, MODFLOW's residual (more outflow booked than its inflows and storage release supply; the soil
+  //   zone otherwise received flows far beyond its local solve, which overflowed: outflow 17 times the
+  //   iterated run's with an outer-iteration limit of 12); on any step, the soil-zone shortfall (water MODFLOW took from
+  //   columns that did not hold it, which it then discharged or returned as upflow with balanced books). All discharge to Raven (seepage, gains of enabled subbasins, surface-store gains, the exchange into the soil
+  //   zone) is reduced in proportion; what it cannot cover (little discharge this step) stays in the aquifer
+  //   (reported: MF6 balance error, soil-zone shortfall; the withheld volume in GWBudget.csv)
+  _szWithheldV=0.0;
+  if (SZPhysical()){
+    double R=SZTrialShortfall(tstep)/tstep;                                       //[m3/d]
+    if (!_lastConverged && (_Qerr<0.0)){R-=_Qerr;}
+    if (R>0.0){
+      double gains=0.0;
+      for (size_t p=0;p<_sbGain.size();p++){if (_pModel->GetSubBasin((int)p)->IsEnabled()){gains+=max(_sbGain[p],0.0);}}
+      for (size_t e=0;e<_swxQ.size();e++){gains+=max(-_swxQ[e],0.0);}
+      double up=0.0; for (size_t e=0;e<_szxQ.size();e++){up+=max(-_szxQ[e],0.0);}
+      double D=_Qseep_tot+gains+up;
+      if (D>0.0){
+        double f=max(1.0-R/D,0.0);
+        for (int ic=0;ic<_ncpl;ic++){_Qseep[ic]*=f;} _Qseep_tot*=f;
+        for (size_t p=0;p<_sbGain.size();p++){if (_sbGain[p]>0){_sbGain[p]*=f;}}
+        for (size_t e=0;e<_swxQ.size();e++){if (_swxQ[e]<0){_swxQ[e]*=f;}}
+        _Qsz_out=0.0; for (size_t e=0;e<_szxQ.size();e++){if (_szxQ[e]<0){_szxQ[e]*=f;} if (_szxQ[e]<0){_Qsz_out-=_szxQ[e];}}
+        _szWithheldV=(1.0-f)*D*tstep;
+        if ((_szWithheldV>1e-6) && (++_szGuardN<=10)){
+          WriteWarning("CGroundwaterModel: step ending "+EndDate(tt.model_time+tstep)+": "+ToStr(_szWithheldV)+" m3 of discharge to Raven withheld for "
+                       "MODFLOW's residual and the soil-zone shortfall (MODFLOW unconverged or an interface boundary it kept)"+(_szGuardN==10?" (further such warnings suppressed)":""),false);
+        }
+      }
     }
   }
-  if (!_lastConverged){ //all discharge returned to Raven (seepage + river gains) limited to this step's inflow
-                        //(not the soil-zone exchange: the soil zone takes any flow MODFLOW booked, the excess overflows)
+  if (!_lastConverged && !SZPhysical()){ //all discharge returned to Raven (seepage + river gains) limited to this step's inflow
+                        //(with :SoilZone PHYSICAL the guard above takes MODFLOW's residual out instead: this cap, which
+                        //leaves out the storage release, also removed real discharge)
     double cap=max(_Qrch+_Qriv_in+_Qswx_in+max(_Qres,0.0)+max(_Qwel,0.0)+max(_Qghb,0.0)+max(_Qchd,0.0)
                    +(IsExternal()?max(_Qother,0.0):0.0)+_Qsz_in,0.0); //all inflows this step (with an existing model, its own packages too)
     double gains=0.0; for (size_t p=0;p<_sbGain.size();p++){gains+=max(_sbGain[p],0.0);}
@@ -2325,7 +2335,7 @@ void CGroundwaterModel::FinishBudgetLine()
     for (size_t r=0;r<_resP.size();r++){_resPendingVol+=_pModel->GetSubBasin(_resP[r])->GetReservoir()->GetReservoirGWLosses(1.0);}
     _BUDGET<<","<<_Qres_spec<<","<<_Qres<<","<<_resPendingVol<<","<<_resShortVol;
     if (IsExternal()){_BUDGET<<","<<_Qother;}
-    if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid<<","<<_szMovedV;}
+    if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid<<","<<_szMovedV<<","<<_szWithheldV;}
     _BUDGET<<endl;
   }
   if (_budgetLineOpen){_szMovedV=0.0;} //(called before the first step too: a hotstart sync then counts in step 1)
@@ -2372,7 +2382,7 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
          <<"surface-store leakage to aquifer [m3/d],aquifer discharge to surface stores [m3/d],surface-store exchange applied to Raven [m3],"
          <<"reservoir seepage sent [m3/d],reservoir seepage delivered [m3/d],reservoir seepage awaiting delivery [m3],reservoir gain not supplied by MODFLOW [m3]"<<(IsExternal()?",other model packages [m3/d]":"")
          <<(SZPhysical()?",soil zone to aquifer [m3/d],aquifer to soil zone [m3/d],rejected recharge [m3],soil-zone overflow [m3],soil-zone exchange applied to Raven [m3],"
-                         "soil-zone shortfall [m3],interface updates,interface converged,interface change [m],soil-zone layer redistribution [m3]":"")<<endl;
+                         "soil-zone shortfall [m3],interface updates,interface converged,interface change [m],soil-zone layer redistribution [m3],discharge to Raven withheld [m3]":"")<<endl;
   if (SZPhysical()){
     _SZOUT.open(FilenamePrepare("GWSoilExchange.csv",Options).c_str());
     ExitGracefullyIf(_SZOUT.fail(),"CGroundwaterModel: cannot open GWSoilExchange.csv",FILE_OPEN_ERR);
