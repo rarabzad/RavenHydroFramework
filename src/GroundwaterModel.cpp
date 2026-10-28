@@ -2292,7 +2292,8 @@ void CGroundwaterModel::FinishBudgetLine()
     if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid<<","<<_szMovedV;}
     _BUDGET<<endl;
   }
-  _budgetLineOpen=false; _szMovedV=0.0;
+  if (_budgetLineOpen){_szMovedV=0.0;} //(called before the first step too: a hotstart sync then counts in step 1)
+  _budgetLineOpen=false;
 }
 
 //////////////////////////////////////////////////////////////////
