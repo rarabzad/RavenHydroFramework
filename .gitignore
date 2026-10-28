@@ -31,8 +31,9 @@
 *.out
 *.app
 
-# CMake artifacts
-cmake
+# CMake artifacts (cmake/ holds downloaded find modules; the RavenMF6 modules are tracked)
+/cmake/*
+!/cmake/RavenMF6*.cmake
 CMakeFiles
 cmake_install.cmake
 CMakeCache.txt

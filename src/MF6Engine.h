@@ -12,6 +12,15 @@
 #include <vector>
 using namespace std;
 
+// MODFLOW 6 versions the coupling accepts (checked by CMF6Engine::Load through get_version):
+//  - MF6_MIN_VERSION: older libraries stop the run. 6.5.0 is a chosen floor, not a measured limit: the fallbacks for
+//    older memory layouts (boundary values in BOUND) are kept, and 6.4.4 passed test P1, but the coupling is not
+//    verified below 6.5.
+//  - MF6_TESTED_VERSION: the version the whole test suite ran with (also 6.6.3; P1 and T2/T3 also with 6.5.0). Any other version, a library that does not report its version, or a version string that cannot be read
+//    gives one warning (Raven_errors.txt and screen); outputs are otherwise unchanged.
+#define MF6_MIN_VERSION    "6.5.0"
+#define MF6_TESTED_VERSION "6.8.1"
+
 class CMF6Engine
 {
 private:
@@ -41,6 +50,7 @@ private:
 
   void *Sym(const char *name);
   bool  Check(int rc,const string &what);
+  void  CheckVersion(const string &libpath);
 
 public:
   CMF6Engine();
@@ -65,6 +75,8 @@ public:
   static string         ExecutableDir     (); ///< folder of the running executable
   static vector<string> LibraryCandidates (); ///< automatic search places for the library
   static bool           FileExists        (const string &path);       ///< the library's MODFLOW 6 version ("" if the library does not say)
+  static bool           ParseVersion      (const string &v,vector<long> &c); ///< "6.8.1-dev" -> {6,8,1}; false if unreadable
+  static int            CompareVersions   (const vector<long> &a,const vector<long> &b); ///< -1, 0, 1 (missing parts are 0)
   bool   IsInitialized   () const {return _initialized;}
 };
 #endif

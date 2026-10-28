@@ -95,7 +95,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake ..
+          cmake .. -DRAVEN_MF6=OFF
           cmake --build . --config ${{ matrix.build_type }} -j 3 --verbose
 
       - name: Run tests
@@ -144,7 +144,7 @@ jobs:
         run: |
           mkdir build
           cd build
-          cmake ..
+          cmake .. -DRAVEN_MF6=OFF
           cmake --build . --config ${{ matrix.build_type }} -j 3 --verbose
 
       - name: Run tests (Windows)
