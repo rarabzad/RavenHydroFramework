@@ -108,7 +108,7 @@ void CGroundwaterModel::VZInit()
   for (size_t e=0;e<_vzCol.size();e++){
     const gw_link &L=_aLinks[_szxLink[e]]; const int ic=L.ic;
     double h=_X[_reduced[TopNode(ic)]]*_hf; const double zb=_szxZb[e],Lmin=VZ_LMIN;
-    if (!(std::fabs(h)<1e29)){h=WaterTable(ic);}                                 //(a dry top cell without NEWTON: the water table below it)
+    if (!(std::fabs(_X[_reduced[TopNode(ic)]])<1e29)){h=WaterTable(ic);}       //(HDRY is in the model's units)                                 //(a dry top cell without NEWTON: the water table below it)
     gwvz::vz_column &c=_vzCol[e]; const gwvz::vz_strat &S=_vzStrat[e];
     c=gwvz::vz_column(); c.ztop=zb; c.zbot=h;
     map<long long,map<int,vector<double> > >::const_iterator it=_hotVz.find(_pModel->GetHydroUnit(L.k)->GetHRUID());
@@ -159,7 +159,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
       if (!(a>0.0) || _colCHDTop[L.ic]){continue;}                              //(a specified head this step: its recharge goes there)
       gwvz::vz_column &col=_vzCol[e]; const gwvz::vz_strat &S=_vzStrat[e];
       const double h=_X[_reduced[TopNode(L.ic)]]*_hf,zb=_szxZb[e],Lmin=VZ_LMIN;
-      if (!(std::fabs(h)<1e29)){continue;}                                       //(a top cell out of MODFLOW's solve, HDRY without NEWTON: the
+      if (!(std::fabs(_X[_reduced[TopNode(L.ic)]])<1e29)){continue;}           //(HDRY is in the model's units)                                       //(a top cell out of MODFLOW's solve, HDRY without NEWTON: the
                                                                                  // column is left as it is until the cell rewets)
       //follow the water table: a rising one takes the excess over equilibrium below it, a falling one opens cells at
       //equilibrium; a column shorter than Lmin (5 cm) is the soil zone's contact exchange and capillary rise instead
