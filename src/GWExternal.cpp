@@ -855,7 +855,7 @@ void CGroundwaterModel::ExtWritePackages(const optStruct &Options)
   if (_hotHeads.size()>0){
     F.open((_mf6dir+"/raven.ic").c_str());
     F<<"# initial heads from Raven's hotstart (:GWHeads)\nBEGIN GRIDDATA\n";
-    WriteArray(F,"STRT",_hotHeads,(_disType==0)?_ncol:10,_nlay);
+    WriteArray(F,"STRT",_hotHeads,(_disType==0)?_ncol:10,_nlay,"1.0",SZPhysical()?17:10);
     F<<"END GRIDDATA\n"; F.close();
   }
   ExtEditNameFile(true);

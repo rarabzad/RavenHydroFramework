@@ -1566,7 +1566,7 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
   F.close();
 
   F.open((d+"gwf.ic").c_str());
-  F<<"BEGIN GRIDDATA\n"; WriteArray(F,"STRT",_strt,aC,aL); F<<"END GRIDDATA\n"; F.close();
+  F<<"BEGIN GRIDDATA\n"; WriteArray(F,"STRT",_strt,aC,aL,"1.0",SZPhysical()?17:10); F<<"END GRIDDATA\n"; F.close(); //(full precision with the soil zone, as its hotstart)
 
   //-- recharge and seepage-face drains on the top cell of every linked column
   F.open((d+"gwf.rch").c_str());
@@ -2352,8 +2352,9 @@ double CGroundwaterModel::GetObservationWellHead(const long long id) const
 void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
 {
   if ((!_active) || (_X==NULL)){return;}
-  if ((_gridType==GWGRID_REGULAR) || (IsExternal() && (_disType==0))){RVC<<":GWHeads "<<_nlay<<" "<<_nrow<<" "<<_ncol<<endl<<setprecision(12);}
-  else {RVC<<":GWHeads "<<_nlay<<" 1 "<<_ncpl<<endl<<setprecision(12);} //unstructured: one row of cells
+  const int hp=SZPhysical()?17:12; //(full precision with the soil zone: its upward limits use the head just above a cell bottom)
+  if ((_gridType==GWGRID_REGULAR) || (IsExternal() && (_disType==0))){RVC<<":GWHeads "<<_nlay<<" "<<_nrow<<" "<<_ncol<<endl<<setprecision(hp);}
+  else {RVC<<":GWHeads "<<_nlay<<" 1 "<<_ncpl<<endl<<setprecision(hp);} //unstructured: one row of cells
   for (int n=0;n<_nlay*_ncpl;n++){
     double h=(_reduced[n]>=0)?_X[_reduced[n]]:_strt[n];
     RVC<<((n%10==0)?"  ":" ")<<h; if ((n%10==9) || (n==_nlay*_ncpl-1)){RVC<<endl;}
@@ -2376,7 +2377,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
       const vector<int> cell=SZColumnCells(k);
       for (int c=0;c<SZNCols(k);c++){
-        RVC<<"  "<<_pModel->GetHydroUnit(k)->GetHRUID()<<", "<<cell[c]<<setprecision(15);
+        RVC<<"  "<<_pModel->GetHydroUnit(k)->GetHRUID()<<", "<<cell[c]<<setprecision(17);
         for (int j=0;j<_szNLayers;j++){RVC<<", "<<_szColPhi[(_szColOff[k]+c)*_szNLayers+j];}
         RVC<<endl;
       }
@@ -2388,7 +2389,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       for (size_t e=0;e<_vzCol.size();e++){
         const gwvz::vz_column &c=_vzCol[e]; if (!c.active){continue;}
         const gw_link &L=_aLinks[_szxLink[e]];
-        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(15)<<", "<<c.zbot;
+        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(17)<<", "<<c.zbot;
         for (size_t i=0;i<c.th.size();i++){RVC<<", "<<c.th[i];}
         RVC<<endl;
       }
@@ -2398,7 +2399,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       RVC<<":GWSoilZoneLag   # HRU ID, cell (grid column number), exchange of the last step into the aquifer [m3/d], debt the aquifer still repays [m3]"<<endl;
       for (size_t e=0;e<_szxLink.size();e++){
         const gw_link &L=_aLinks[_szxLink[e]];
-        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(15)<<", "<<_szxQprev[e]<<", "<<((e<_szxDebt.size())?_szxDebt[e]:0.0)<<endl;
+        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(17)<<", "<<_szxQprev[e]<<", "<<((e<_szxDebt.size())?_szxDebt[e]:0.0)<<endl;
       }
       RVC<<":EndGWSoilZoneLag"<<endl;
     }
