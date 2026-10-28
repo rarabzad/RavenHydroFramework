@@ -105,7 +105,7 @@ foreach(_f IN LISTS _found)
   list(GET _f 0 _n)
   list(GET _f 1 _real)
   message(STATUS "MODFLOW 6 runtime: ${_n} (needed by ${RAVEN_MF6_BUNDLE_NAME})")
-  file(INSTALL DESTINATION "${_dest}" TYPE SHARED_LIBRARY FILES "${_real}" RENAME "${_n}")
+  file(INSTALL DESTINATION "${_dest}" TYPE PROGRAM FILES "${_real}" RENAME "${_n}")
   if(RAVEN_MF6_BUNDLE_SYSTEM STREQUAL "Darwin")   # point the installed libmf6 at the copy beside it
     list(GET _f 2 _ref)
     set(_inst "$ENV{DESTDIR}${_dest}")

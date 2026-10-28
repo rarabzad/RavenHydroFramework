@@ -141,12 +141,13 @@ endif()
 # 2. helpers
 # ---------------------------------------------------------------------------------------------------------------------
 # stop (explicit mode) or fall back to OFF with a warning (default)
-macro(_rmf6_giveup msg)
+macro(_rmf6_giveup)
+  string(CONCAT _rmf6_msg ${ARGV})               # the message may come in several quoted pieces
   if(_rmf6_explicit)
-    message(FATAL_ERROR "RAVEN_MF6: ${msg}\nChoose another way to get the library (-DRAVEN_MF6=SOURCE, PREBUILT or PATH "
+    message(FATAL_ERROR "RAVEN_MF6: ${_rmf6_msg}\nChoose another way to get the library (-DRAVEN_MF6=SOURCE, PREBUILT or PATH "
                         "with -DRAVEN_MF6_PATH=/path/to/${RAVEN_MF6_LIBNAME}), or build Raven without it: -DRAVEN_MF6=OFF")
   endif()
-  message(WARNING "RAVEN_MF6: ${msg}\nRaven is built without the MODFLOW 6 library (a coupled model then needs one at run "
+  message(WARNING "RAVEN_MF6: ${_rmf6_msg}\nRaven is built without the MODFLOW 6 library (a coupled model then needs one at run "
                   "time: :MF6Library, RAVEN_MF6_LIB, or ${RAVEN_MF6_LIBNAME} next to Raven). To build it from source, "
                   "install a Fortran compiler (gfortran or ifx), meson >= 1.7, ninja and git (-DRAVEN_MF6=SOURCE); to use "
                   "a library you have: -DRAVEN_MF6_PATH=/path/to/${RAVEN_MF6_LIBNAME}; to silence this warning: "
@@ -317,7 +318,7 @@ function(_rmf6_source_tools ok why)
   set(_rmf6_meson "${_meson}" PARENT_SCOPE)
   set(_rmf6_ninja "${_ninja}" PARENT_SCOPE)
   set(_rmf6_git "${_git}" PARENT_SCOPE)
-  list(JOIN _miss "; " _w)
+  list(JOIN _miss ", " _w)
   if(_miss)
     set(${ok} FALSE PARENT_SCOPE)
   else()
