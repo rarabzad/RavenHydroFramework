@@ -1644,6 +1644,17 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
   for (int c=1;c<num_parsed_veg;c++){
     pVegClasses [c]->AutoCalculateVegetationProps  (*parsed_veg[c],  *parsed_veg[0]);
   }
+  if (GWFileUsesPhysicalSoilZone(Options) && (pModel->GetGroundwaterModel()!=NULL)){
+    //the soil zone's conductance has no meaningful automatic value (Raven's is a placeholder): the soil-zone set-up stops
+    //if the bottom soil-zone layer of a coupled HRU has a class without HYDRAUL_COND (other classes do not need it)
+    for (int c=1;c<num_parsed_soils;c++){
+      double v=parsed_soils[c]->hydraul_cond;
+      if (v==USE_TEMPLATE_VALUE){v=parsed_soils[0]->hydraul_cond;}                     //not on the class's row: the [DEFAULT] value
+      if ((v==AUTO_COMPUTE) || (v==NOT_NEEDED_AUTO) || (v==NOT_SPECIFIED) || (v==NOT_NEEDED)){
+        pModel->GetGroundwaterModel()->NoteSoilClassWithoutKsat(pSoilClasses[c]->GetSoilStruct(),pSoilClasses[c]->GetTag());
+      }
+    }
+  }
   for (int c=1;c<num_parsed_soils;c++){
     pSoilClasses[c]->AutoCalculateSoilProps        (*parsed_soils[c],*parsed_soils[0],pModel->GetTransportModel()->GetNumConstituents());
   }

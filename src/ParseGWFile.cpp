@@ -67,8 +67,9 @@ bool GWFileUsesPhysicalSoilZone(const optStruct &Options)
   if (RVG.fail()){return false;}
   CParser *p=new CParser(RVG,Options.rvg_filename,0);
   char *s[MAXINPUTITEMS]; int Len; bool found=false;
-  while (!p->Tokenize(s,Len)){
-    if ((Len>=2) && !strcmp(s[0],":SoilZone") && !strcmp(s[1],"PHYSICAL")){found=true; break;}
+  while (!p->Tokenize(s,Len)){                                    //as ParseGWFile: the last :SoilZone counts, :End stops
+    if ((Len>=1) && !strcmp(s[0],":End")){break;}
+    if ((Len>=2) && !strcmp(s[0],":SoilZone")){found=!strcmp(s[1],"PHYSICAL");}
   }
   delete p; RVG.close();
   return found;
@@ -92,6 +93,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     cout<<"============================================================="<<endl;
   }
 
+  string szOpts="";                                               //soil-zone options given (they need :SoilZone PHYSICAL)
   bool end_of_file=p->Tokenize(s,Len);
   while (!end_of_file)
   {
@@ -238,22 +240,25 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
       }
     }
     else if (!strcmp(s[0],":SoilZoneIteration"))
-    {/*:SoilZoneIteration [max updates] [head tolerance m] [flow tolerance -] [relaxation 0..1]  (default 50 1E-4 1E-6 1.0) */
-      if (Len<5){GWImproperFormat(s,Options);}
+    {/*:SoilZoneIteration [max updates] {head tolerance m} {flow tolerance -}  (default 100 1E-4 1E-6)
+       max updates: interface updates a step may add once MODFLOW itself has converged (0: no iteration, the explicit
+       predictor only); tolerances not given keep their defaults */
+      if (Len<2){GWImproperFormat(s,Options);}
       else {
-        int n=s_to_i(s[1]); double th=s_to_d(s[2]),tq=s_to_d(s[3]),w=s_to_d(s[4]);
-        ExitGracefullyIf((n<1) || !(th>0) || !(tq>0) || !(w>0) || (w>1),":SoilZoneIteration: max updates >= 1, tolerances > 0, relaxation in (0,1]",BAD_DATA);
-        pGW->SetSoilZoneIteration(n,th,tq,w);
+        int n=s_to_i(s[1]); double th=(Len>=3)?s_to_d(s[2]):1e-4,tq=(Len>=4)?s_to_d(s[3]):1e-6;
+        szOpts+=" :SoilZoneIteration";
+        ExitGracefullyIf((n<0) || !(th>0) || !(tq>0),":SoilZoneIteration: max updates >= 0, tolerances > 0",BAD_DATA);
+        pGW->SetSoilZoneIteration(n,th,tq);
       }
     }
     else if (!strcmp(s[0],":SoilZoneSubgrid"))
     {/*:SoilZoneSubgrid [DEM samples per cell side]  (default 5; 1 = cell-mean land surface only) */
       if (Len<2){GWImproperFormat(s,Options);}
-      else {int n=s_to_i(s[1]); ExitGracefullyIf((n<1) || (n>20),":SoilZoneSubgrid: samples per cell side must be 1 to 20",BAD_DATA); pGW->SetSoilZoneSubgrid(n);}
+      else {int n=s_to_i(s[1]); ExitGracefullyIf((n<1) || (n>20),":SoilZoneSubgrid: samples per cell side must be 1 to 20",BAD_DATA); pGW->SetSoilZoneSubgrid(n); szOpts+=" :SoilZoneSubgrid";}
     }
     else if (!strcmp(s[0],":SoilZoneOutput"))
     {/*:SoilZoneOutput [HRU group]  (HRUs written to GWSoilExchange.csv; default all soil-zone HRUs) */
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetSoilZoneOutput(s[1]);}
+      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetSoilZoneOutput(s[1]); szOpts+=" :SoilZoneOutput";}
     }
     else if (!strcmp(s[0],":SeepageReturnTo"))
     {
@@ -365,5 +370,8 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
   }
   RVG.close();
   delete p;
+  if ((szOpts!="") && !pGW->UsesPhysicalSoilZone()){
+    WriteWarning("ParseGWFile:"+szOpts+" ignored: these apply only with :SoilZone PHYSICAL",Options.noisy);
+  }
   return true;
 }

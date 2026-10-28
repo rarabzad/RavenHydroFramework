@@ -271,11 +271,12 @@ private:/*----------------------------------------------------*/
   bool                   _budgetLineOpen;
   int    _iGW,_iReturnSV;
 
-  //-- soil zone <-> groundwater (:SoilZone PHYSICAL; docs/design/soil_zone_coupling_plan.md) -------------
+  //-- soil zone <-> groundwater (:SoilZone PHYSICAL; docs/design/soil_zone_coupling_plan.md in RavenHydroFramework-extra) --
   int                    _szMode;        ///< 0 CONCEPTUAL (default, unchanged behaviour), 1 PHYSICAL
   int                    _szNLayers;     ///< soil-zone layers SOIL[0..M-1]; the interface layer m* = SOIL[M-1]
-  int                    _szMaxIter;     ///< interface updates per step (1 = explicit predictor only)
-  double                 _szTolH,_szTolQ,_szOmega; ///< [m], [-], [-] interface tolerances and under-relaxation
+  int                    _szMaxIter;     ///< interface updates per step once MODFLOW itself has converged (0 = explicit predictor only)
+  int                    _szExtra;       ///< interface updates this step made after MODFLOW had converged
+  double                 _szTolH,_szTolQ;///< [m], [-] interface tolerances
   int                    _szSubgrid;     ///< DEM samples per cell side for the saturated fraction (1 = cell mean)
   string                 _szOutGroup;    ///< HRU group written to GWSoilExchange.csv ("" = all)
   vector<char>           _szOn;          ///< per HRU: soil-zone coupled (coupled HRU with soil layers)
@@ -291,7 +292,12 @@ private:/*----------------------------------------------------*/
   vector<int>            _szxLink;       ///< per SZX entry: link index
   vector<double>         _szxC,_szxZb;   ///< per SZX entry: conductance C^sz [m2/d], soil-zone base [m]
   vector<double>         _szxQ;          ///< per SZX entry: flow into the aquifer of the final solution [m3/d]
-  vector<double>         _szxDl;         ///< per SZX entry: d(lambda)/d(head) of its column's local solve [-], in [0,1)
+  vector<gwsz::sz_cell>  _szxCell;       ///< per SZX entry: sub-grid description of its column (bases at the DEM samples, ds, D, C)
+  vector<double>         _szxQc,_szxCg;  ///< per SZX entry: exchange at the current head [m3/d] and its slope -dq/dh [m2/d]
+  vector<double>         _szxHc;         ///< per SZX entry: head that sets the connection weights (lags the head inside the iteration) [m]
+  vector<double>         _szxHp,_szxHr;  ///< per SZX entry: previous hc and its residual h - hc [m] (-HUGE_VAL: none yet this step)
+  vector<double>         _szxBa,_szxBra,_szxBb,_szxBrb; ///< per SZX entry: bracket of the root of h - hc (ends, residuals) [m]
+  vector<int>            _szxBk;         ///< per SZX entry: bracket state (0 none, else the end replaced last: 1 a, 2 b)
   vector<double>         _szxLam;        ///< per SZX entry: saturated thickness of its column, current iterate [m]
   vector<double>         _szxRej;        ///< per SZX entry: rejected recharge of the current iterate [m3]
   vector<int>            _szxCol;        ///< per SZX entry: its soil-zone column
@@ -300,15 +306,17 @@ private:/*----------------------------------------------------*/
   vector<double>         _szColA;        ///< per soil-zone column: area [m2]
   vector<double>         _szColPhi;      ///< per soil-zone column and layer (bottom up): water [mm]
   bool                   _szColInit;     ///< columns hold a state (set at the first exchange)
-  map<long long,vector<vector<double> > > _hotSzCols; ///< from .rvc :GWSoilZoneColumns, by HRU ID
-  vector<double>         _linkFp;        ///< per link: dF/dh of the current iterate [1/m] (times the relaxation used)
-  vector<double>         _linkZb;        ///< per link: base of its connected part (gwsz::ConnectedBase) [m]
+  map<const void*,string> _szNoKsat;   ///< soil classes (their soil_struct) whose HYDRAUL_COND was not given (.rvp)
+  map<long long,map<int,vector<double> > > _hotSzCols; ///< from .rvc :GWSoilZoneColumns, by HRU ID and cell (column number of the grid, 0 = rest of the HRU)
   vector<double>         _colCoverNS;    ///< per column: overlap area of coupled HRUs without soil zone [m2]
   double                *_szxHead,*_szxCond,*_szxHcof,*_szxRhs; int _szxNcol;
   double                *_szqQ,*_szqHcof,*_szqRhs; int _szqNcol; ///< SZQ_RAVEN (WEL): the part of an SZX flow whose head would lie below the cell bottom
   double                 _Qsz_in,_Qsz_out,_szRejVol,_szOvfVol,_szAppliedVol,_szShortVol; ///< step totals [m3/d],[m3]
   int                    _szIter;        ///< interface updates in the last step
+  int                    _szShortN;      ///< steps with a soil-zone shortfall (warnings)
   double                 _szResid;       ///< last interface change of the saturated thickness [m]
+  int                    _szResE;        ///< SZX entry of that largest change (-1: none)
+  double                 _szDQ,_szDQtol; ///< last change of the total exchange and the change the tolerances allow [m3/d]
   bool                   _szConv;        ///< interface converged in the last step
   int                    _szNotConv;     ///< steps whose interface did not converge
   double                 _szTstep;       ///< step length of the current interface iteration [d]
@@ -316,9 +324,6 @@ private:/*----------------------------------------------------*/
   vector<int>            _szPhiOff;      ///< per HRU: offset into _szPhiProc
   vector<vector<int> >   _szxOfHRU;      ///< per HRU: its SZX entries
   vector<double>         _evtBase;       ///< per EVT entry: rate before the saturated-fraction reduction [m/d]
-  vector<double>         _linkW;         ///< per link: relaxation of its saturated fraction this step (halved when F oscillates)
-  vector<double>         _linkDF;        ///< per link: last update of its saturated fraction this step
-  void   SZResetRelaxation() {std::fill(_linkW.begin(),_linkW.end(),_szOmega); std::fill(_linkDF.begin(),_linkDF.end(),0.0);}
   double                 _szPrevQ;       ///< total interface flow of the previous iterate [m3/d]
   vector<double>         _szW;           ///< per HRU: soil-zone water after the step [mm]
   double                 _szRatioMin,_szRatioMax; ///< range of S_y(top layer)/drainable porosity(bottom soil layer)
@@ -327,13 +332,18 @@ private:/*----------------------------------------------------*/
   void   SZSetup        ();                                    ///< after HRUs are known: layers, thickness, checks
   void   SZBuildEntries ();                                    ///< after links: SZX entries, conductances, bases
   double SZBase         (const int k,const int ic) const;      ///< soil-zone base of HRU k in column ic [m]
-  void   SZLinkFractions(const bool relax);                    ///< _linkF from the current heads (relaxed inside the iteration)
+  void   SZLinkFractions(const bool relax,const bool mf6conv=true); ///< _szxHc and _linkF from the current heads (hc iterated inside the step)
   void   SZRecharge     (const double &tstep,const bool write);///< _Qcol, _szRej, _szxRej from _szRchV and _linkF (write: RCH array too)
-  void   SZLocalSolves  (const double &tstep);                 ///< new _szxLam, _szxDl per exchange column
+  void   SZLocalSolves  (const double &tstep,const bool steady);///< _szxLam, _szxQc, _szxCg per exchange column
   int    SZNCols        (const int k) const {return (int)_szxOfHRU[k].size()+1;}
   void   SZSyncColumns  (const int k,const double *target);    ///< columns of HRU k to its soil-zone water target[j] [mm]
+  vector<int> SZColumnCells(const int k) const;               ///< cell of each column of HRU k (column number of the grid, 1-based; 0 = rest)
+  int    SZHotColumns   (const int k,vector<vector<double> > &cols) const; ///< hotstart columns of HRU k: 1 found, 0 none, -1 not matching
+  void   SZInitColumns  ();                                    ///< columns at the start: hotstart, else saturated below the initial water table
+  double                 _szInitVol;     ///< water added to the soil zone at the start to saturate it below the initial water table [m3]
+  int                    _szInitHot;     ///< HRUs whose columns came from the hotstart file
   void   SZSetArrays    (const bool steady);                   ///< SZX head/conductance, RCH and EVT rates
-  bool   SZIterate      (double **aPhinew,const int iter,const bool steady,double &prevQ);
+  bool   SZIterate      (double **aPhinew,const int iter,const bool mf6conv,const bool steady,double &prevQ,const bool last);
   void   SZApply        (double **aPhinew,const double &tstep);///< final exchange, rejection and overflow to Raven
   void   SZWriteStep    (const double &t,const string &dstr);
 
@@ -419,7 +429,7 @@ public:/*-------------------------------------------------------*/
   void   SetHotstartRechargeStore(const long long hru,const double &v){_hotRchStore[hru]=v;}
   void   SetHotstartReservoirSeepage(const long long sbid,const double &v){_hotResSeep[sbid]=v;}
   void   SetHotstartRiverLossCarry(const long long sbid,const double &v){_hotRivCarry[sbid]=v;}
-  void   SetHotstartSoilZoneColumn(const long long hru,const int c,const vector<double> &phi){vector<vector<double> > &v=_hotSzCols[hru]; if ((int)v.size()<=c){v.resize(c+1);} v[c]=phi;}
+  void   SetHotstartSoilZoneColumn(const long long hru,const int cell,const vector<double> &phi){if (cell<0){return;} _hotSzCols[hru][cell]=phi;}
   void   Reinitialize         (const optStruct &Options); ///< fresh start for a new ensemble member
   void   AddWell              (const gw_well &w){_aWells.push_back(w);}
   void   AddObservationWell   (const gw_obswell &o){_aObsWells.push_back(o);}
@@ -448,10 +458,13 @@ public:/*-------------------------------------------------------*/
   void   AddGridRefinement    (const string &kind,const string &file,const double size){_refKind.push_back(kind); _refFile.push_back(file); _refSize.push_back(size);}
   void   SetFlowCorrection    (const string &s)        {_flowCorr=s;}
   void   SetLayerConnection   (const bool byElevation) {_connectByElevation=byElevation;}
-  void   SetSoilZone          (const bool physical,const int nlayers){_szMode=physical?1:0; _szNLayers=nlayers; if (physical){_genOnly+=" :SoilZone";}}
-  void   SetSoilZoneIteration (const int maxit,const double tolh,const double tolq,const double omega){_szMaxIter=maxit;_szTolH=tolh;_szTolQ=tolq;_szOmega=omega;}
+  void   SetSoilZone          (const bool physical,const int nlayers){_szMode=physical?1:0; _szNLayers=nlayers;   //the last :SoilZone counts
+                                  size_t p; while ((p=_genOnly.find(" :SoilZone"))!=string::npos){_genOnly.erase(p,10);} if (physical){_genOnly+=" :SoilZone";}}
+  void   SetSoilZoneIteration (const int maxit,const double tolh,const double tolq){_szMaxIter=maxit;_szTolH=tolh;_szTolQ=tolq;}
   void   SetSoilZoneSubgrid   (const int n){_szSubgrid=n;}
   void   SetSoilZoneOutput    (const string &group){_szOutGroup=group;}
+  bool   UsesPhysicalSoilZone () const {return _szMode==1;}
+  void   NoteSoilClassWithoutKsat(const void *soil,const string &tag){_szNoKsat[soil]=tag;}
   void   SetHotstartHeads     (const int nlay,const int nrow,const int ncol,const vector<double> &h)
                               {_hotDims[0]=nlay;_hotDims[1]=nrow;_hotDims[2]=ncol;_hotHeads=h;}
 
