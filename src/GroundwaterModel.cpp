@@ -90,7 +90,7 @@ void CGroundwaterModel::ResetState()
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=_riverAppliedVol=_riverDeficitVol=0.0;
   _szOn.clear(); _szSV.clear(); _szLay.clear(); _szD.clear(); _szLam.clear(); _szRchV.clear(); _szRej.clear(); _szOvfV.clear(); _szNetV.clear(); _szW.clear();
   _linkF.clear(); _cellDem.clear(); _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _colCoverNS.clear(); _szxOfHRU.clear();
-  _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
+  _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0;
@@ -1847,6 +1847,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   bool conv; int niter;
   std::function<bool(int,bool)> szcb; //:SoilZone PHYSICAL: interface update after every MODFLOW outer iteration
   if (_szxLink.size()>0){
+    _szxHq.assign(_szxHq.size(),-HUGE_VAL);                                       //no local solve yet this step
     SZLinkFractions(false); SZRecharge(tstep,false); SZLocalSolves(tstep,false); SZSetArrays(false); //predictor from the heads of the last step
     _szPrevQ=HUGE_VAL;
     szcb=[this,aPhinew](int it,bool c){return SZIterate(aPhinew,it,c,false,_szPrevQ,it>=_maxiter);};

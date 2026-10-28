@@ -174,7 +174,7 @@ void CGroundwaterModel::SZBuildEntries()
   _szxLam.assign(_szxLink.size(),0.0); _szxRej.assign(_szxLink.size(),0.0);
   _szxQc.assign(_szxLink.size(),0.0); _szxCg.assign(_szxLink.size(),0.0);
   size_t ne=_szxLink.size();
-  _szxHc.assign(ne,0.0); _szxHp.assign(ne,0.0); _szxHr.assign(ne,-HUGE_VAL);
+  _szxHc.assign(ne,0.0); _szxHp.assign(ne,0.0); _szxHr.assign(ne,-HUGE_VAL); _szxHq.assign(ne,-HUGE_VAL); _szxQq.assign(ne,0.0);
   _szxBa.assign(ne,0.0); _szxBra.assign(ne,0.0); _szxBb.assign(ne,0.0); _szxBrb.assign(ne,0.0); _szxBk.assign(ne,0);
 }
 
@@ -404,6 +404,16 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     }
     double x=steady?0.0:MM_PER_METER*tstep/a*ql*lamp;
     double Cg=-qh/(1.0+x),sec=0.0; (void)qc;
+    //never below the secant through the last local solve of this step: the exchange as a function of the head steepens
+    //where the column fills (lambda' falls to 0) or a sample connects; a slope taken on the flat side would let MODFLOW
+    //overshoot across that kink and cycle (a slope too large only slows the convergence, one too small can diverge)
+    if (!steady){
+      if ((_szxHq[e]!=-HUGE_VAL) && (fabs(h-_szxHq[e])>1e-6)){
+        double s=-(q-_szxQq[e])/(h-_szxHq[e]);
+        if (s>Cg){Cg=min(s,max(-qh,Cg));}
+      }
+      _szxHq[e]=h; _szxQq[e]=q;
+    }
     if (q<0.0){sec=-q/max(h-cell.zbs[0],1e-3);}
     _szxQc[e]=q; _szxCg[e]=max(max(Cg,sec),1e-9*cell.C);
   }
