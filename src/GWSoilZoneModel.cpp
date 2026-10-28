@@ -138,6 +138,13 @@ void CGroundwaterModel::SZUpNodes()
     if (_szxUpCHD[e]){_szxUpF[e]=1.0;}
   }
 }
+double CGroundwaterModel::SZUpCap(const int e,const double &tstep)
+{ //half the water the source cell holds above its bottom under the link, faded out as it nears drying; a specified head: no limit
+  const int up=_szxUp[e]; if (up<0){return 0.0;}
+  if (_szxUpCHD[e]){return 1e300;}
+  const double hu=_X[_reduced[up]]*_hf,a=_szColA[_szxCol[e]];
+  return _szxUpF[e]*0.5*max(SZNodeSy(up),0.01)*a*max(hu-_botm[up],0.0)/tstep;
+}
 bool CGroundwaterModel::NodeCHD(const int n)
 {
   if (_ibPtr==NULL){string a=_mf6.GetVarAddress(_mname,"","IBOUND"); if (_mf6.HasVar(a)){_ibPtr=_mf6.GetIntPtr(a);}}
@@ -265,7 +272,7 @@ void CGroundwaterModel::SZBuildEntries()
     for (int l=top/_ncpl+1;l<_nlay;l++){const int n=UserNode(l,ic); if (_idomain[n]>0){_szwNode.push_back(n);}}
   }
   _szwStart[_szxLink.size()]=(int)_szwNode.size();
-  _szxUp.assign(_szxLink.size(),-1); _szxUpF.assign(_szxLink.size(),0.0); _szxUpCHD.assign(_szxLink.size(),0); _vzUp.assign(_szxLink.size(),0.0); _vzUpQ=0.0;
+  _szxUp.assign(_szxLink.size(),-1); _szxUpF.assign(_szxLink.size(),0.0); _szxUpCHD.assign(_szxLink.size(),0); _vzUp.assign(_szxLink.size(),0.0); _vzUpA.assign(_szxLink.size(),0.0); _vzUpQ=0.0;
   { double dsmin=1e300; for (size_t e=0;e<_szxCell.size();e++){dsmin=min(dsmin,_szxCell[e].ds);}
     if ((_szxCell.size()>0) && (dsmin<0.1)){
       WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: SEEPAGE_SMOOTHING_DEPTH of the cells' profiles is as small as "+to_string(dsmin)+
@@ -520,7 +527,9 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
       double share=(W>0.0)?((_linkSzx[li]>=0)?_szxFw[_linkSzx[li]]/W:0.0):L.area/(_szOn[k]?Aall:_hruRchArea[k]),F=_linkF[li];
       const int e=_linkSzx[li];
       if ((_vzMode>0) && (e>=0) && (e<(int)_vzUse.size())){
-        _Qcol[L.ic]+=_vzAbsQ[e];                                                 //water a risen water table took from the column
+        if ((_vzAbsQ[e]<0.0) && (e<(int)_szxUpCHD.size()) && _szxUpCHD[e]){_szRchCHD+=_vzAbsQ[e];} //water a risen water table took from the column; the
+        else if (!(_vzUpA[e]>0.0)){_Qcol[L.ic]+=_vzAbsQ[e];}                     // new nodes of a fallen one (out of a specified head below; out of a
+                                                                                 // lower cell: SZW_RAVEN)
         if (_vzUse[e]){ //the unsaturated column carried the unsaturated share this step: its bottom flux recharges the
                         //aquifer, and the saturated share is rejected with the saturated fraction its inflow used
           double rj=V*share*_vzFp[e]+_vzRejV[e];
@@ -685,7 +694,7 @@ void CGroundwaterModel::SZSetArrays(const bool steady)
     for (size_t j=0;j<_szwNode.size();j++){_szwQ[j*sw]=0.0;}
     for (size_t e=0;(e<_szxLink.size()) && (e+1<_szwStart.size());e++){
       const int up=(e<_szxUp.size())?_szxUp[e]:-1; if ((up<0) || (up==TopNode(_aLinks[_szxLink[e]].ic)) || _szxUpCHD[e]){continue;}
-      const double q=((e<_szxCapQ.size())?_szxCapQ[e]:0.0)+((e<_szxRepay.size())?_szxRepay[e]:0.0)+((e<_vzUp.size())?_vzUp[e]:0.0);
+      const double q=((e<_szxCapQ.size())?_szxCapQ[e]:0.0)+((e<_szxRepay.size())?_szxRepay[e]:0.0)+((e<_vzUp.size())?_vzUp[e]+_vzUpA[e]:0.0);
       for (int j=_szwStart[e];j<_szwStart[e+1];j++){if (_szwNode[j]==up){_szwQ[j*sw]-=q/_qf; break;}}
     }
   }

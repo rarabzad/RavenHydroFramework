@@ -423,6 +423,8 @@ private:/*----------------------------------------------------*/
   mutable int           *_ibPtr;         ///< MODFLOW's IBOUND (reduced nodes), fetched on first use
   bool   NodeCHD        (const int n);                          ///< user node n is a specified head now (IBOUND < 0)
   vector<double>         _szxUpF;        ///< per SZX entry this step: scale of the upward flows out of _szxUp (1; less when that cell is within max(5 %, 5 cm) of drying)
+  vector<double>         _vzUpA;         ///< per SZX entry: water a falling water table's new column nodes took from a lower cell this step [m3/d] (through SZW_RAVEN)
+  double SZUpCap        (const int e,const double &tstep);      ///< most an upward flow may take out of SZX entry e's source cell this step [m3/d]
   vector<double>         _vzUp;          ///< per SZX entry: upward flow from a lower wet cell into the unsaturated column this step [m3/d] (through SZW_RAVEN)
   double                 _vzUpQ;         ///< all of _vzUp [m3/d] (MODFLOW recharge, negative)
   vector<double>         _szxCapL;       ///< per SZX entry and soil-zone layer (bottom up, e*n+j): its share of _szxCapQ [m3/d]

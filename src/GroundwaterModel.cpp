@@ -96,7 +96,7 @@ void CGroundwaterModel::ResetState()
   _linkF.clear(); _cellDem.clear(); _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _colCoverNS.clear(); _szxOfHRU.clear();
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szxOne.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
-  _szxCapQ.clear(); _szxCapL.clear(); _szCapWT=0.0; _szxUp.clear(); _szxUpF.clear(); _szxUpCHD.clear(); _ibPtr=NULL; _vzUp.clear(); _vzUpQ=0.0; _szwStart.clear(); _szwNode.clear(); _szwQ=NULL; _szwNcol=0;
+  _szxCapQ.clear(); _szxCapL.clear(); _szCapWT=0.0; _szxUp.clear(); _szxUpF.clear(); _szxUpCHD.clear(); _ibPtr=NULL; _vzUp.clear(); _vzUpA.clear(); _vzUpQ=0.0; _szwStart.clear(); _szwNode.clear(); _szwQ=NULL; _szwNcol=0;
   _szCls.clear(); _szClsW.clear(); _szClsPhi.clear(); _szClsRes.clear(); _szClsGW.clear(); _szClsDone.clear();
   _szcLink.clear(); _szcCol.clear(); _szcCell.clear(); _szcRej.clear(); _szcFw.clear(); _szcQ.clear(); _szcCapL.clear(); _szcOfHRU.clear(); _linkSzc.clear(); _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0;
   _szxQprev.clear(); _szxLagL.clear(); _szxLagD.clear(); _szLagNet.clear(); _szxDebt.clear(); _szxRepay.clear(); _szDebtVol=_szRepayQ=0.0;
@@ -2014,6 +2014,10 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     if (_nNonConverged<=10){WriteWarning("CGroundwaterModel: MODFLOW 6 did not converge on "+tt.date_string+" (continuing)",Options.noisy);}
   }
   if (!_mf6.FinalizeTimeStep()){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
+  for (size_t n=0;n<_reduced.size();n++){ //(a diverged solve: stop rather than carry NaN through the rest of the run)
+    const int r=_reduced[n]; if ((r>=0) && !std::isfinite(_X[r])){
+      ExitGracefully(("CGroundwaterModel: MODFLOW 6 heads are not finite on "+tt.date_string+" (the solve diverged)").c_str(),RUNTIME_ERR);}
+  }
 
   //-- 3. boundary flows from final heads (q = hcof*h - rhs, positive into aquifer)
   _Qrch=0.0; _Qseep_tot=0.0;

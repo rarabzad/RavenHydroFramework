@@ -151,7 +151,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
     for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){
       const int e=_szxOfHRU[k][jj],li=_szxLink[e],c=_szxCol[e]; const gw_link &L=_aLinks[li];
       const double a=_szColA[c];
-      _vzUse[e]=0; _vzQ[e]=0.0; _vzAbsQ[e]=0.0; _vzRejV[e]=0.0; _vzInV[e]=0.0; _vzCapV[e]=0.0; _vzUp[e]=0.0;
+      _vzUse[e]=0; _vzQ[e]=0.0; _vzAbsQ[e]=0.0; _vzRejV[e]=0.0; _vzInV[e]=0.0; _vzCapV[e]=0.0; _vzUp[e]=0.0; _vzUpA[e]=0.0;
       for (int j=0;j<n;j++){_vzCapL[e*n+j]=0.0;}
       if (!(a>0.0) || _colCHDTop[L.ic]){continue;}                              //(a specified head this step: its recharge goes there)
       gwvz::vz_column &col=_vzCol[e]; const gwvz::vz_strat &S=_vzStrat[e];
@@ -169,10 +169,10 @@ void CGroundwaterModel::VZStep(const double &tstep)
           gwvz::vz_column t=col; const double abT=gwvz::MoveBottom(t,S,zt,_vzN);
           if (abT>capV*(1.0+1e-9)){
             double lo=z0,hi=min(zt,col.ztop);
-            for (int it=0;it<40;it++){ //(the excess below a level grows with the level)
+            for (int it=0;it<60;it++){ //(the excess below a level grows with the level)
               const double zm=0.5*(lo+hi); t=col;
               if (gwvz::MoveBottom(t,S,zm,_vzN)>capV){hi=zm;} else {lo=zm;}
-              if (hi-lo<1e-4){break;}
+              if (hi-lo<1e-7){break;}
             }
             const double zn=(lo>col.ztop-0.01)?col.ztop:lo;                      //(a remainder thinner than 1 cm: the column goes)
             _vzAbsQ[e]=gwvz::MoveBottom(col,S,zn,_vzN)*a/tstep;
@@ -181,7 +181,24 @@ void CGroundwaterModel::VZStep(const double &tstep)
           }
           else {col=t; _vzAbsQ[e]=abT*a/tstep;}
         }
-        else {_vzAbsQ[e]=gwvz::MoveBottom(col,S,zt,_vzN)*a/tstep;}
+        else if (zt<col.zbot-1e-9){ //a falling water table: the new nodes start at equilibrium, the water they take comes out of the
+          //cell holding the water table, at most what it can give this step (SZUpCap: none without such a cell, the bottom then
+          //stays); the column's bottom follows more slowly otherwise
+          const double capV=(_szxUpCHD[e]?1e300:SZUpCap(e,tstep)*tstep/a);        //[m]
+          gwvz::vz_column t=col; const double abT=gwvz::MoveBottom(t,S,zt,_vzN);
+          if (-abT>capV){
+            double lo=zt,hi=col.zbot;                                            //(lo: too far down; hi: not moved)
+            for (int it=0;it<60;it++){
+              const double zm=0.5*(lo+hi); t=col;
+              if (-gwvz::MoveBottom(t,S,zm,_vzN)>capV){lo=zm;} else {hi=zm;}
+              if (hi-lo<1e-7){break;}
+            }
+            _vzAbsQ[e]=(hi<col.zbot-1e-9)?gwvz::MoveBottom(col,S,hi,_vzN)*a/tstep:0.0;
+          }
+          else {col=t; _vzAbsQ[e]=abT*a/tstep;}
+          if ((_vzAbsQ[e]<0.0) && (_szxUp[e]>=0) && (_szxUp[e]!=TopNode(L.ic)) && !_szxUpCHD[e]){_vzUpA[e]=-_vzAbsQ[e]; _vzUpQ+=_vzUpA[e];}
+        }
+        else {_vzAbsQ[e]=gwvz::MoveBottom(col,S,zt,_vzN)*a/tstep;}                //(the water table at the base: the column goes; or unmoved)
       }
       else if (zb-h>Lmin){
         gwvz::Build(col,S,zb,h,_vzN);                                            //(at equilibrium: no excess, nothing exchanged)
@@ -211,7 +228,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
           if ((up>=0) && (Qc>avail/tstep)){
             const double hu=_X[_reduced[up]]*_hf,Syu=_szxUpCHD[e]?0.0:max(SZNodeSy(up),0.01);
             Qw=SZRiseLayers(k,c,zb,hu,0.0,a,Ae,Syu,tstep,&QW[0],NULL,VZGapMat(e));
-            if (!_szxUpCHD[e]){Qw=min(Qw*_szxUpF[e],0.5*Syu*a*max(hu-_botm[up],0.0)/tstep);} //(as SZCapRiseWT)
+            if (!_szxUpCHD[e]){Qw=min(Qw*_szxUpF[e],SZUpCap(e,tstep));}            //(as SZCapRiseWT)
           }
           const double Q=min(Qc,max(avail/tstep,Qw));                            //[m3/d]
           if (Q>0.0){
@@ -230,9 +247,8 @@ void CGroundwaterModel::VZStep(const double &tstep)
         const int up=_szxUp[e];
         double allow=0.0;                                                        //[m/d]
         if (!noUp && _szxUpCHD[e]){allow=-qb;}                                   //(a specified head supplies all of it)
-        else if (!noUp){
-          const double hu=_X[_reduced[up]]*_hf,Syu=max(SZNodeSy(up),0.01);
-          allow=min(_szxUpF[e]*(-qb),0.5*Syu*max(hu-_botm[up],0.0)/tstep);
+        else if (!noUp){                                                         //(the source cell's limit, less what the new nodes took)
+          allow=min(_szxUpF[e]*(-qb),max(SZUpCap(e,tstep)+min(_vzAbsQ[e],0.0),0.0)/a);
         }
         double need=(-qb-allow)*tstep;                                           //[m]
         for (size_t ib=col.th.size();(ib-->0) && (need>0.0);){
@@ -291,8 +307,8 @@ void CGroundwaterModel::SZCapRiseWT(const double &tstep)
       const double Sy=chu?0.0:max(SZNodeSy(up),0.01);                           //(a specified head does not draw down)
       double Qs=SZRiseLayers(k,c,z0,h,0.0,a,a*(1.0-F),Sy,tstep,&CL[e*n],NULL,sc?NULL:VZGapMat(e));
       if (!chu){ //out of an aquifer cell: fades out as it nears drying, and at most half the water it holds above its bottom
-        const double cap=0.5*Sy*a*max(h-_botm[up],0.0)/tstep;                   // under the link per step (a thin cell would be pumped dry)
-        const double sc2=min(_szxUpF[e],(Qs>cap)?cap/Qs:1.0);
+        const double cap=SZUpCap(e,tstep);                                       // under the link per step (a thin cell would be pumped dry)
+        const double sc2=(Qs*_szxUpF[e]>cap)?cap/Qs:_szxUpF[e];
         if (sc2<1.0){Qs*=sc2; for (int j=0;j<n;j++){CL[e*n+j]*=sc2;}}
       }
       if (!(Qs>0.0)){continue;}

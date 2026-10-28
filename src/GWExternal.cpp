@@ -476,13 +476,18 @@ void CGroundwaterModel::ExtProbe()
     //change repeats every iteration and the step never converges (6.8.1 converges); warn, as the model is the user's
     int ma=0,mi=0; bool uo=false;
     if (sscanf(_mf6Version.c_str(),"%d.%d",&ma,&mi)==2){uo=(ma<6) || ((ma==6) && (mi<8));}
-    ifstream N((_mf6dir+"/"+_extNamFile).c_str()); string l,b; bool nu=false;
+    ifstream N((_mf6dir+"/"+_extNamFile).c_str()); string l,b; bool nu=false,nw=false;
     while (getline(N,l)){
       vector<string> w=Words(l); if (w.empty()){continue;}
       string W0=Upper(w[0]);
       if ((W0=="BEGIN") && (w.size()>1)){b=Upper(w[1]); continue;}
       if (W0=="END"){b=""; continue;}
-      if ((b=="OPTIONS") && (W0=="NEWTON")){for (size_t j=1;j<w.size();j++){if (Upper(w[j])=="UNDER_RELAXATION"){nu=true;}}}
+      if ((b=="OPTIONS") && (W0=="NEWTON")){nw=true; for (size_t j=1;j<w.size();j++){if (Upper(w[j])=="UNDER_RELAXATION"){nu=true;}}}
+    }
+    if (SZPhysical() && !nw){
+      WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL with an existing model that does not use NEWTON: a top cell that dries leaves "
+        "MODFLOW's solve (head HDRY), and the soil zone over it then neither exchanges with the aquifer nor draws capillary rise until "
+        "the cell rewets; add NEWTON to the model's OPTIONS where the top cells can dry",false);
     }
     if (uo && nu){
       WriteWarning("CGroundwaterModel: the model uses NEWTON UNDER_RELAXATION with MODFLOW "+_mf6Version+"; with versions before 6.8 "
