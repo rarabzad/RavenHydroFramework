@@ -1546,8 +1546,9 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
     double cond=_aProfiles[_colProfile[ic]].seep_leakance*_grid.area[ic];
     //:SoilZone PHYSICAL: where soil-zone HRUs cover the column the exchange is SZX_RAVEN; the drain serves the rest
     if (SZPhysical() && (_colCover[ic]>0)){cond*=_colCoverNS[ic]/_colCover[ic];}
-    //MODFLOW refuses a drain whose smoothing interval reaches below the cell bottom: limit it to the top layer
-    double dsm=min(_aProfiles[_colProfile[ic]].seep_smooth_depth,_top[ic]-_botm[UserNode(0,ic)]);
+    //MODFLOW refuses a drain whose smoothing interval reaches below the cell bottom: limit it to the top layer (less a
+    //margin: written to 10 digits, top minus the full thickness could round below the bottom)
+    double dsm=min(_aProfiles[_colProfile[ic]].seep_smooth_depth,max(_top[ic]-_botm[UserNode(0,ic)]-1e-6*max(1.0,fabs(_top[ic])),0.0));
     F<<"  "<<CellID(0,ic)<<" "<<_top[ic]<<" "<<cond<<" "<<-dsm<<endl;
   }
   F<<"END PERIOD\n"; F.close();
@@ -2010,6 +2011,26 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
 
   //-- guard: an unconverged solution can produce spurious flows. Seepage returned to Raven is then limited to
   //   the water that entered the aquifer this step (recharge + river leakage), scaled down uniformly
+  if (!_lastConverged && SZPhysical() && (_Qerr<0.0)){
+    //:SoilZone PHYSICAL: MODFLOW's last iterate booked more outflow than its inflows and storage release supply (its
+    //residual): that water is not given to Raven. All discharge to Raven (seepage, river and surface-store gains, and
+    //the soil zone's share of the exchange from the aquifer) is reduced in proportion by it. (On such steps the soil zone
+    //otherwise received flows far beyond its local solve, which overflowed: outflow 17 times the
+    //iterated run's with an outer-iteration limit of 12.)
+    double gains=0.0; for (size_t p=0;p<_sbGain.size();p++){gains+=max(_sbGain[p],0.0);}
+    for (size_t e=0;e<_swxQ.size();e++){gains+=max(-_swxQ[e],0.0);}
+    double up=0.0; for (size_t e=0;e<_szxQ.size();e++){up+=max(-_szxQ[e],0.0);}
+    double D=_Qseep_tot+gains+up;
+    if (D>0.0){
+      double f=max(1.0+_Qerr/D,0.0);
+      for (int ic=0;ic<_ncpl;ic++){_Qseep[ic]*=f;} _Qseep_tot*=f;
+      for (size_t p=0;p<_sbGain.size();p++){if (_sbGain[p]>0){_sbGain[p]*=f;}}
+      for (size_t e=0;e<_swxQ.size();e++){if (_swxQ[e]<0){_swxQ[e]*=f;}}
+      _Qsz_out=0.0; for (size_t e=0;e<_szxQ.size();e++){if (_szxQ[e]<0){_szxQ[e]*=f;} if (_szxQ[e]<0){_Qsz_out-=_szxQ[e];}}
+      WriteWarning("CGroundwaterModel: unconverged step ending "+EndDate(tt.model_time+tstep)+": discharge to Raven reduced by MODFLOW's residual, from "+
+                   ToStr(D)+" to "+ToStr(D*f)+" m3/d",false);
+    }
+  }
   if (!_lastConverged){ //all discharge returned to Raven (seepage + river gains) limited to this step's inflow
                         //(not the soil-zone exchange: the soil zone takes any flow MODFLOW booked, the excess overflows)
     double cap=max(_Qrch+_Qriv_in+_Qswx_in+max(_Qres,0.0)+max(_Qwel,0.0)+max(_Qghb,0.0)+max(_Qchd,0.0)
