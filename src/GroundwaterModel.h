@@ -299,7 +299,6 @@ private:/*----------------------------------------------------*/
   vector<double>         _szxFc;         ///< per SZX entry: contact fraction (mean contact weight) of the last local solve
   vector<double>         _szSyncOvf;     ///< per HRU: overflow when Raven's gains were shared among full columns this step [m3]
   bool                   _szCapUpd;      ///< the current update is the last before the interface freezes (boundary supply-limited)
-  bool                   _szCapWins;     ///< the supply limit wins over the secant floor (at least 5 MODFLOW solves follow)
   double                 _szMovedV;      ///< water moved up between soil-zone layers when Raven's changes were shared this step [m3]
   vector<char>           _szRchByArea;   ///< per HRU: recharge leaves the bottom layer at a constant rate (PERC_CONSTANT): columns give it up by area
   vector<double>         _szxFw;         ///< per SZX entry: the recharge its column gave up this step [m3] (recharge shares)
@@ -319,6 +318,9 @@ private:/*----------------------------------------------------*/
   vector<double>         _colCoverNS;    ///< per column: overlap area of coupled HRUs without soil zone [m2]
   double                *_szxHead,*_szxCond,*_szxHcof,*_szxRhs; int _szxNcol;
   double                *_szqQ,*_szqHcof,*_szqRhs; int _szqNcol; ///< SZQ_RAVEN (WEL): the part of an SZX flow whose head would lie below the cell bottom
+  double                *_szdElev,*_szdCond,*_szdAux,*_szdHcof,*_szdRhs; int _szdNcol; ///< SZD_RAVEN (DRN, smoothed): a boundary MODFLOW keeps (explicit, frozen) where water rises into the soil: one-sided
+  vector<char>           _szxOne;        ///< per SZX entry: the boundary is the one-sided SZD_RAVEN
+  bool                   _szOneOK;       ///< the current update may give one-sided boundaries (at least 10 MODFLOW solves follow)
   double                 _Qsz_in,_Qsz_out,_szRejVol,_szOvfVol,_szAppliedVol,_szShortVol; ///< step totals [m3/d],[m3]
   int                    _szIter;        ///< interface updates in the last step
   int                    _szShortN;      ///< steps with a soil-zone shortfall (warnings)

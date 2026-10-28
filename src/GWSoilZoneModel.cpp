@@ -187,7 +187,7 @@ void CGroundwaterModel::SZBuildEntries()
                    " m; the soil-zone contact then switches almost abruptly and the interface may not converge (0.1 to 0.5 m is typical)",false);}
   }
   _szColPhi.assign(_szColA.size()*_szNLayers,0.0); _szColInit=false;
-  _szxLam.assign(_szxLink.size(),0.0); _szxRej.assign(_szxLink.size(),0.0); _szxFw.assign(_szxLink.size(),0.0); _szxFc.assign(_szxLink.size(),0.0);
+  _szxLam.assign(_szxLink.size(),0.0); _szxRej.assign(_szxLink.size(),0.0); _szxFw.assign(_szxLink.size(),0.0); _szxFc.assign(_szxLink.size(),0.0); _szxOne.assign(_szxLink.size(),0);
   _szxQc.assign(_szxLink.size(),0.0); _szxCg.assign(_szxLink.size(),0.0);
   size_t ne=_szxLink.size();
   _szxHc.assign(ne,0.0); _szxHp.assign(ne,0.0); _szxHr.assign(ne,-HUGE_VAL); _szxHq.assign(ne,-HUGE_VAL); _szxQq.assign(ne,0.0);
@@ -451,21 +451,26 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     if (q<0.0){sec=-q/max(h-(cell.zbs[0]-max(cell.ds,0.0)),1e-3);} //no contact below the lowest base minus ds
     Cg=max(max(Cg,sec),1e-9*cell.C);
     //explicit mode (no interface iteration) and the last update possible before the interface freezes (iterations or
-    //update budget): the boundary MODFLOW keeps may not drain more than the column's free water over the step whatever
-    //the head does (down to the cell bottom), as the river and store exchanges are limited. The limit wins over the
-    //secant floor for water rising into the soil: with q < 0 a head falling below Hg reverses the linear boundary, and
-    //the floor let it drain columns that held no free water (water created). The cost: such a boundary
-    //can let more water rise than the contact allows (it fills the column and overflows; no water is created), and
-    //keeps extracting when the head falls below every base. MODFLOW needs iterations to settle on that: with fewer
-    //than 5 solves left (a very low outer-iteration limit) the floor is kept, as before.
-    //(Iterated, the converged flow is the local solve's, which respects both; the limit would only make the slope
-    //too small. Limiting a boundary MODFLOW already iterates on, after the fact, left MODFLOW unconverged.)
+    //update budget): the boundary MODFLOW keeps may not take more from the column than it holds, whatever the head does.
+    //Where the soil drains to the aquifer (q >= 0) the slope is limited so that the flow never exceeds the column's free
+    //water over the step down to the cell bottom, as the river and store exchanges are limited. Where water rises into
+    //the soil (q < 0) a linear boundary would reverse when the head falls below Hg and drain columns without free water
+    //(water created), and a slope small enough to prevent that pumps water up from below the contact
+    //: the line is given to MODFLOW as a drain instead (SZSetArrays), which stops at Hg, and the secant
+    //floor keeps Hg at or above the end of the contact.
+    //(Iterated, the converged flow is the local solve's, which respects both limits.)
+    _szxOne[e]=0;
     if (!steady && ((_szMaxIter==0) || (SZFreezeAt()<1) || _szCapUpd)){
       double avail=gwsz::StackFreeWater(_szLay[k],phi)/MM_PER_METER*a/tstep;           //[m3/d]
       double bot=_botm[UserNode(0,L.ic)];
-      Cg=min(Cg,max(avail-q,0.0)/max(h-bot,1e-3));
-      if ((q<0.0) && !_szCapWins){Cg=max(Cg,sec);}
-      Cg=max(Cg,1e-9*cell.C);
+      double cap=max(avail-q,0.0)/max(h-bot,1e-3);
+      if (q>=0.0){Cg=max(min(Cg,cap),1e-9*cell.C);}
+      else if (Cg>cap){ //only where the line could take more than the column holds: one-sided, if at least 10 MODFLOW
+                        //solves follow; with fewer MODFLOW did not settle on the changed boundary, and the line stays,
+                        //as limited as the secant floor allows (a reversal can then still overdraw)
+        if (_szOneOK){_szxOne[e]=1;}
+        else {Cg=max(cap,sec);}
+      }
     }
     _szxFc[e]=F; _szxQc[e]=q; _szxCg[e]=Cg;
   }
@@ -480,18 +485,32 @@ void CGroundwaterModel::SZSetArrays(const bool steady)
   //MODFLOW refuses a GHB head below the cell bottom: there the head is raised to the bottom and SZQ_RAVEN (a rate)
   //carries Cg (Hg - bottom), which leaves the boundary q = Cg (Hg - h) unchanged for every h. Hg - h = q/Cg, so at a
   //converged interface the flow MODFLOW books is exactly the flow of the local solve (a Robin interface condition).
-  int st=max(_szxNcol,1),sq=max(_szqNcol,1);
+  //A boundary MODFLOW keeps where water rises into the soil (_szxOne) is the same line as a drain (SZD_RAVEN): it stops
+  //at Hg instead of turning into flow from the soil. Its onset is smoothed (MODFLOW's DDRN) over half the distance to
+  //Hg, at most the link's smoothing depth (the flow at the head of linearization is then the line's), and at least a
+  //quarter of it (MODFLOW's Newton iteration converges badly on a sharper kink).
+  int st=max(_szxNcol,1),sq=max(_szqNcol,1),sd=max(_szdNcol,1);
   for (size_t e=0;e<_szxLink.size();e++){
     const gw_link &L=_aLinks[_szxLink[e]];
     double h=_X[_reduced[TopNode(L.ic)]];
     double bot=_botm[UserNode(0,L.ic)]+1e-3;                                    //[m] margin: MODFLOW reads the bottom rounded
     double Cg=_szxCg[e];
+    _szdElev[e*sd]=_top[L.ic]; _szdCond[e*sd]=0.0; _szdAux[e]=0.0;
     if (Cg<=1e-6*_szxC[e]){ //exchange (nearly) independent of the head: a rate (no GHB head far outside the cell)
       _szxHead[e*st]=bot; _szxCond[e*st]=0.0; _szqQ[e*sq]=_szxQc[e]; continue;
     }
     double Hg=h+_szxQc[e]/Cg;
     double H=max(Hg,bot);
-    _szxHead[e*st]=H; _szxCond[e*st]=Cg; _szqQ[e*sq]=Cg*(Hg-H);
+    if (_szxOne[e] && (_szxQc[e]<0.0)){ //(a drain level below the cell bottom: the line is steepened to stop at the bottom,
+                                        //not continued by a fixed rate that would pump the dried cell; at most to the link
+                                        //conductance, then the flow at h is less than the line's)
+      if (Hg<bot){Cg=min(-_szxQc[e]/max(h-bot,1e-6),max(Cg,_szxC[e])); H=bot;}
+      _szxHead[e*st]=bot; _szxCond[e*st]=0.0; _szqQ[e*sq]=0.0;
+      _szdElev[e*sd]=H; _szdCond[e*sd]=Cg; _szdAux[e]=max(max(min(_szxCell[e].ds,0.5*(h-H)),0.25*_szxCell[e].ds),1e-3);
+      continue;
+    }
+    _szxHead[e*st]=H; _szxCond[e*st]=Cg;
+    _szqQ[e*sq]=Cg*(Hg-H);
   }
   if (steady){return;}
   SZRecharge(_szTstep,true);
@@ -536,12 +555,12 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   if (!mf6conv && (iter>nEarly)){return false;}                               //let MODFLOW converge first
   //state MODFLOW just solved with: kept if this update shows the interface has converged, so that MODFLOW's budget
   //(computed from the arrays it solved with) and the flows Raven books stay exactly consistent
-  vector<double> F0(_linkF),hc0(_szxHc),lam0(_szxLam),q0(_szxQc),cg0(_szxCg),rej0(_szxRej),srej0(_szRej),fc0(_szxFc);
+  vector<double> F0(_linkF),hc0(_szxHc),lam0(_szxLam),q0(_szxQc),cg0(_szxCg),rej0(_szxRej),srej0(_szRej),fc0(_szxFc); vector<char> one0(_szxOne);
   SZLinkFractions(true,mf6conv);
   if (!steady){SZRecharge(_szTstep,false);}
   _szCapUpd=(iter==freezeAt) || (_szExtra>=_szMaxIter); //the last update possible (iterations or budget): its boundary stays,
                                                         //supply-limited as in explicit mode
-  _szCapWins=(_maxiter-iter>=5);
+  _szOneOK=(_maxiter-iter>=10);
   SZLocalSolves(_szTstep,steady);
   _szCapUpd=false;
   //total exchange of the updated interface at the current heads (into the aquifer) [m3/d] (the boundary MODFLOW gets
@@ -556,7 +575,7 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   prevQ=Q; _szIter++; _szConv=conv; (void)iter;
   if (conv || last){ //keep what MODFLOW solved with (the update changed it by less than the tolerances, or no solve follows:
                      //the step's flows must be those of the arrays of MODFLOW's last solve)
-    _linkF=F0; _szxHc=hc0; _szxLam=lam0; _szxQc=q0; _szxCg=cg0; _szxRej=rej0; _szRej=srej0; _szxFc=fc0;
+    _linkF=F0; _szxHc=hc0; _szxLam=lam0; _szxQc=q0; _szxCg=cg0; _szxRej=rej0; _szRej=srej0; _szxFc=fc0; _szxOne=one0;
     if (!steady){SZRecharge(_szTstep,false);} //_Qcol of those fractions
   }
   else {SZSetArrays(steady);}
