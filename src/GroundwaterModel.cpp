@@ -1570,8 +1570,8 @@ string CGroundwaterModel::MF6LibraryHelp() const
            "environment variable, then";
   vector<string> c=CMF6Engine::LibraryCandidates();
   for (size_t i=0;i<c.size();i++){s+=" "+c[i]+((i+1<c.size())?",":";");}
-  s+=" then "+CMF6Engine::DefaultLibraryName()+" on the system library path. Download it with get_mf6.py of the Raven-MF6 "
-     "repository (https://github.com/rarabzad/Raven-MF6), or from https://github.com/MODFLOW-ORG/modflow6/releases "
+  s+=" then "+CMF6Engine::DefaultLibraryName()+" on the system library path. Download it with get_mf6.py of the RavenHydroFramework-extra "
+     "repository (https://github.com/rarabzad/RavenHydroFramework-extra), or from https://github.com/MODFLOW-ORG/modflow6/releases "
      "(the library is in the bin folder of the release zip), and put it next to the Raven executable";
   return s;
 }
