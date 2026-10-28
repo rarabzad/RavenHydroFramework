@@ -455,7 +455,7 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     //linearization error of the explicit mode; it creates no water.)
     //(Iterated, the converged flow is the local solve's, which respects both; the limit would only make the slope
     //too small.)
-    if (!steady && ((_szMaxIter==0) || _szCapUpd)){
+    if (!steady && ((_szMaxIter==0) || (SZFreezeAt()<1) || _szCapUpd)){
       double avail=gwsz::StackFreeWater(_szLay[k],phi)/MM_PER_METER*a/tstep;           //[m3/d]
       double bot=_botm[UserNode(0,L.ic)];
       Cg=min(Cg,max(avail-q,0.0)/max(h-bot,1e-3));
@@ -512,16 +512,25 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   //budget counts the updates made after MODFLOW had converged; when it is used up the values are frozen.
   const int nEarly=min(5,max(1,_maxiter/5));
   if (_szMaxIter==0){return true;}                                            //explicit: the predictor only
-  //the last outer iterations are left to MODFLOW on the boundary it has: an update just before the limit would leave
-  //MODFLOW's final solve unconverged, and its residual would be water created or lost
-  const int freezeAt=_maxiter-max(1,min(max(2,_maxiter/10),_maxiter-1));
-  if (iter>freezeAt){ //(iteration 1 always updates when there is a second)
-    if ((_szIter==0) && (_szMaxIter>0)){_szConv=false;} //no update at all this step: not iterated
+  //the last outer iterations (a tenth, at least 2) are left to MODFLOW on the boundary it has: an update just before
+  //the limit would leave MODFLOW's final solve unconverged, and its residual would be water created or lost. When the
+  //interface freezes unconverged (this, or the update budget used up), the boundary it keeps is made supply-limited
+  //once, as in explicit mode, if the last update's was not
+  const int freezeAt=SZFreezeAt();
+  bool frozen=(iter>freezeAt);
+  if (!frozen && !(!mf6conv && (iter>nEarly))){if (mf6conv){_szExtra++;} frozen=(_szExtra>_szMaxIter);}
+  if (frozen){
+    if (_szIter==0){_szConv=false; return true;}                              //no update at all this step: not iterated
+    if (!_szConv && !_szCapped && (iter<_maxiter)){
+      SZLinkFractions(true,mf6conv);
+      if (!steady){SZRecharge(_szTstep,false);}
+      _szCapUpd=true; SZLocalSolves(_szTstep,steady); _szCapUpd=false;
+      SZSetArrays(steady); _szCapped=true;
+      return false;                                                           //MODFLOW solves again on the limited boundary
+    }
     return true;
   }
   if (!mf6conv && (iter>nEarly)){return false;}                               //let MODFLOW converge first
-  if (mf6conv){_szExtra++;}
-  if (_szExtra>_szMaxIter){return true;}
   //state MODFLOW just solved with: kept if this update shows the interface has converged, so that MODFLOW's budget
   //(computed from the arrays it solved with) and the flows Raven books stay exactly consistent
   vector<double> F0(_linkF),hc0(_szxHc),lam0(_szxLam),q0(_szxQc),cg0(_szxCg),rej0(_szxRej),srej0(_szRej),fc0(_szxFc);
@@ -529,7 +538,7 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   if (!steady){SZRecharge(_szTstep,false);}
   _szCapUpd=(iter==freezeAt);                         //the boundary of the last update stays: supply-limit it as in explicit mode
   SZLocalSolves(_szTstep,steady);
-  _szCapUpd=false;
+  _szCapped=_szCapUpd; _szCapUpd=false;
   //total exchange of the updated interface at the current heads (into the aquifer) [m3/d] (the boundary MODFLOW gets
   //reproduces it at these heads, whatever Cg)
   double Q=0.0,G=0.0,sC=0.0;

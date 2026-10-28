@@ -67,7 +67,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szCapped=false;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
 }
 CGroundwaterModel::~CGroundwaterModel()
@@ -95,7 +95,7 @@ void CGroundwaterModel::ResetState()
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szCapped=false;
 }
 void CGroundwaterModel::Reinitialize(const optStruct &Options)
 {
@@ -1787,7 +1787,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       _szSyncOvf[k]=ovf/MM_PER_METER*_pModel->GetHydroUnit(k)->GetArea()*M2_PER_KM2;
     }
     _szColInit=true;
-    _szTstep=tstep; _szResid=0.0; _szIter=0; _szConv=true; _szExtra=0;
+    _szTstep=tstep; _szResid=0.0; _szIter=0; _szConv=true; _szExtra=0; _szCapped=false;
   }
   //-- 1. Raven recharge -> column flows [m3/d], mass-conservative per HRU
   std::fill(_Qcol.begin(),_Qcol.end(),0.0);
@@ -2101,7 +2101,7 @@ void CGroundwaterModel::RunSteadyState()
   vector<double> x0; if (_X!=NULL){x0.assign(_X,_X+nx);}
   bool conv; int niter;
   if (_szxLink.size()>0){ //soil zone not yet active: SZX acts as a drain at each link's base (no soil water, no supply)
-    SZLinkFractions(false); SZLocalSolves(1.0,true); SZSetArrays(true); _szPrevQ=HUGE_VAL; _szExtra=0; _szIter=0;
+    SZLinkFractions(false); SZLocalSolves(1.0,true); SZSetArrays(true); _szPrevQ=HUGE_VAL; _szExtra=0; _szIter=0; _szCapped=false;
     std::function<bool(int,bool)> cb=[this](int it,bool c){return SZIterate(NULL,it,c,true,_szPrevQ,it>=_maxiter);};
     if (!_mf6.SolveTimeStep(_maxiter,conv,niter,NULL,0.0,0,NULL,cb)){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
   }
