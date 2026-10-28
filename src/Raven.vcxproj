@@ -744,6 +744,9 @@
     <ClCompile Include="GWExternal.cpp" />
     <ClCompile Include="GWSoilZone.cpp" />
     <ClCompile Include="GWSoilZoneModel.cpp" />
+    <ClCompile Include="GWSoilZoneStep.cpp" />
+    <ClCompile Include="GWVadose.cpp" />
+    <ClCompile Include="GWVadoseModel.cpp" />
     <ClCompile Include="MF6Engine.cpp" />
     <ClCompile Include="HeatConduction.cpp" />
     <ClCompile Include="HRUGroups.cpp" />
@@ -990,6 +993,7 @@
     <ClInclude Include="GWGeometry.h" />
     <ClInclude Include="GWGrid.h" />
     <ClInclude Include="GWSoilZone.h" />
+    <ClInclude Include="GWVadose.h" />
     <ClInclude Include="GWUtil.h" />
     <ClInclude Include="MF6Engine.h" />
     <ClInclude Include="IceFlow.h" />

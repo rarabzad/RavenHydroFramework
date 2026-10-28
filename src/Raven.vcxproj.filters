@@ -357,6 +357,15 @@
     <ClCompile Include="GWSoilZoneModel.cpp">
       <Filter>Source Files\Groundwater</Filter>
     </ClCompile>
+    <ClCompile Include="GWSoilZoneStep.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
+    <ClCompile Include="GWVadose.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
+    <ClCompile Include="GWVadoseModel.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
     <ClCompile Include="MF6Engine.cpp">
       <Filter>Source Files\Groundwater</Filter>
     </ClCompile>
@@ -663,6 +672,9 @@
       <Filter>Header Files\Groundwater</Filter>
     </ClInclude>
     <ClInclude Include="GWSoilZone.h">
+      <Filter>Header Files\Groundwater</Filter>
+    </ClInclude>
+    <ClInclude Include="GWVadose.h">
       <Filter>Header Files\Groundwater</Filter>
     </ClInclude>
     <ClInclude Include="GWUtil.h">

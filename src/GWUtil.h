@@ -49,10 +49,10 @@ namespace gwutil
   }
   /// writes a MODFLOW 6 array; 3-D arrays (nlay>1) in LAYERED form. MODFLOW reads one grid row per
   /// record, so every row must start on a new line (wrapped at 10 values within the row)
-  template <class T> void WriteArray(std::ofstream &OUT,const std::string &name,const std::vector<T> &v,const int ncol,const int nlay=1,const char *fac="1.0")
+  template <class T> void WriteArray(std::ofstream &OUT,const std::string &name,const std::vector<T> &v,const int ncol,const int nlay=1,const char *fac="1.0",const int prec=10)
   {
     size_t n=v.size()/nlay;
-    OUT<<"  "<<name<<((nlay>1)?"  LAYERED":"")<<std::endl<<std::setprecision(10);
+    OUT<<"  "<<name<<((nlay>1)?"  LAYERED":"")<<std::endl<<std::setprecision(prec);
     for (int l=0;l<nlay;l++){
       OUT<<"    INTERNAL FACTOR "<<fac<<std::endl;
       for (size_t i=0;i<n;i++){

@@ -19,6 +19,7 @@
 #include "GWGrid.h"
 #include "MF6Engine.h"
 #include "GWSoilZone.h"
+#include "GWVadose.h"
 #include <fstream>
 
 class CModel;
@@ -63,7 +64,10 @@ struct gw_aquifer_class
   double Kv;        ///< vertical hydraulic conductivity [m/d]
   double Ss;        ///< specific storage [1/m]
   double Sy;        ///< specific yield [-]
-  double porosity;  ///< total porosity [-] (transport, reporting)
+  double porosity;  ///< total porosity [-] (transport, reporting; saturated content of the unsaturated column)
+  double clapp_b;   ///< Campbell exponent of the unsaturated column [-] (:SoilZoneVadose RICHARDS)
+  double psia;      ///< air-entry suction of the unsaturated column [m]
+  bool   unsatGiven;///< CLAPP_B and AIR_ENTRY_PRESSURE were given
 };
 
 struct gw_layer
@@ -129,6 +133,7 @@ private:/*----------------------------------------------------*/
   int    _disType;
   //-- existing MODFLOW 6 model (see GWExternal.cpp)
   struct gw_ext_pkg { string ftype,fname,pname; };
+  vector<double> _extKv,_extSy;   ///< existing model: vertical conductivity [m/d] and specific yield of every user node (soil zone)
   struct gw_ow      { long long hru; int cell; double w; };  ///< :OverlapWeights row: HRU ID, cell (1..NCPL), A_overlap/A_cell
   string _extSim,_extModel,_extGridFile,_extGridID,_extStart;   ///< .rvg inputs
   string _streamPkg,_streamMap,_streamAux;                      ///< stream package, mapping (AUX or DOMINANT_HRU), aux name
@@ -208,6 +213,7 @@ private:/*----------------------------------------------------*/
   //-- reservoir <-> aquifer (Raven reservoirs with :SeepageParameters on coupled lake HRUs)
   bool                   _resExchange;
   vector<int>            _resP;      ///< per coupled reservoir: subbasin index
+  vector<double>         _resZbot;   ///< per coupled reservoir: lowest aquifer bottom under its lake [m] (stage check in the first step)
   vector<int>            _resNode,_resR; vector<double> _resW; ///< per RES entry: cell, reservoir, weight
   double                *_resQ,*_resHcof,*_resRhs; int _resNcol;
   double                 _Qres_spec,_Qres,_resPendingVol; ///< [m3/d] seepage sent, delivered; [m3] seepage awaiting delivery
@@ -342,6 +348,99 @@ private:/*----------------------------------------------------*/
   vector<double>         _szW;           ///< per HRU: soil-zone water after the step [mm]
   double                 _szRatioMin,_szRatioMax; ///< range of S_y(top layer)/drainable porosity(bottom soil layer)
   ofstream               _SZOUT;
+  //-- soil zone (docs/design/soil_zone_columns_plan.md) --
+  int                    _vzMode;        ///< 0 none (the basic soil zone), 1 RICHARDS: unsaturated column between the soil-zone base and the water table
+  double                 _vzAcc;         ///< largest content change of a column in one substep [-]
+  int                    _vzN;           ///< nodes of a column at most
+  int                    _szCapRise;     ///< capillary rise into the soil zone: -1 default (on with RICHARDS), 0 off, 1 on
+  int                    _szTiming;      ///< 0 AFTER (the basic soil zone: the exchange after Raven's processes), 1 LAGGED (default: last step's exchange as a source)
+  int                    _szClasses;     ///< column classes per HRU for Raven's processes (1: the HRU mean)
+  vector<vector<int> >   _szCls;         ///< per HRU: class of each of its columns this step (empty: one class)
+  vector<vector<double> > _szClsW;       ///< per HRU: area weight of each class (sum 1)
+  vector<vector<double> > _szClsPhi;     ///< per HRU: class mean soil water at the start of the step [mm], c*n+j (j bottom up)
+  vector<vector<double> > _szClsRes;     ///< per HRU: class soil water after Raven's processes [mm], c*n+j
+  vector<vector<double> > _szClsGW;      ///< per HRU: class GROUNDWATER pass-through (recharge) after the processes [mm over the class]
+  vector<char>           _szClsDone;     ///< per HRU: class results recorded this step
+  vector<double>         _szxQprev;      ///< per SZX entry: last step's booked exchange [m3/d] (the LAGGED source; hotstart)
+  vector<double>         _szxLagL;       ///< per SZX entry: lagged source given to the column before Raven's processes [mm over the column]
+  vector<double>         _szxLagD;       ///< per SZX entry: part of the lagged source not taken back at the sync, applied in SZApply [mm]
+  vector<double>         _szLagNet;      ///< per HRU: water the lagged source and its reversal left in Raven's soil zone [m3]
+  vector<double>         _szxDebt;       ///< per SZX entry: lagged source Raven's processes used that the step's exchange did not supply [m3], repaid by the aquifer
+  vector<double>         _szxRepay;      ///< per SZX entry: repayment of _szxDebt this step [m3/d] (a fixed rate out of the aquifer through SZQ_RAVEN)
+  double                 _szDebtVol;     ///< new debt this step [m3]
+  double                 _szRepayQ;      ///< repayment this step, all links [m3/d]
+  map<long long,map<int,double> > _hotLag; ///< hotstart :GWSoilZoneLag: HRU ID -> cell (1-based) -> last step's exchange [m3/d]
+  map<long long,map<int,double> > _hotDebt; ///< hotstart :GWSoilZoneLag: HRU ID -> cell (1-based) -> outstanding debt [m3]
+  void   SZClassify     ();                                     ///< column classes of every soil-zone HRU for this step
+  void   SZLagApply     (double **aPhinew,double **aPhi,const double &tstep);  ///< LAGGED: last step's exchange to the columns and Raven's soil zone
+  void   SZLagReverse   (const int k);                          ///< LAGGED: takes the source back out of the columns after the sync
+  void   SZRepayRates   (const double &tstep);                  ///< LAGGED: the aquifer's repayment of the debt this step
+  //columns over specified-head cells (soil_zone_columns_plan.md section 5): the exchange with the fixed head is the local
+  //solve's, booked against the specified head (no MODFLOW boundary)
+  vector<int>            _szcLink;       ///< per CHD entry: link
+  vector<int>            _szcCol;        ///< per CHD entry: its column
+  vector<gwsz::sz_cell>  _szcCell;       ///< per CHD entry: sub-grid closure
+  vector<double>         _szcRej;        ///< per CHD entry: rejected recharge this step [m3]
+  vector<double>         _szcFw;         ///< per CHD entry: recharge share (the column's loss to recharge) [m3]
+  vector<double>         _szcQ;          ///< per CHD entry: exchange into the specified head this step [m3/d]
+  vector<double>         _szcCapL;       ///< per CHD entry and layer: capillary rise from the specified head [m3/d], e*n+j
+  vector<vector<int> >   _szcOfHRU;      ///< per HRU: its CHD entries
+  vector<int>            _linkSzc;       ///< per link: CHD entry or -1
+  double SZChdExchange  (const int k,const int c,const gwsz::sz_cell &cell,const double rejV,const double h,const double &tstep,const double D=0.0) const;
+  double                 _QszCHD_in;     ///< soil zone to specified heads this step [m3/d]
+  double                 _QszCHD_out;    ///< specified heads to soil zone this step [m3/d] (contact and capillary rise)
+  double                 _szRchCHD;      ///< recharge of soil-zone columns onto specified heads this step [m3/d]
+  double                 _QrchCHD0;      ///< recharge onto specified heads of HRUs without a soil zone [m3/d]
+  void   SZCHDSolves    (const double &tstep);                  ///< local solves of the columns over specified heads
+  double VZRchW         (const int k,double &Aall) const;       ///< sum of the recharge shares of HRU k's columns; Aall its links' area
+  double SZCellKv       (const int ic) const;                   ///< vertical conductivity of a column's top active cell [m/d]
+  double SZCellSy       (const int ic) const;                   ///< specific yield of a column's top active cell [-]
+  double SZNodeSy       (const int n) const;                    ///< specific yield of a cell (user node) [-]
+  void   SZUpNodes      ();                                     ///< _szxUp from the heads of the last step
+  const gwvz::vz_mat *VZGapMat(const int e) const;              ///< aquifer material just below the soil-zone base of SZX entry e (:SoilZoneVadose), else NULL
+  double SZRiseLayers   (const int k,const int c,const double zb,const double zs,const double s1,const double a,const double Ae,
+                         const double Sy,const double tstep,double *QL,double *psisLow,const gwvz::vz_mat *gap=NULL) const; ///< capillary rise into the soil-zone layers [m3/d]
+  double SZSyncClasses  (const int k,const double *target,const double R,vector<double> &lossR); ///< sync class by class
+  bool                   _szClsWarned;   ///< warned that classes need ORDERED_SERIES
+  string                 _szExtClass;    ///< :SoilZoneAquiferClass (existing models: retention of the cells for the unsaturated columns)
+  vector<gwvz::vz_column> _vzCol;        ///< per SZX entry: unsaturated column
+  vector<gwvz::vz_strat>  _vzStrat;      ///< per SZX entry: materials by elevation
+  vector<char>           _vzUse;         ///< per SZX entry: the column carried this step's recharge
+  vector<double>         _vzQ;           ///< per SZX entry: recharge to the aquifer from the column this step [m3/d] (bottom flux)
+  vector<double>         _vzAbsQ;        ///< per SZX entry: water a rising water table took from the column, given to the aquifer this step [m3/d]
+  vector<double>         _vzRejV;        ///< per SZX entry: inflow the saturated column top could not take [m3]
+  vector<double>         _vzFp;          ///< per SZX entry: saturated fraction the column's inflow used this step
+  vector<double>         _vzInV,_vzCapV; ///< per SZX entry: inflow [m3] and capillary rise into the soil zone [m3] this step
+  long                   _vzSlowed;       ///< steps in which a column's bottom followed a rising water table more slowly (released at most Sy dh)
+  vector<double>         _vzCapL;        ///< per SZX entry and soil-zone layer (bottom up, e*n+j): its fraction of _vzCapV
+  vector<double>         _szxCapQ;       ///< per SZX entry: capillary rise from the water table into the soil zone this step [m3/d] (a fixed rate taken through SZQ_RAVEN)
+  vector<int>            _szwStart;      ///< SZW_RAVEN: entries of SZX entry e are _szwStart[e].._szwStart[e+1]-1 (the active cells below its top cell)
+  vector<int>            _szwNode;       ///< SZW_RAVEN: user node of each entry
+  double                *_szwQ;          ///< SZW_RAVEN rates (MODFLOW's array; NULL without the package)
+  int                    _szwNcol;       ///< stride of _szwQ (0: Q array, 1: BOUND)
+  vector<int>            _szxUp;         ///< per SZX entry this step: the cell upward flows come from (its top cell; a lower wet cell when the top cell is dry, through SZW_RAVEN; -1 none)
+  vector<char>           _szxUpCHD;      ///< per SZX entry this step: _szxUp is a specified-head cell (the head supplies the rise; no well there)
+  mutable int           *_ibPtr;         ///< MODFLOW's IBOUND (reduced nodes), fetched on first use
+  bool   NodeCHD        (const int n);                          ///< user node n is a specified head now (IBOUND < 0)
+  bool                   _farWarned;     ///< the warning about heads far outside the model was written
+  bool                   _mf6Newton;     ///< the MODFLOW model uses NEWTON (generated models always; existing ones as their name file says)
+  vector<double>         _szxUpF;        ///< per SZX entry this step: scale of the upward flows out of _szxUp (1; less when that cell is within max(5 %, 5 cm) of drying)
+  vector<double>         _vzUpA;         ///< per SZX entry: water a falling water table's new column nodes took from a lower cell this step [m3/d] (through SZW_RAVEN)
+  double SZUpCap        (const int e,const double &tstep);      ///< most an upward flow may take out of SZX entry e's source cell this step [m3/d]
+  vector<double>         _vzUp;          ///< per SZX entry: upward flow from a lower wet cell into the unsaturated column this step [m3/d] (through SZW_RAVEN)
+  double                 _vzUpQ;         ///< all of _vzUp [m3/d] (MODFLOW recharge, negative)
+  vector<double>         _szxCapL;       ///< per SZX entry and soil-zone layer (bottom up, e*n+j): its share of _szxCapQ [m3/d]
+  double                 _szCapWT;       ///< capillary rise from the water table, all links [m3/d]
+  void   SZCapRiseWT    (const double &tstep);                ///< capillary rise from the water table where there is no unsaturated column
+  bool   SZCapOn        () const {return (_szCapRise==1) || ((_szCapRise<0) && (_vzMode>0));}
+  double                 _vzInVol,_vzOutVol,_vzCapVol,_vzStoreVol,_vzStore0; ///< step totals [m3] and storage above the reference [m3]
+  long long              _vzSub,_vzNewton; ///< substeps and Newton iterations of the columns (summary)
+  map<long long,map<int,vector<double> > > _hotVz; ///< from .rvc :GWVadoseColumns: by HRU ID and cell: zbot, contents
+  void   VZSetup        ();                                    ///< materials of every exchange column (after SZBuildEntries)
+  void   VZInit         ();                                    ///< columns from the initial heads or the hotstart
+  void   VZStep         (const double &tstep);                 ///< the columns over the step (predictor heads), capillary rise
+  double VZLinkShare    (const int k,const int li) const;      ///< link li's share of HRU k's recharge (as SZRecharge)
+  double VZStorage      () const;                              ///< water above the reference contents in all columns [m3]
   bool   SZPhysical() const {return _szMode==1;}
   void   SZSetup        ();                                    ///< after HRUs are known: layers, thickness, checks
   void   SZBuildEntries ();                                    ///< after links: SZX entries, conductances, bases
@@ -349,7 +448,7 @@ private:/*----------------------------------------------------*/
   void   SZLinkFractions(const bool relax,const bool mf6conv=true); ///< _szxHc and _linkF from the current heads (hc iterated inside the step)
   void   SZRecharge     (const double &tstep,const bool write);///< _Qcol, _szRej, _szxRej from _szRchV and _linkF (write: RCH array too)
   void   SZLocalSolves  (const double &tstep,const bool steady);///< _szxLam, _szxQc, _szxCg per exchange column
-  int    SZNCols        (const int k) const {return (int)_szxOfHRU[k].size()+1;}
+  int    SZNCols        (const int k) const {return (int)_szxOfHRU[k].size()+((k<(int)_szcOfHRU.size())?(int)_szcOfHRU[k].size():0)+1;}
   int    SZFreezeAt     () const {return (_maxiter>=2)?max(1,_maxiter-max(2,_maxiter/10)):0;} ///< last outer iteration after which the interface may be updated (<1: predictor only)
   double SZSyncColumns  (const int k,const double *target,const double R=0.0,vector<double> *lossR=NULL); ///< columns of HRU k to its soil-zone water target[j] [mm] (R: recharge out of the bottom layer [mm], lossR: each column's part); returns the overflow [mm over the HRU]
   vector<int> SZColumnCells(const int k) const;               ///< cell of each column of HRU k (column number of the grid, 1-based; 0 = rest)
@@ -475,10 +574,17 @@ public:/*-------------------------------------------------------*/
   void   SetFlowCorrection    (const string &s)        {_flowCorr=s;}
   void   SetLayerConnection   (const bool byElevation) {_connectByElevation=byElevation;}
   void   SetSoilZone          (const bool physical,const int nlayers){_szMode=physical?1:0; _szNLayers=nlayers;   //the last :SoilZone counts
-                                  size_t p; while ((p=_genOnly.find(" :SoilZone"))!=string::npos){_genOnly.erase(p,10);} if (physical){_genOnly+=" :SoilZone";}}
+                                  size_t p; while ((p=_genOnly.find(" :SoilZone"))!=string::npos){_genOnly.erase(p,10);}}  //(available with existing models too)
   void   SetSoilZoneIteration (const int maxit,const double tolh,const double tolq){_szMaxIter=maxit;_szTolH=tolh;_szTolQ=tolq;}
   void   SetSoilZoneSubgrid   (const int n){_szSubgrid=n;}
   void   SetSoilZoneOutput    (const string &group){_szOutGroup=group;}
+  void   SetSoilZoneVadose    (const int mode,const double acc,const int n){_vzMode=mode; if (acc>0){_vzAcc=acc;} if (n>0){_vzN=n;}}
+  void   SetSoilZoneCapillaryRise(const int on){_szCapRise=on;}
+  void   SetSoilZoneTiming    (const int t){_szTiming=t;}
+  void   SetSoilZoneClasses   (const int k){_szClasses=k;}
+  void   SetSoilZoneAquiferClass(const string &c){_szExtClass=c;}
+  void   SetHotstartSoilZoneLag(const long long hru,const int cell,const double q,const double debt){_hotLag[hru][cell]=q; _hotDebt[hru][cell]=debt;}
+  void   SetHotstartVadose    (const long long hru,const int cell,const vector<double> &v){if (cell<=0){return;} _hotVz[hru][cell]=v;}
   bool   UsesPhysicalSoilZone () const {return _szMode==1;}
   void   NoteSoilClassWithoutKsat(const void *soil,const string &tag){_szNoKsat[soil]=tag;}
   void   SetHotstartHeads     (const int nlay,const int nrow,const int ncol,const vector<double> &h)
@@ -487,6 +593,11 @@ public:/*-------------------------------------------------------*/
   //-- run-time ------------------------------------------------------
   void   Initialize           (const optStruct &Options);
   void   Exchange             (double **aPhinew,const double &tstep,const optStruct &Options,const time_struct &tt);
+  void   SZStepBegin          (double **aPhinew,double **aPhi,const double &tstep,const optStruct &Options); ///< before Raven's processes (:SoilZone PHYSICAL)
+  int    SZClassCount         (const int k) const {return ((k<(int)_szCls.size()) && !_szCls[k].empty())?(int)_szClsW[k].size():1;}
+  double SZClassWeight        (const int k,const int c) const {return _szClsW[k][c];}
+  void   SZClassSoil          (const int k,const int c,double *aPhi) const;   ///< class c's soil water into a state vector
+  void   SZClassResult        (const int k,const int c,const double *aPhi);   ///< class c's state after Raven's processes
   void   ApplyRiverExchange   (double *aRouted,const double &tstep);
   double TakeRiverLossFromInflow(const int p,const double &Qin,const double &tstep); ///< returns reduced upstream inflow [m3/s]
   void   FinishBudgetLine     ();

@@ -188,14 +188,32 @@ namespace gwsz
     if (ghi<0.0){dV=hi; overflow=-ghi; return lhi;}  //root beyond full: the column fills and the rest overflows
     if (glo>0.0){dV=lo; return llo;}                  //cannot drain more than the free water (not reached: q<=0 at lambda=0,
                                                       //as every sample's level is then its base, at or below its aquifer side)
-    for (int it=0;it<200;it++){                       //bisection: robust on the piecewise-smooth g; ~1e-13 relative
-      double mid=0.5*(lo+hi);
-      if ((mid<=lo) || (mid>=hi)){break;}
-      double g=mid+c*SubgridFlux(s,LambdaAfter(L,phiStar,mid,work),h,hc,F,qh,qc,ql);
-      if (g>0.0){hi=mid;} else {lo=mid;}
-      if (hi-lo<=1e-13*std::max(1.0,std::fabs(mid))){break;}
+    //Brent's method on the bracket [lo,hi] (g(lo)<=0<=g(hi)): inverse quadratic / secant steps on the smooth pieces of
+    //g, bisection whenever they would leave the bracket or converge too slowly; about 6-10 evaluations instead of the
+    //50 of a plain bisection, to the same ~1e-13 relative tolerance (result-neutral speed-up, soil zone §7)
+    {
+      double a=lo,b=hi,fa=glo,fb=ghi;
+      if (fa==0.0){b=a; fb=fa;}
+      double cc=a,fc=fa,d=b-a,e=d;
+      for (int it=0;(it<200) && (fb!=0.0);it++){
+        if ((fb>0.0)==(fc>0.0)){cc=a; fc=fa; d=b-a; e=d;}
+        if (std::fabs(fc)<std::fabs(fb)){a=b; b=cc; cc=a; fa=fb; fb=fc; fc=fa;}
+        const double tol=0.5e-13*std::max(1.0,std::fabs(b)),m=0.5*(cc-b);
+        if ((std::fabs(m)<=tol) || (fb==0.0)){break;}
+        if ((std::fabs(e)>=tol) && (std::fabs(fa)>std::fabs(fb))){
+          double s0=fb/fa,p,q;
+          if (a==cc){p=2.0*m*s0; q=1.0-s0;}
+          else {double q0=fa/fc,r=fb/fc; p=s0*(2.0*m*q0*(q0-r)-(b-a)*(r-1.0)); q=(q0-1.0)*(r-1.0)*(s0-1.0);}
+          if (p>0.0){q=-q;} else {p=-p;}
+          if (2.0*p<std::min(3.0*m*q-std::fabs(tol*q),std::fabs(e*q))){e=d; d=p/q;} else {d=m; e=m;}
+        }
+        else {d=m; e=m;}
+        a=b; fa=fb;
+        b+=(std::fabs(d)>tol)?d:((m>0.0)?tol:-tol);
+        fb=b+c*SubgridFlux(s,LambdaAfter(L,phiStar,b,work),h,hc,F,qh,qc,ql);
+      }
+      dV=std::min(std::max(b,lo),hi);
     }
-    dV=0.5*(lo+hi);
     dlam_dV=LambdaSlope(L,phiStar,dV);
     return LambdaAfter(L,phiStar,dV,work);
   }

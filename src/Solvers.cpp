@@ -193,11 +193,54 @@ void MassEnergyBalance( CModel            *pModel,
     }
   }
 
+  // :SoilZone PHYSICAL: lagged exchange source and column classes, before the processes
+  if ((pGWModel!=NULL) && (Options.modeltype==MODELTYPE_COUPLED)){pGWModel->SZStepBegin(aPhinew,aPhi,tstep,Options);}
+
   //=================================================================
   //==Standard (in series) approach==================================
   // -order is critical!
   if (Options.sol_method==ORDERED_SERIES)
   {
+    //the HRU's process sequence on the state vector phi; with acc (the column classes of :SoilZone PHYSICAL) each
+    //connection's flow is this run's own while it runs and its weight-wt share is added to acc and the totals
+    auto ordered=[&](const int kk,CHydroUnit *pH,double *phi,const double wt,vector<double> *acc){
+      int qq=0;
+      for(int jj=0;jj<nProcesses;jj++)
+      {
+        nConnections=0;
+        if(pModel->ApplyProcess(jj,phi,pH,Options,tt,iFrom,iTo,nConnections,rates_of_change)) //note phi is newest state variable vector
+        {
+          for(int q2=0;q2<nConnections;q2++)//each process may have multiple connections
+          {
+            sv_type typ=pModel->GetStateVarType(iFrom[q2]);
+            if(iTo[q2]!=iFrom[q2]) {
+              phi[iFrom[q2]]-=rates_of_change[q2]*tstep;//mass/energy balance maintained
+              phi[iTo  [q2]]+=rates_of_change[q2]*tstep;//change is an exchange of energy or mass, which must be preserved
+            }
+            else if (CStateVariable::IsWaterStorage(typ) && (typ!=CONVOLUTION) && (typ!=CONV_STOR)){ //or IsWaterStorage(typ,false)
+              rates_of_change[q2]=0.0;
+              phi[iTo  [q2]]+=0.0; //likely from redirect - water moves back to itself
+            }
+            else {
+              phi[iTo  [q2]]+=rates_of_change[q2]*tstep;//for state vars that are not storage compartments
+            }
+            if (acc){pModel->ClassBalance(qq,kk,rates_of_change[q2]*tstep,wt); if ((int)acc->size()<=qq){acc->resize(qq+1,0.0);} (*acc)[qq]+=wt*rates_of_change[q2]*tstep;}
+            else    {pModel->IncrementBalance(qq,kk,rates_of_change[q2]*tstep);}   //this is only this easy for Euler/Ordered!
+            qq++;
+          }//end for q=0 to nConnections
+        }// end if (pModel->ApplyProcess
+        else
+        {
+          for(int q2=0;q2<nConnections;q2++)
+          {
+            if (acc){pModel->ClassBalance(qq,kk,0.0,wt); if ((int)acc->size()<=qq){acc->resize(qq+1,0.0);}}
+            else    {pModel->IncrementBalance(qq,kk,0.0);}
+            qq++;
+          }
+        }
+      }//end for j=0 to nProcesses
+    };
+    vector<double> phiC,phiAcc,flowAcc;
     for (k=0;k<nHRUs;k++)
     {
       pHRU=pModel->GetHydroUnit(k);
@@ -205,39 +248,22 @@ void MassEnergyBalance( CModel            *pModel,
 
       if(pHRU->IsEnabled())
       {
-        qs=0;
-        for(j=0;j<nProcesses;j++)
-        {
-          nConnections=0;
-          if(pModel->ApplyProcess(j,aPhinew[k],pHRU,Options,tt,iFrom,iTo,nConnections,rates_of_change)) //note aPhinew is newest state variable vector
-          {
-            for(q=0;q<nConnections;q++)//each process may have multiple connections
-            {
-              sv_type typ=pModel->GetStateVarType(iFrom[q]);
-              if(iTo[q]!=iFrom[q]) {
-                aPhinew[k][iFrom[q]]-=rates_of_change[q]*tstep;//mass/energy balance maintained
-                aPhinew[k][iTo  [q]]+=rates_of_change[q]*tstep;//change is an exchange of energy or mass, which must be preserved
-              }
-              else if (CStateVariable::IsWaterStorage(typ) && (typ!=CONVOLUTION) && (typ!=CONV_STOR)){ //or IsWaterStorage(typ,false)
-                rates_of_change[q]=0.0;
-                aPhinew[k][iTo  [q]]+=0.0; //likely from redirect - water moves back to itself
-              }
-              else {
-                aPhinew[k][iTo  [q]]+=rates_of_change[q]*tstep;//for state vars that are not storage compartments
-              }
-              pModel->IncrementBalance(qs,k,rates_of_change[q]*tstep);   //this is only this easy for Euler/Ordered!
-              qs++;
-            }//end for q=0 to nConnections
-          }// end if (pModel->ApplyProcess
-          else
-          {
-            for(q=0;q<nConnections;q++)
-            {
-              pModel->IncrementBalance(qs,k,0.0);
-              qs++;
-            }
+        int nCls=((pGWModel!=NULL) && (Options.modeltype==MODELTYPE_COUPLED))?pGWModel->SZClassCount(k):1;
+        if (nCls<=1){ordered(k,pHRU,aPhinew[k],1.0,NULL);}
+        else { //:SoilZoneClasses: the sequence once per column class, with the class's soil water; the HRU's state is the
+               //area-weighted mean of the class results
+          phiAcc.assign(NS,0.0); flowAcc.clear();
+          for (int c=0;c<nCls;c++){
+            const double wc=pGWModel->SZClassWeight(k,c);
+            phiC.assign(aPhinew[k],aPhinew[k]+NS);
+            pGWModel->SZClassSoil(k,c,&phiC[0]);
+            ordered(k,pHRU,&phiC[0],wc,&flowAcc);
+            pGWModel->SZClassResult(k,c,&phiC[0]);
+            for (i=0;i<NS;i++){phiAcc[i]+=wc*phiC[i];}
           }
-        }//end for j=0 to nProcesses
+          for (i=0;i<NS;i++){aPhinew[k][i]=phiAcc[i];}
+          for (int q2=0;q2<(int)flowAcc.size();q2++){pModel->SetFlowBalance(q2,k,flowAcc[q2]);}
+        }
       }
       pModel->ApplyLocalParamOverrrides(k, true);
     }//end for k=0 to nHRUs

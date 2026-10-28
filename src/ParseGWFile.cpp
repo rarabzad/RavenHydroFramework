@@ -256,6 +256,40 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
       if (Len<2){GWImproperFormat(s,Options);}
       else {int n=s_to_i(s[1]); ExitGracefullyIf((n<1) || (n>20),":SoilZoneSubgrid: samples per cell side must be 1 to 20",BAD_DATA); pGW->SetSoilZoneSubgrid(n); szOpts+=" :SoilZoneSubgrid";}
     }
+    else if (!strcmp(s[0],":SoilZoneVadose"))
+    {/*:SoilZoneVadose NONE | RICHARDS {accuracy} {nodes}  (default NONE: recharge reaches the water table in the step)
+       RICHARDS: an unsaturated column (Richards equation) between the soil-zone base and the water table delays and
+       stores recharge; accuracy = largest content change in a substep (default 0.02), nodes per column (default 16) */
+      if ((Len<2) || (strcmp(s[1],"NONE") && strcmp(s[1],"RICHARDS"))){GWImproperFormat(s,Options);}
+      else {
+        double acc=(Len>=3)?s_to_d(s[2]):0.0; int n=(Len>=4)?s_to_i(s[3]):0;
+        ExitGracefullyIf((Len>=3) && !((acc>0.0) && (acc<=0.2)),":SoilZoneVadose: accuracy (largest content change in a substep) must lie in (0, 0.2]",BAD_DATA);
+        ExitGracefullyIf((Len>=4) && ((n<3) || (n>200)),":SoilZoneVadose: nodes per column must be 3 to 200",BAD_DATA);
+        pGW->SetSoilZoneVadose(strcmp(s[1],"RICHARDS")?0:1,acc,n); szOpts+=" :SoilZoneVadose";
+      }
+    }
+    else if (!strcmp(s[0],":SoilZoneCapillaryRise"))
+    {/*:SoilZoneCapillaryRise ON | OFF  (default ON with :SoilZoneVadose RICHARDS, else OFF) */
+      if ((Len<2) || (strcmp(s[1],"ON") && strcmp(s[1],"OFF"))){GWImproperFormat(s,Options);}
+      else {pGW->SetSoilZoneCapillaryRise(strcmp(s[1],"ON")?0:1); szOpts+=" :SoilZoneCapillaryRise";}
+    }
+    else if (!strcmp(s[0],":SoilZoneExchangeTiming"))
+    {/*:SoilZoneExchangeTiming AFTER | LAGGED  (default LAGGED: the last step's exchange is a source before Raven's
+       processes and only its change follows; AFTER: the exchange follows the processes, as in the basic soil zone) */
+      if ((Len<2) || (strcmp(s[1],"AFTER") && strcmp(s[1],"LAGGED"))){GWImproperFormat(s,Options);}
+      else {pGW->SetSoilZoneTiming(strcmp(s[1],"LAGGED")?0:1); szOpts+=" :SoilZoneExchangeTiming";}
+    }
+    else if (!strcmp(s[0],":SoilZoneClasses"))
+    {/*:SoilZoneClasses K  (default 1: Raven's processes act on the HRU's mean soil water; K > 1: on up to K classes of
+       its soil-zone columns, grouped by wetness) */
+      if (Len<2){GWImproperFormat(s,Options);}
+      else {int K=s_to_i(s[1]); ExitGracefullyIf((K<1) || (K>50),":SoilZoneClasses: 1 to 50 classes",BAD_DATA); pGW->SetSoilZoneClasses(K); szOpts+=" :SoilZoneClasses";}
+    }
+    else if (!strcmp(s[0],":SoilZoneAquiferClass"))
+    {/*:SoilZoneAquiferClass [aquifer class]  (an existing model: CLAPP_B, AIR_ENTRY_PRESSURE and POROSITY of its cells for
+       the unsaturated columns; their conductivity and specific yield come from the model) */
+      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetSoilZoneAquiferClass(s[1]); szOpts+=" :SoilZoneAquiferClass";}
+    }
     else if (!strcmp(s[0],":SoilZoneOutput"))
     {/*:SoilZoneOutput [HRU group]  (HRUs written to GWSoilExchange.csv; default all soil-zone HRUs) */
       if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetSoilZoneOutput(s[1]); szOpts+=" :SoilZoneOutput";}
