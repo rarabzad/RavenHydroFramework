@@ -395,6 +395,8 @@ private:/*----------------------------------------------------*/
   double VZRchW         (const int k,double &Aall) const;       ///< sum of the recharge shares of HRU k's columns; Aall its links' area
   double SZCellKv       (const int ic) const;                   ///< vertical conductivity of a column's top active cell [m/d]
   double SZCellSy       (const int ic) const;                   ///< specific yield of a column's top active cell [-]
+  double SZRiseLayers   (const int k,const int c,const double zb,const double zs,const double s1,const double a,const double Ae,
+                         const double Sy,const double tstep,double *QL,double *psisLow) const; ///< capillary rise into the soil-zone layers [m3/d]
   double SZSyncClasses  (const int k,const double *target,const double R,vector<double> &lossR); ///< sync class by class
   bool                   _szClsWarned;   ///< warned that classes need ORDERED_SERIES
   string                 _szExtClass;    ///< :SoilZoneAquiferClass (existing models: retention of the cells for the unsaturated columns)
@@ -406,6 +408,7 @@ private:/*----------------------------------------------------*/
   vector<double>         _vzRejV;        ///< per SZX entry: inflow the saturated column top could not take [m3]
   vector<double>         _vzFp;          ///< per SZX entry: saturated fraction the column's inflow used this step
   vector<double>         _vzInV,_vzCapV; ///< per SZX entry: inflow [m3] and capillary rise into the soil zone [m3] this step
+  vector<double>         _vzCapL;        ///< per SZX entry and soil-zone layer (bottom up, e*n+j): its fraction of _vzCapV
   vector<double>         _szxCapQ;       ///< per SZX entry: capillary rise from the water table into the soil zone this step [m3/d] (a fixed rate taken through SZQ_RAVEN)
   vector<double>         _szxCapL;       ///< per SZX entry and soil-zone layer (bottom up, e*n+j): its share of _szxCapQ [m3/d]
   double                 _szCapWT;       ///< capillary rise from the water table, all links [m3/d]

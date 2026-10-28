@@ -20,7 +20,7 @@ void CGroundwaterModel::VZSetup()
   const size_t ne=_szxLink.size();
   _vzCol.assign(ne,gwvz::vz_column()); _vzStrat.assign(ne,gwvz::vz_strat());
   _vzUse.assign(ne,0); _vzQ.assign(ne,0.0); _vzAbsQ.assign(ne,0.0); _vzRejV.assign(ne,0.0); _vzFp.assign(ne,0.0);
-  _vzInV.assign(ne,0.0); _vzCapV.assign(ne,0.0);
+  _vzInV.assign(ne,0.0); _vzCapV.assign(ne,0.0); _vzCapL.assign(ne*_szNLayers,0.0);
   gwvz::SetAccuracy(_vzAcc);
   vector<char> warned(_aClasses.size(),0); string noUnsat="";
   for (size_t e=0;e<ne;e++){
@@ -128,15 +128,16 @@ void CGroundwaterModel::VZStep(const double &tstep)
   const int n=_szNLayers;
   const bool cap=(_szCapRise==1) || ((_szCapRise<0) && (_vzMode>0));
   _vzInVol=_vzOutVol=_vzCapVol=0.0;
+  vector<double> QL(max(n,1),0.0),QW(max(n,1),0.0);
   for (size_t i=0;i<_aqHRUs.size();i++)
   {
     int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
     const soil_struct *sp=_pModel->GetHydroUnit(k)->GetSoilProps(_szNLayers-1);   //the bottom soil-zone layer's soil
-    const gwsz::sz_layer &Lb=_szLay[k][0];
     for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){
       const int e=_szxOfHRU[k][jj],li=_szxLink[e],c=_szxCol[e]; const gw_link &L=_aLinks[li];
       const double a=_szColA[c];
       _vzUse[e]=0; _vzQ[e]=0.0; _vzAbsQ[e]=0.0; _vzRejV[e]=0.0; _vzInV[e]=0.0; _vzCapV[e]=0.0;
+      for (int j=0;j<n;j++){_vzCapL[e*n+j]=0.0;}
       if (!(a>0.0) || _colCHDTop[L.ic]){continue;}                              //(a specified head this step: its recharge goes there)
       gwvz::vz_column &col=_vzCol[e]; const gwvz::vz_strat &S=_vzStrat[e];
       const double h=_X[_reduced[TopNode(L.ic)]]*_hf,zb=_szxZb[e],Lmin=VZ_LMIN;
@@ -155,20 +156,29 @@ void CGroundwaterModel::VZStep(const double &tstep)
       const double share=VZLinkShare(k,li),F=_linkF[li];
       const double P=_szRchV[k]*share*(1.0-F);                                  //[m3] over the step
       _vzFp[e]=F; _vzInV[e]=P;
-      //capillary rise into the bottom soil-zone layer: the steady upward flux from the column's top node to the layer's
-      //middle at its Campbell suction (Raven's AIR_ENTRY_PRESSURE, CLAPP_B, HYDRAUL_COND of that soil)
+      //capillary rise into the soil zone (SZRiseLayers, as from the water table where there is no column): the steady
+      //upward flux from the column's top node (its suction) into every layer below field capacity, on the unsaturated
+      //share. Per step at most the larger of the top node's water down to the suction of the lowest receiving layer and
+      //what the water table itself could supply with its drawdown: as the column shortens the top node empties and the
+      //rise becomes the water table's (the two meet at the shortest column, no jump), and what the column cannot pass
+      //on within the step comes back as an unmet upward demand below
       double R=0.0;
       if (cap && (sp!=NULL)){
-        const double phi=_szColPhi[c*n+0];
-        const double Ssat=min(max(phi/max(Lb.phimax,1e-12),0.01),1.0),bs=max(sp->clapp_b,0.1),psia=max(sp->air_entry_pressure,0.0)/MM_PER_METER;
-        const double psis=psia*pow(Ssat,-bs);                                    //[m]
-        if (phi<Lb.phifc){R=gwvz::CapRise(col,max(sp->hydraul_cond,0.0)/MM_PER_METER,psia,bs,psis,0.5*Lb.H);}
-        if (R>0.0){
+        double psL=0.0;
+        const double Ae=a*(1.0-min(max(F,0.0),1.0));
+        const double Qc=SZRiseLayers(k,c,zb,col.zc[0],max(-col.psi[0],0.0),a,Ae,0.0,tstep,&QL[0],&psL);
+        if (Qc>0.0){
+          const double bot0=_botm[TopNode(L.ic)],top0=_top[L.ic];
+          const double Qw=(h<bot0+max(0.05*(top0-bot0),0.05))?0.0:                //(as SZCapRiseWT: none out of a (nearly) dry cell)
+                          SZRiseLayers(k,c,zb,h,0.0,a,Ae,max(SZCellSy(L.ic),0.01),tstep,&QW[0],NULL);
           const gwvz::vz_mat &m0=S.mat[col.im[0]];
-          double room=max(Lb.phifc-phi,0.0)/MM_PER_METER;                       //[m] the layer's deficit to field capacity
-          double avail=max(col.th[0]-gwvz::Theta(m0,-min(psis,1e5)),0.0)*col.dz[0]; //[m] the top node down to the soil's suction
-          R=min(R,min(room,avail)/tstep);
-          _vzCapV[e]=R*tstep*a; _vzCapVol+=_vzCapV[e];                           //(added to the layer in SZApply, after the columns' sync)
+          const double avail=max(col.th[0]-gwvz::Theta(m0,-min(psL,1e5)),0.0)*col.dz[0]*a; //[m3] the top node down to the lowest layer's suction
+          const double Q=min(Qc,max(avail/tstep,Qw));                            //[m3/d]
+          if (Q>0.0){
+            R=Q/a;                                                               //[m/d] out of the column's top
+            _vzCapV[e]=Q*tstep; _vzCapVol+=_vzCapV[e];                           //(added to the layers in SZApply, after the columns' sync)
+            for (int j=0;j<n;j++){_vzCapL[e*n+j]=QL[j]/Qc;}
+          }
         }
       }
       double rej=0.0; gwvz::vz_step_info inf;
@@ -196,9 +206,10 @@ void CGroundwaterModel::VZStep(const double &tstep)
 ///  upward flux (gwvz::Rise) from the water table d below the layer's middle to the layer's suction psi_s (its CLAPP_B,
 ///  AIR_ENTRY_PRESSURE, HYDRAUL_COND; none when psi_s <= d, hydrostatic or wetter), on the unsaturated share of the
 ///  column, at most the layer's deficit to field capacity; all layers together at most the largest steady rise to the
-///  lowest of them (psi_s infinite: the water reaching the upper layers passes through it). With
-///  the heads of the last step, a fixed rate for the step: taken from the aquifer through SZQ_RAVEN (SZSetArrays) and
-///  added to the layers in SZApply.
+///  lowest of them (psi_s infinite: the water reaching the upper layers passes through it). Implicit in the drawdown it
+///  causes (SZRiseLayers): the rate at the end-of-step water table, lowered by the risen volume over Sy and the share's
+///  area. With the heads of the last step otherwise, a fixed rate for the step: taken from the aquifer through
+///  SZQ_RAVEN (SZSetArrays) and added to the layers in SZApply.
 //
 void CGroundwaterModel::SZCapRiseWT(const double &tstep)
 {
@@ -208,7 +219,6 @@ void CGroundwaterModel::SZCapRiseWT(const double &tstep)
   for (size_t i=0;i<_aqHRUs.size();i++)
   {
     int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
-    const CHydroUnit *pHRU=_pModel->GetHydroUnit(k);
     const int nx=(int)_szxOfHRU[k].size(),nch=(int)_szcOfHRU[k].size();
     for (int jj=0;jj<nx+nch;jj++){                                              //(exchange columns, then those over specified heads,
       const bool sc=(jj>=nx);                                                    // whose rise the specified head supplies)
@@ -222,24 +232,75 @@ void CGroundwaterModel::SZCapRiseWT(const double &tstep)
       if (!ch && (h<bot+max(0.05*(top-bot),0.05))){continue;}                   //(MODFLOW reduces a rate taken near the cell bottom)
       vector<double> &CL=sc?_szcCapL:_szxCapL;
       const double F=min(max(_linkF[li],0.0),1.0); if (F>=1.0){continue;}
-      double z=sc?SZBase(L.k,L.ic):_szxZb[e],Qmax=-1.0,Qs=0.0;
-      for (int j=0;j<n;j++){
-        const gwsz::sz_layer &Lj=_szLay[k][j]; const double phi=_szColPhi[c*n+j];
-        const double zm=z+0.5*Lj.H; z+=Lj.H;
-        if ((zm<=h) || (phi>=Lj.phifc)){continue;}                               //(below the water table, or wet enough)
-        const soil_struct *sp=pHRU->GetSoilProps(n-1-j);
-        if (sp==NULL){continue;}
-        const double bs=max(sp->clapp_b,0.1),psia=max(sp->air_entry_pressure,0.0)/MM_PER_METER,Ks=max(sp->hydraul_cond,0.0)/MM_PER_METER;
-        const double d=zm-h,Ssat=min(max(phi/max(Lj.phimax,1e-12),0.01),1.0);
-        const double psis=psia*pow(Ssat,-bs);                                    //[m] the layer's suction
-        if (Qmax<0.0){Qmax=gwvz::Rise(Ks,psia,bs,d,-1.0)*a*(1.0-F);}             //[m3/d] the largest rise to the lowest layer that takes water
-        if (!(psis>d)){continue;}                                                //(at or wetter than hydrostatic: no rise)
-        double Q=min(gwvz::Rise(Ks,psia,bs,d,psis)*a*(1.0-F),(Lj.phifc-phi)/MM_PER_METER*a/tstep);
-        if (Q>0.0){CL[e*n+j]=Q; Qs+=Q;}
-      }
+      const double z0=sc?SZBase(L.k,L.ic):_szxZb[e];
+      const double Sy=ch?0.0:max(SZCellSy(L.ic),0.01);                         //(a specified head does not draw down)
+      const double Qs=SZRiseLayers(k,c,z0,h,0.0,a,a*(1.0-F),Sy,tstep,&CL[e*n],NULL);
       if (!(Qs>0.0)){continue;}
-      if (Qs>Qmax){const double r=Qmax/Qs; for (int j=0;j<n;j++){CL[e*n+j]*=r;} Qs=Qmax;}
       if (!ch){_szxCapQ[e]=Qs; _szCapWT+=Qs;}
     }
   }
+}
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+/// \brief capillary rise into the soil-zone layers of column c (HRU k, soil-zone base zb) from a source at elevation zs
+///  with suction s1 (the water table: s1 = 0; a column's top node: its suction): into every layer below field capacity
+///  whose middle is above zs, the exact steady upward flux over the distance from zs to the layer's middle up to the
+///  layer's suction (gwvz::RiseBetween; none when hydrostatic or wetter), on the area Ae, at most the layer's deficit to
+///  field capacity over the column area a; all layers together at most the rise to the lowest of them with an infinitely
+///  dry top. With Sy > 0 the source is the water table and the rate is implicit in its drawdown: Q = T(Q dt/(Sy Ae)),
+///  the rate with the water table lowered by the risen volume over the share's area (no lateral resupply: the bound of
+///  a local column, stable for every step length; the explicit rate overshoots, e.g. 0.1 m of rise and 0.7 m of
+///  drawdown in one day). QL gets each layer's rate [m3/d]; psisLow the suction of the lowest receiving layer [m].
+//
+double CGroundwaterModel::SZRiseLayers(const int k,const int c,const double zb,const double zs,const double s1,const double a,
+                                       const double Ae,const double Sy,const double tstep,double *QL,double *psisLow) const
+{
+  const int n=_szNLayers; const CHydroUnit *pHRU=_pModel->GetHydroUnit(k);
+  vector<double> d0(n,-1.0),Ks(n,0.0),pa(n,0.0),bs(n,1.0),ps(n,0.0),room(n,0.0); int jl=-1;
+  double z=zb;
+  for (int j=0;j<n;j++){
+    QL[j]=0.0; d0[j]=-1.0;
+    const gwsz::sz_layer &Lj=_szLay[k][j]; const double phi=_szColPhi[c*n+j];
+    const double zm=z+0.5*Lj.H; z+=Lj.H;
+    if ((zm<=zs) || (phi>=Lj.phifc)){continue;}                                  //(below the source, or wet enough)
+    const soil_struct *sp=pHRU->GetSoilProps(n-1-j);
+    if (sp==NULL){continue;}
+    bs[j]=max(sp->clapp_b,0.1); pa[j]=max(sp->air_entry_pressure,0.0)/MM_PER_METER; Ks[j]=max(sp->hydraul_cond,0.0)/MM_PER_METER;
+    if (!(Ks[j]>0.0) || !(pa[j]>0.0)){continue;}
+    const double Ssat=min(max(phi/max(Lj.phimax,1e-12),0.01),1.0);
+    ps[j]=pa[j]*pow(Ssat,-bs[j]); d0[j]=zm-zs; room[j]=(Lj.phifc-phi)/MM_PER_METER*a/tstep;
+    if (jl<0){jl=j;}
+  }
+  if (psisLow!=NULL){*psisLow=(jl>=0)?ps[jl]:0.0;}
+  if ((jl<0) || !(Ae>0.0)){return 0.0;}
+  auto T=[&](const double D,const bool fill)->double{                            //all layers' rate with the source lowered by D
+    double Qs=0.0;
+    for (int j=jl;j<n;j++){
+      if (d0[j]<0.0){continue;}
+      const double Q=min(gwvz::RiseBetween(Ks[j],pa[j],bs[j],d0[j]+D,s1,ps[j])*Ae,room[j]);
+      if (fill){QL[j]=Q;} Qs+=Q;
+    }
+    if (!(Qs>0.0)){return 0.0;}
+    const double Qmax=gwvz::RiseBetween(Ks[jl],pa[jl],bs[jl],d0[jl]+D,s1,-1.0)*Ae;
+    if (Qs>Qmax){if (fill){for (int j=jl;j<n;j++){QL[j]*=Qmax/Qs;}} Qs=Qmax;}
+    return Qs;
+  };
+  const double T0=T(0.0,false);
+  if (!(T0>0.0)){return 0.0;}
+  if (!(Sy>0.0)){return T(0.0,true);}
+  //implicit in the drawdown: g(Q) = Q - T(Q dt/(Sy Ae)) increases from -T0 (Q = 0) to >= 0 (Q = T0); Illinois
+  const double w=tstep/(Sy*Ae);
+  double lo=0.0,hi=T0,glo=-T0,ghi=T0-T(T0*w,false);
+  if (ghi<=0.0){return T(0.0,true);}                                             //(no measurable drawdown)
+  int side=0;
+  for (int it=0;it<60;it++){
+    if (hi-lo<=1e-6*T0){break;}
+    const double Q=(lo*ghi-hi*glo)/(ghi-glo),g=Q-T(Q*w,false);
+    if (g>0.0){hi=Q; ghi=g; if (side==1){glo*=0.5;} side=1;}
+    else      {lo=Q; glo=g; if (side==-1){ghi*=0.5;} side=-1;}
+  }
+  const double Q=lo;                                                             //(the bracket's low side: never more than the root)
+  const double Tq=T(Q*w,true);
+  if (Tq>0.0){for (int j=jl;j<n;j++){QL[j]*=Q/Tq;}}
+  return Q;
 }

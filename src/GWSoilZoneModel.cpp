@@ -719,9 +719,12 @@ void CGroundwaterModel::SZApply(double **aPhinew,const double &tstep)
         dV+=D+shD;
         if (shD>0.0){const double v=shD/MM_PER_METER*a; _szxDebt[e]+=v; _szDebtVol+=v;}
       }
-      if ((_vzMode>0) && (e<(int)_vzCapV.size()) && (_vzCapV[e]>0.0)){             //capillary rise from the unsaturated column into the bottom layer
-        const double v=_vzCapV[e]/a*MM_PER_METER,add=min(v,max(_szLay[k][0].phimax-phi[0],0.0));
-        phi[0]+=add; ovf+=gwsz::Fill(_szLay[k],phi,v-add); dV+=v;
+      if ((_vzMode>0) && (e<(int)_vzCapV.size()) && (_vzCapV[e]>0.0)){             //capillary rise from the unsaturated column into its layers
+        for (int j=0;j<n;j++){
+          const double v=_vzCapV[e]*_vzCapL[e*n+j]/a*MM_PER_METER; if (!(v>0.0)){continue;}
+          const double add=min(v,max(_szLay[k][j].phimax-phi[j],0.0));
+          phi[j]+=add; ovf+=gwsz::Fill(_szLay[k],phi,v-add); dV+=v;
+        }
       }
       if ((e+1)*n<=(int)_szxCapL.size()){                                          //capillary rise from the water table into its layers
         for (int j=0;j<n;j++){

@@ -100,7 +100,7 @@ void CGroundwaterModel::ResetState()
   _szCls.clear(); _szClsW.clear(); _szClsPhi.clear(); _szClsRes.clear(); _szClsGW.clear(); _szClsDone.clear();
   _szcLink.clear(); _szcCol.clear(); _szcCell.clear(); _szcRej.clear(); _szcFw.clear(); _szcQ.clear(); _szcCapL.clear(); _szcOfHRU.clear(); _linkSzc.clear(); _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0;
   _szxQprev.clear(); _szxLagL.clear(); _szxLagD.clear(); _szLagNet.clear(); _szxDebt.clear(); _szxRepay.clear(); _szDebtVol=_szRepayQ=0.0;
-  _vzCol.clear(); _vzStrat.clear(); _vzUse.clear(); _vzQ.clear(); _vzAbsQ.clear(); _vzRejV.clear(); _vzFp.clear(); _vzInV.clear(); _vzCapV.clear();
+  _vzCol.clear(); _vzStrat.clear(); _vzUse.clear(); _vzQ.clear(); _vzAbsQ.clear(); _vzRejV.clear(); _vzFp.clear(); _vzInV.clear(); _vzCapV.clear(); _vzCapL.clear();
   _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
@@ -546,6 +546,16 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
     }
     for (map<int,vector<int> >::iterator it=bycol.begin();it!=bycol.end();it++){_swxCol.push_back(it->first); _swxX.push_back((int)x); _swxLinks.push_back(it->second);}
   }
+  //a reservoir's lake HRU must lie in its own subbasin: Raven sends the HRU's surface water to the reservoir of the HRU's
+  //subbasin, and there is none (Raven crashes in its first step, with or without groundwater)
+  for (int p=0;p<_pModel->GetNumSubBasins();p++){
+    const CReservoir *pRes=_pModel->GetSubBasin(p)->GetReservoir(); if (pRes==NULL){continue;}
+    const int k=pRes->GetHRUIndex(); if (k==DOESNT_EXIST){continue;}
+    const int pk=_pModel->GetHydroUnit(k)->GetSubBasinIndex();
+    ExitGracefullyIf((pk!=p) && (_pModel->GetSubBasin(pk)->GetReservoir()==NULL),("CGroundwaterModel: the lake HRU "+to_string(_pModel->GetHydroUnit(k)->GetHRUID())+
+      " of the reservoir in subbasin "+to_string(_pModel->GetSubBasin(p)->GetID())+" lies in subbasin "+to_string(_pModel->GetSubBasin(pk)->GetID())+
+      ", which has no reservoir: give the reservoir an :HRUID of its own subbasin").c_str(),BAD_DATA);
+  }
   //reservoirs: seepage of each Raven reservoir enters the top cells under its lake HRU (by overlap)
   if (_resExchange){
     for (int p=0;p<_pModel->GetNumSubBasins();p++){
@@ -568,11 +578,15 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
       for (size_t e=n0;e<_resNode.size();e++){
         int ic=_resNode[e]%_ncpl; for (int l=_nlay-1;l>=0;l--){int n=UserNode(l,ic); if (_idomain[n]>0){zbot=min(zbot,_botm[n]); break;}}
       }
-      //(Raven sets the reservoirs' initial stages after the groundwater model is built: here their dry stage, which
-      // is on the same datum, and again with the stage in the first step)
+      //(Raven sets the reservoirs' initial stages after the groundwater model is built, or in its first routing: here
+      // their dry stage, which is on the same datum, and again with the stage after the first step)
       ExitGracefullyIf((zbot<1e299) && (max(pRes->GetResStage(),pRes->GetDryStage())<zbot),("CGroundwaterModel: reservoir in subbasin "+nm+
         " has stages from "+to_string(pRes->GetDryStage())+" m, below the bottom of the aquifer under its lake ("+to_string(zbot)+
         " m): coupled reservoirs need absolute stages on the aquifer's datum (e.g. :AbsoluteCrestHeight)").c_str(),BAD_DATA);
+      if ((zbot<1e299) && (pRes->GetResStage()<zbot)){
+        WriteWarning("CGroundwaterModel: reservoir in subbasin "+nm+" starts at stage "+to_string(pRes->GetResStage())+" m, below the aquifer under its lake "
+                     "(no :InitialReservoirStage or :InitialReservoirFlow in the .rvc file): Raven's first step fills it, a jump in Raven's water balance",false);
+      }
       _resP.push_back(p); _resZbot.push_back(zbot);
     }
   }
@@ -1899,7 +1913,8 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   }
   SetBoundaryArrays(tt.model_time,tstep);
   //reservoirs: seepage Raven computed during the previous step's routing enters the aquifer now (one-step lag)
-  if (_stepCount==1){
+  if (_stepCount==2){ //(the stage Raven's first routing set: with no initial flow in the .rvc file the stage is 0 until
+                      // then, and nothing before that routing depends on it)
     for (size_t r=0;r<_resP.size();r++){
       CReservoir *pRes=_pModel->GetSubBasin(_resP[r])->GetReservoir(); const double zbot=(r<_resZbot.size())?_resZbot[r]:1e300;
       ExitGracefullyIf((zbot<1e299) && (pRes->GetResStage()<zbot),("CGroundwaterModel: reservoir in subbasin "+to_string(_pModel->GetSubBasin(_resP[r])->GetID())+
