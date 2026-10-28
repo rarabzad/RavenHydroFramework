@@ -33,6 +33,7 @@ void  DeletePropArray       (int *indices,double **properties,int num_read);
 void  RVPParameterWarning   (string *aP, class_type *aPC, int &nP, CModel* pModel);
 void  CreateRVPTemplate     (string *aP, class_type *aPC, int &nP, const optStruct &Options);
 void  ImproperFormatWarning(string command,CParser *p,bool noisy);
+bool  GWFileUsesPhysicalSoilZone(const optStruct &Options); //ParseGWFile.cpp
 void  AddToMasterParamList   (string        *&aPm, class_type       *&aPCm, int       &nPm,
                               const string  *aP , const class_type *aPC , const int &nP);
 void  AddNewSoilClass       (CSoilClass **&pSoilClasses, soil_struct **&parsed_soils,
@@ -143,6 +144,14 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
   if (pModel->GetStateVarIndex(DEPRESSION) != DOESNT_EXIST){
     aP [0]="DEP_MAX"; aPC[0]=CLASS_LANDUSE;
     AddToMasterParamList(aPmaster, aPCmaster,nPmaster, aP, aPC, 1);
+  }
+  // Soil parameters of the soil-zone <-> groundwater coupling (:SoilZone PHYSICAL in the .rvg file)
+  //--------------------------------------------------------------------------
+  if (GWFileUsesPhysicalSoilZone(Options)){
+    aP[0]="HYDRAUL_COND";   aPC[0]=CLASS_SOIL;
+    aP[1]="POROSITY";       aPC[1]=CLASS_SOIL;
+    aP[2]="FIELD_CAPACITY"; aPC[2]=CLASS_SOIL;
+    AddToMasterParamList(aPmaster, aPCmaster,nPmaster, aP, aPC, 3);
   }
   //canopy handled in CmvPrecipitation::GetParticipatingParamList
   //Add parameters required for routing
@@ -1634,6 +1643,17 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
 
   for (int c=1;c<num_parsed_veg;c++){
     pVegClasses [c]->AutoCalculateVegetationProps  (*parsed_veg[c],  *parsed_veg[0]);
+  }
+  if (GWFileUsesPhysicalSoilZone(Options) && (pModel->GetGroundwaterModel()!=NULL)){
+    //the soil zone's conductance has no meaningful automatic value (Raven's is a placeholder): the soil-zone set-up stops
+    //if the bottom soil-zone layer of a coupled HRU has a class without HYDRAUL_COND (other classes do not need it)
+    for (int c=1;c<num_parsed_soils;c++){
+      double v=parsed_soils[c]->hydraul_cond;
+      if (v==USE_TEMPLATE_VALUE){v=parsed_soils[0]->hydraul_cond;}                     //not on the class's row: the [DEFAULT] value
+      if ((v==AUTO_COMPUTE) || (v==NOT_NEEDED_AUTO) || (v==NOT_SPECIFIED) || (v==NOT_NEEDED)){
+        pModel->GetGroundwaterModel()->NoteSoilClassWithoutKsat(pSoilClasses[c]->GetSoilStruct(),pSoilClasses[c]->GetTag());
+      }
+    }
   }
   for (int c=1;c<num_parsed_soils;c++){
     pSoilClasses[c]->AutoCalculateSoilProps        (*parsed_soils[c],*parsed_soils[0],pModel->GetTransportModel()->GetNumConstituents());

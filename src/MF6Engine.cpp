@@ -253,23 +253,30 @@ bool CMF6Engine::PrepareTimeStep(double dt)
   if (!g.ok()){_lasterr="cannot enter MODFLOW 6 folder "+_workdir; return false;}
   return Check(_prepare_time_step(&dt),"prepare_time_step");
 }
-/// Newton loop; convergence is always MODFLOW's own test (OUTER_DVCLOSE). Optionally (dvclose = MODFLOW's tolerance
-/// variable), a step not converged after relaxedAfter iterations continues with the tolerance raised to relaxedTol
-/// for the rest of that step only (*relaxed = true if it then converges); the tolerance is restored afterwards.
+/// Newton loop: the step ends when MODFLOW has converged (OUTER_DVCLOSE) and, with afterIter, the coupling iteration
+/// too. Optionally (dvclose = MODFLOW's tolerance variable), a step on which MODFLOW has not converged in relaxedAfter
+/// outer iterations (counting only iterations MODFLOW did not converge on, not those spent on the coupling) continues
+/// with the tolerance raised to relaxedTol for the rest of that step only (*relaxed = true if it then converges); the
+/// tolerance is restored afterwards.
 bool CMF6Engine::SolveTimeStep(int maxiter,bool &converged,int &niter,
-                               double *dvclose,double relaxedTol,int relaxedAfter,bool *relaxed)
+                               double *dvclose,double relaxedTol,int relaxedAfter,bool *relaxed,
+                               const std::function<bool(int,bool)> &afterIter)
 {
   CDGuard g(_workdir);
   if (!g.ok()){_lasterr="cannot enter MODFLOW 6 folder "+_workdir; return false;}
-  int sol=1,conv=0;
+  int sol=1,conv=0,nhard=0; bool isrelaxed=false;
   converged=false; niter=0; if (relaxed!=NULL){*relaxed=false;}
   bool tiered=(dvclose!=NULL) && (relaxedTol>0) && (relaxedAfter>0);
   double target=tiered?*dvclose:0.0;
   if (!Check(_prepare_solve(&sol),"prepare_solve")){return false;}
   for (niter=1;niter<=maxiter;niter++){
-    if (tiered && (niter==relaxedAfter+1)){*dvclose=relaxedTol;}
+    if (tiered && !isrelaxed && (nhard==relaxedAfter)){*dvclose=relaxedTol; isrelaxed=true;}
     if (!Check(_solve(&sol,&conv),"solve")){if (tiered){*dvclose=target;} return false;}
-    if (conv==1){converged=true; if (tiered && (niter>relaxedAfter) && (relaxed!=NULL)){*relaxed=true;} break;}
+    if (conv!=1){nhard++;}
+    bool cpl=true;
+    if (afterIter){cpl=afterIter(niter,conv==1);}
+    if ((conv==1) && cpl){converged=true; if (isrelaxed && (relaxed!=NULL)){*relaxed=true;} break;}
+    if (niter==maxiter){converged=(conv==1);} //coupling not converged at the limit: report MODFLOW's own state
   }
   if (tiered){*dvclose=target;}
   if (niter>maxiter){niter=maxiter;}

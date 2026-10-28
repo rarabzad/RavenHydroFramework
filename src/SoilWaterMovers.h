@@ -221,6 +221,7 @@ private:/*------------------------------------------------------*/
   perc_type type;        ///< Model of percolation selected
 
 public:/*-------------------------------------------------------*/
+  perc_type GetPercolationType() const {return type;} ///< (used by the groundwater coupling)
   //Constructors/destructors:
   CmvPercolation(perc_type p_type,
                  int       In_indices,                     //soil water storage

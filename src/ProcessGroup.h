@@ -54,6 +54,7 @@ public:/*-------------------------------------------------------*/
 
   //accessor functions
   int GetGroupSize() const;
+  CHydroProcessABC *GetSubProcess(const int i) const {return _pSubProcesses[i];} ///< (used by the groundwater coupling)
 
   //manipulator functions
   void AddProcess(CHydroProcessABC *pProc);

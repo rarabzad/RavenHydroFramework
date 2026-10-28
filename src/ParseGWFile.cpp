@@ -56,6 +56,25 @@ static void GWImproperFormat(char **s,const optStruct &Options)
 {
   ExitGracefully(("ParseGWFile: improper format of command "+string(s[0])+" in "+Options.rvg_filename).c_str(),BAD_DATA);
 }
+//////////////////////////////////////////////////////////////////
+/// \brief true if the .rvg file asks for :SoilZone PHYSICAL. Read ahead of the .rvp file: Raven discards soil
+///  parameters that no process needs, and the soil zone needs HYDRAUL_COND, POROSITY and FIELD_CAPACITY
+//
+bool GWFileUsesPhysicalSoilZone(const optStruct &Options)
+{
+  if ((Options.modeltype!=MODELTYPE_COUPLED) || (Options.rvg_filename=="")){return false;}
+  ifstream RVG(Options.rvg_filename.c_str());
+  if (RVG.fail()){return false;}
+  CParser *p=new CParser(RVG,Options.rvg_filename,0);
+  char *s[MAXINPUTITEMS]; int Len; bool found=false;
+  while (!p->Tokenize(s,Len)){                                    //as ParseGWFile: the last :SoilZone counts, :End stops
+    if ((Len>=1) && !strcmp(s[0],":End")){break;}
+    if ((Len>=2) && !strcmp(s[0],":SoilZone")){found=!strcmp(s[1],"PHYSICAL");}
+  }
+  delete p; RVG.close();
+  return found;
+}
+
 bool ParseGWFile(CModel*& pModel, const optStruct& Options)
 {
   ExitGracefullyIf(pModel==NULL,"ParseGWFile: model has not yet been created.",BAD_DATA);
@@ -74,6 +93,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     cout<<"============================================================="<<endl;
   }
 
+  string szOpts="";                                               //soil-zone options given (they need :SoilZone PHYSICAL)
   bool end_of_file=p->Tokenize(s,Len);
   while (!end_of_file)
   {
@@ -203,6 +223,43 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     {
       if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetLibraryPath(CorrectForRelativePath(s[1],Options.rvg_filename));}
     }
+    else if (!strcmp(s[0],":SoilZone"))
+    {/*:SoilZone CONCEPTUAL                      (default: soil and aquifer linked only by recharge and the seepage drain)
+       :SoilZone PHYSICAL SOIL[0] ... SOIL[M-1]   (the water table can rise into these soil layers; recharge must come
+                                                   from the bottom one, SOIL[M-1]; see the manual, "The soil zone") */
+      if ((Len<2) || (strcmp(s[1],"CONCEPTUAL") && strcmp(s[1],"PHYSICAL"))){GWImproperFormat(s,Options);}
+      else if (!strcmp(s[1],"CONCEPTUAL")){pGW->SetSoilZone(false,0);}
+      else {
+        int M=Len-2;
+        for (int j=0;j<M;j++){
+          string want="SOIL["+to_string(j)+"]";
+          ExitGracefullyIf(want!=string(s[2+j]),(":SoilZone PHYSICAL: list the soil-zone layers from the top, SOIL[0] SOIL[1] ...; found "+string(s[2+j])+" where "+want+" was expected").c_str(),BAD_DATA);
+        }
+        ExitGracefullyIf(M<1,":SoilZone PHYSICAL needs at least one soil layer (SOIL[0])",BAD_DATA);
+        pGW->SetSoilZone(true,M);
+      }
+    }
+    else if (!strcmp(s[0],":SoilZoneIteration"))
+    {/*:SoilZoneIteration [max updates] {head tolerance m} {flow tolerance -}  (default 100 1E-4 1E-6)
+       max updates: interface updates a step may add once MODFLOW itself has converged (0: no iteration, the explicit
+       predictor only); tolerances not given keep their defaults */
+      if (Len<2){GWImproperFormat(s,Options);}
+      else {
+        int n=s_to_i(s[1]); double th=(Len>=3)?s_to_d(s[2]):1e-4,tq=(Len>=4)?s_to_d(s[3]):1e-6;
+        szOpts+=" :SoilZoneIteration";
+        ExitGracefullyIf((n<0) || !(th>0) || !(tq>0),":SoilZoneIteration: max updates >= 0, tolerances > 0",BAD_DATA);
+        pGW->SetSoilZoneIteration(n,th,tq);
+      }
+    }
+    else if (!strcmp(s[0],":SoilZoneSubgrid"))
+    {/*:SoilZoneSubgrid [DEM samples per cell side]  (default 5; 1 = cell-mean land surface only) */
+      if (Len<2){GWImproperFormat(s,Options);}
+      else {int n=s_to_i(s[1]); ExitGracefullyIf((n<1) || (n>20),":SoilZoneSubgrid: samples per cell side must be 1 to 20",BAD_DATA); pGW->SetSoilZoneSubgrid(n); szOpts+=" :SoilZoneSubgrid";}
+    }
+    else if (!strcmp(s[0],":SoilZoneOutput"))
+    {/*:SoilZoneOutput [HRU group]  (HRUs written to GWSoilExchange.csv; default all soil-zone HRUs) */
+      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetSoilZoneOutput(s[1]); szOpts+=" :SoilZoneOutput";}
+    }
     else if (!strcmp(s[0],":SeepageReturnTo"))
     {
       if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetSeepageTarget(s[1]);}
@@ -313,5 +370,8 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
   }
   RVG.close();
   delete p;
+  if ((szOpts!="") && !pGW->UsesPhysicalSoilZone()){
+    WriteWarning("ParseGWFile:"+szOpts+" ignored: these apply only with :SoilZone PHYSICAL",Options.noisy);
+  }
   return true;
 }

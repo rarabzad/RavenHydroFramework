@@ -116,6 +116,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":GWRechargeStore"             )){code=52; }
     else if  (!strcmp(s[0],":GWReservoirSeepage"          )){code=53; }
     else if  (!strcmp(s[0],":GWRiverLossCarry"            )){code=54; }
+    else if  (!strcmp(s[0],":GWSoilZoneColumns"           )){code=55; }
     else if  (!strcmp(s[0],":EndHRUStateVariableTable"    )){code=-2; }
     else if  (!strcmp(s[0],":InitialConcentrationTable"   )){code=4; concname=s[1]; }
     else if  (!strcmp(s[0],":EndInitialConcentrationTable")){code=-2; }
@@ -148,6 +149,15 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":BasinStageHist"              )){code=16;}
     else if  (!strcmp(s[0],":BasinAreaHist"               )){code=17;}
 
+    if ((code>=50) && (code<=55) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
+      //groundwater state of a coupled run (e.g. its solution.rvc) in a run without :GroundwaterModel: not used
+      WriteWarning("ParseInitialConditionsFile: "+string(s[0])+" ignored (the model has no :GroundwaterModel MODFLOW6)",Options.noisy);
+      if (code>50){ //a block: skip to its own end line (:InitialGWHeads is a single line)
+        string endtag=":End"+string(s[0]+1);
+        while (!pp->Tokenize(s,Len)){if ((Len>=1) && (endtag==s[0])){break;}}
+      }
+      code=-2;
+    }
     switch(code)
     {
     case(-1):  //----------------------------------------------
@@ -947,6 +957,20 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWRechargeStore")){break;}
         if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRechargeStore(s_to_ll(s[0]),s_to_d(s[1]));}
+      }
+      break;
+    }
+    case(55):  //----------------------------------------------
+    {/*:GWSoilZoneColumns  {HRU ID, cell (grid column number, 0 = rest of the HRU), water of each soil-zone layer from the bottom up [mm]} x n
+       :EndGWSoilZoneColumns  (soil-zone columns of :SoilZone PHYSICAL, hotstart) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWSoilZoneColumns")){break;}
+        if (Len>=3){
+          ExitGracefullyIf(s_to_i(s[1])<0,"ParseInitialConditionsFile: :GWSoilZoneColumns: cell number must be 0 or more",BAD_DATA);
+          vector<double> phi; for (int i=2;i<Len;i++){phi.push_back(s_to_d(s[i]));}
+          pModel->GetGroundwaterModel()->SetHotstartSoilZoneColumn(s_to_ll(s[0]),s_to_i(s[1]),phi);
+        }
       }
       break;
     }

@@ -804,7 +804,8 @@ void CGroundwaterModel::ExtWritePackages(const optStruct &Options)
     for (size_t i=0;i<_bndCol.size();i++){
       int ic=_bndCol[i],n=TopNode(ic); const gw_profile &P=_aProfiles[_colProfile[ic]];
       double cond=P.seep_leakance*_extArea[ic]*_extLf*_extLf/_extTf; //[L2/T]
-      double d=min(P.seep_smooth_depth,_top[ic]-_botm[n]); //MODFLOW refuses a smoothing interval below the cell bottom
+      double d=min(P.seep_smooth_depth,max(_top[ic]-_botm[n]-1e-8*max(1.0,fabs(_top[ic])),0.0)); //MODFLOW refuses a smoothing interval below the
+                                                                                        //cell bottom (margin: rounding of the written values)
       F<<"  "<<CellID(n/_ncpl,ic)<<" "<<_extTopRaw[ic]<<" "<<cond<<" "<<-d*_extLf<<"\n";
     }
     F<<"END PERIOD\n"; F.close();
