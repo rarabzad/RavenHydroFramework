@@ -207,8 +207,12 @@ void CGroundwaterModel::VZStep(const double &tstep)
           const gwvz::vz_mat &m0=S.mat[col.im[0]];
           const double avail=max(col.th[0]-gwvz::Theta(m0,-min(psL,1e5)),0.0)*col.dz[0]*a; //[m3] the top node down to the lowest layer's suction
           const int up=_szxUp[e];                                                //(as SZCapRiseWT: from the cell holding the water table; only
-          const double Qw=((up<0) || (Qc<=avail/tstep))?0.0:                     // needed when the top node cannot give the rise)
-                          SZRiseLayers(k,c,zb,_X[_reduced[up]]*_hf,0.0,a,Ae,max(SZNodeSy(up),0.01),tstep,&QW[0],NULL,VZGapMat(e))*_szxUpF[e];
+          double Qw=0.0;                                                         // needed when the top node cannot give the rise)
+          if ((up>=0) && (Qc>avail/tstep)){
+            const double hu=_X[_reduced[up]]*_hf,Syu=_szxUpCHD[e]?0.0:max(SZNodeSy(up),0.01);
+            Qw=SZRiseLayers(k,c,zb,hu,0.0,a,Ae,Syu,tstep,&QW[0],NULL,VZGapMat(e));
+            if (!_szxUpCHD[e]){Qw=min(Qw*_szxUpF[e],0.5*Syu*a*max(hu-_botm[up],0.0)/tstep);} //(as SZCapRiseWT)
+          }
           const double Q=min(Qc,max(avail/tstep,Qw));                            //[m3/d]
           if (Q>0.0){
             R=Q/a;                                                               //[m/d] out of the column's top
@@ -220,18 +224,28 @@ void CGroundwaterModel::VZStep(const double &tstep)
       double rej=0.0; gwvz::vz_step_info inf;
       const bool noUp=(_szxUp[e]<0);                                            //(no cell holds any water table: no upward
       double qb=gwvz::Step(col,S,tstep,P/(a*tstep)-R,rej,&inf,noUp);             // flow, which MODFLOW could not supply)
-      if ((qb<0.0) && (noUp || (_szxUpF[e]<1.0))){ //upflow out of a cell near drying is scaled down with its water (none out of a
-        //dry one; with noUp the Newton tolerance leaves only a trace): the part MODFLOW does not supply is taken back out of
-        //the column's bottom node, down to air-dry (what remains there came from the aquifer after all)
-        const size_t ib=col.th.size()-1; const gwvz::vz_mat &mb=S.mat[col.im[ib]];
-        const double f=noUp?0.0:_szxUpF[e];
-        const double want=(1.0-f)*(-qb)*tstep,room=max(col.th[ib]-gwvz::Theta(mb,-1e5),0.0)*col.dz[ib],take=min(want,room);
-        col.th[ib]-=take/col.dz[ib]; col.psi[ib]=gwvz::PsiOf(mb,col.th[ib]); qb+=take/tstep;
+      if (qb<0.0){ //upflow through the bottom: out of the cell holding the water table, scaled down as it nears drying and at
+        //most half the water it holds above its bottom under the column per step (none without such a cell); the part
+        //MODFLOW does not supply is taken back out of the column, bottom node first, down to air-dry
+        const int up=_szxUp[e];
+        double allow=0.0;                                                        //[m/d]
+        if (!noUp && _szxUpCHD[e]){allow=-qb;}                                   //(a specified head supplies all of it)
+        else if (!noUp){
+          const double hu=_X[_reduced[up]]*_hf,Syu=max(SZNodeSy(up),0.01);
+          allow=min(_szxUpF[e]*(-qb),0.5*Syu*max(hu-_botm[up],0.0)/tstep);
+        }
+        double need=(-qb-allow)*tstep;                                           //[m]
+        for (size_t ib=col.th.size();(ib-->0) && (need>0.0);){
+          const gwvz::vz_mat &mb=S.mat[col.im[ib]];
+          const double take=min(need,max(col.th[ib]-gwvz::Theta(mb,-1e5),0.0)*col.dz[ib]);
+          if (take>0.0){col.th[ib]-=take/col.dz[ib]; col.psi[ib]=gwvz::PsiOf(mb,col.th[ib]); need-=take; qb+=take/tstep;}
+        }
       }
       _vzSub+=inf.substeps; _vzNewton+=inf.newton;
       if (rej<0.0){_vzCapV[e]=max(_vzCapV[e]+rej*a,0.0); _vzCapVol+=rej*a; rej=0.0;} //(an upward demand the column could not supply)
       _vzRejV[e]=rej*a; _vzQ[e]=qb*a; _vzUse[e]=1;
-      if ((qb<0.0) && (_szxUp[e]!=TopNode(L.ic))){_vzUp[e]=-qb*a; _vzUpQ+=_vzUp[e];} //(upflow from a lower cell: SZW_RAVEN, not recharge)
+      if ((qb<0.0) && (_szxUp[e]>=0) && (_szxUp[e]!=TopNode(L.ic)) && !_szxUpCHD[e]){_vzUp[e]=-qb*a; _vzUpQ+=_vzUp[e];} //(upflow from a lower
+                                                                                 // cell: SZW_RAVEN; otherwise, also a remainder without a source cell, the top cell's recharge)
       _vzInVol+=P-_vzRejV[e]; _vzOutVol+=(_vzQ[e]+_vzAbsQ[e])*tstep;           //(inflow the column took; its rejection is in the rejected recharge)
     }
     for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){int e=_szxOfHRU[k][jj]; if (!_vzUse[e]){_vzOutVol+=_vzAbsQ[e]*tstep;}}
@@ -269,15 +283,20 @@ void CGroundwaterModel::SZCapRiseWT(const double &tstep)
       if (!ch && (_vzMode>0) && (e<(int)_vzCol.size()) && _vzCol[e].active){continue;}  //(the column's own rise, VZStep)
       const int up=ch?TopNode(L.ic):_szxUp[e];                                  //(the cell holding the water table: the top cell, or one below
       if (up<0){continue;}                                                       // a dried top cell through SZW_RAVEN; none: no rise)
+      const bool chu=ch || _szxUpCHD[e];                                         //(a specified head supplies it, top cell or below)
       const double h=_X[_reduced[up]]*_hf;
       vector<double> &CL=sc?_szcCapL:_szxCapL;
       const double F=min(max(_linkF[li],0.0),1.0); if (F>=1.0){continue;}
       const double z0=sc?SZBase(L.k,L.ic):_szxZb[e];
-      const double Sy=ch?0.0:max(SZNodeSy(up),0.01);                            //(a specified head does not draw down)
+      const double Sy=chu?0.0:max(SZNodeSy(up),0.01);                           //(a specified head does not draw down)
       double Qs=SZRiseLayers(k,c,z0,h,0.0,a,a*(1.0-F),Sy,tstep,&CL[e*n],NULL,sc?NULL:VZGapMat(e));
-      if (!ch && (_szxUpF[e]<1.0)){Qs*=_szxUpF[e]; for (int j=0;j<n;j++){CL[e*n+j]*=_szxUpF[e];}} //(a cell near drying: fades out)
+      if (!chu){ //out of an aquifer cell: fades out as it nears drying, and at most half the water it holds above its bottom
+        const double cap=0.5*Sy*a*max(h-_botm[up],0.0)/tstep;                   // under the link per step (a thin cell would be pumped dry)
+        const double sc2=min(_szxUpF[e],(Qs>cap)?cap/Qs:1.0);
+        if (sc2<1.0){Qs*=sc2; for (int j=0;j<n;j++){CL[e*n+j]*=sc2;}}
+      }
       if (!(Qs>0.0)){continue;}
-      if (!ch){_szxCapQ[e]=Qs; _szCapWT+=Qs;}
+      if (!chu){_szxCapQ[e]=Qs; _szCapWT+=Qs;}
     }
   }
 }

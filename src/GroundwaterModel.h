@@ -419,6 +419,9 @@ private:/*----------------------------------------------------*/
   double                *_szwQ;          ///< SZW_RAVEN rates (MODFLOW's array; NULL without the package)
   int                    _szwNcol;       ///< stride of _szwQ (0: Q array, 1: BOUND)
   vector<int>            _szxUp;         ///< per SZX entry this step: the cell upward flows come from (its top cell; a lower wet cell when the top cell is dry, through SZW_RAVEN; -1 none)
+  vector<char>           _szxUpCHD;      ///< per SZX entry this step: _szxUp is a specified-head cell (the head supplies the rise; no well there)
+  mutable int           *_ibPtr;         ///< MODFLOW's IBOUND (reduced nodes), fetched on first use
+  bool   NodeCHD        (const int n);                          ///< user node n is a specified head now (IBOUND < 0)
   vector<double>         _szxUpF;        ///< per SZX entry this step: scale of the upward flows out of _szxUp (1; less when that cell is within max(5 %, 5 cm) of drying)
   vector<double>         _vzUp;          ///< per SZX entry: upward flow from a lower wet cell into the unsaturated column this step [m3/d] (through SZW_RAVEN)
   double                 _vzUpQ;         ///< all of _vzUp [m3/d] (MODFLOW recharge, negative)

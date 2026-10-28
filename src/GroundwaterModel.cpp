@@ -67,7 +67,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
-  _vzMode=0; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
+  _vzMode=0; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _ibPtr=NULL; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
@@ -96,7 +96,7 @@ void CGroundwaterModel::ResetState()
   _linkF.clear(); _cellDem.clear(); _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _colCoverNS.clear(); _szxOfHRU.clear();
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szxOne.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
-  _szxCapQ.clear(); _szxCapL.clear(); _szCapWT=0.0; _szxUp.clear(); _szxUpF.clear(); _vzUp.clear(); _vzUpQ=0.0; _szwStart.clear(); _szwNode.clear(); _szwQ=NULL; _szwNcol=0;
+  _szxCapQ.clear(); _szxCapL.clear(); _szCapWT=0.0; _szxUp.clear(); _szxUpF.clear(); _szxUpCHD.clear(); _ibPtr=NULL; _vzUp.clear(); _vzUpQ=0.0; _szwStart.clear(); _szwNode.clear(); _szwQ=NULL; _szwNcol=0;
   _szCls.clear(); _szClsW.clear(); _szClsPhi.clear(); _szClsRes.clear(); _szClsGW.clear(); _szClsDone.clear();
   _szcLink.clear(); _szcCol.clear(); _szcCell.clear(); _szcRej.clear(); _szcFw.clear(); _szcQ.clear(); _szcCapL.clear(); _szcOfHRU.clear(); _linkSzc.clear(); _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0;
   _szxQprev.clear(); _szxLagL.clear(); _szxLagD.clear(); _szLagNet.clear(); _szxDebt.clear(); _szxRepay.clear(); _szDebtVol=_szRepayQ=0.0;
@@ -2081,6 +2081,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     }
     double h=_X[_reduced[TopNode(_aLinks[_szxLink[e]].ic)]];
     double q=(_szxHcof[e]*h-_szxRhs[e])*_qf+(_szqHcof[e]*h-_szqRhs[e])*_qf+(_szdHcof[e]*h-_szdRhs[e])*_qf; //SZX_RAVEN + SZQ_RAVEN + SZD_RAVEN
+    if ((e<_szxUpCHD.size()) && _szxUpCHD[e]){for (int j=0;j<_szNLayers;j++){_QszCHD_out+=_szxCapL[e*_szNLayers+j];}} //(rise out of a specified head below a dried top cell)
     const bool inQ=(e>=_szxUp.size()) || (_szxUp[e]==TopNode(_aLinks[_szxLink[e]].ic)); //(else in SZW_RAVEN, out of a lower cell)
     if (inQ && (e<_szxCapQ.size())){q+=_szxCapQ[e];}                             //(the capillary rise from the water table, a fixed rate in SZQ_RAVEN, is booked apart)
     if (inQ && (e<_szxRepay.size())){q+=_szxRepay[e];}                           //(as is the repayment of the lagged source's debt)
@@ -2450,7 +2451,7 @@ void CGroundwaterModel::FinishBudgetLine()
     if (SZPhysical() && (_vzMode>0)){_BUDGET<<","<<_vzInVol<<","<<_vzOutVol<<","<<_vzCapVol<<","<<_vzStoreVol;}
     if (SZPhysical() && SZCapOn()){_BUDGET<<","<<_szCapWT*_szTstep;}
     if (SZPhysical() && (_szTiming==1)){_BUDGET<<","<<_szDebtVol<<","<<_szRepayQ*_szTstep;}
-    if (SZPhysical() && ((_szcLink.size()>0) || IsExternal())){_BUDGET<<","<<_QszCHD_in<<","<<_QszCHD_out;}
+    if (SZPhysical() && ((_szcLink.size()>0) || IsExternal() || !_chdNode.empty())){_BUDGET<<","<<_QszCHD_in<<","<<_QszCHD_out;}
     _BUDGET<<endl;
   }
   if (_budgetLineOpen){_szMovedV=0.0;} //(called before the first step too: a hotstart sync then counts in step 1)
@@ -2501,7 +2502,7 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
          <<((SZPhysical() && (_vzMode>0))?",unsaturated zone inflow [m3],unsaturated zone to aquifer [m3],capillary rise to soil zone [m3],unsaturated zone storage [m3]":"")
          <<((SZPhysical() && SZCapOn())?",capillary rise from the water table [m3]":"")
          <<((SZPhysical() && (_szTiming==1))?",lagged-exchange debt [m3],lagged-exchange repayment [m3]":"")
-         <<((SZPhysical() && ((_szcLink.size()>0) || IsExternal()))?",soil zone to specified heads [m3/d],specified heads to soil zone [m3/d]":"")<<endl;
+         <<((SZPhysical() && ((_szcLink.size()>0) || IsExternal() || !_chdNode.empty()))?",soil zone to specified heads [m3/d],specified heads to soil zone [m3/d]":"")<<endl;
   if (SZPhysical()){
     _SZOUT.open(FilenamePrepare("GWSoilExchange.csv",Options).c_str());
     ExitGracefullyIf(_SZOUT.fail(),"CGroundwaterModel: cannot open GWSoilExchange.csv",FILE_OPEN_ERR);

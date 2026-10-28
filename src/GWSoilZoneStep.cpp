@@ -225,7 +225,7 @@ void CGroundwaterModel::SZRepayRates(const double &tstep)
     if (!(_szxDebt[e]>0.0)){continue;}
     const int ic=_aLinks[_szxLink[e]].ic;
     if (_colCHDTop[ic]){continue;}                                               //(a specified head this step: MODFLOW would ignore the rate)
-    if ((e>=_szxUp.size()) || (_szxUp[e]<0) || (_szxUpF[e]<1.0)){continue;}                         //(no cell holds the water table clear of its bottom: later;
+    if ((e>=_szxUp.size()) || (_szxUp[e]<0) || (_szxUpF[e]<1.0) || _szxUpCHD[e]){continue;}                         //(no cell holds the water table clear of its bottom: later;
     _szxRepay[e]=_szxDebt[e]/tstep; _szRepayQ+=_szxRepay[e];                    // from a lower cell when the top one has dried, SZW_RAVEN)
   }
 }

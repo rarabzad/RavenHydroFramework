@@ -126,7 +126,7 @@ void CGroundwaterModel::SZUpNodes()
     for (int j=(int)_szwStart[e]-1;(j<_szwStart[e+1]) && (up<0);j++){             //(j = start-1: the top cell; then the cells below it)
       const bool isTop=(j<_szwStart[e]);
       if (!isTop && (_szwQ==NULL)){break;}
-      const int n=isTop?top:_szwNode[j],nu=isTop?-1:((j==_szwStart[e])?top:_szwNode[j-1]);
+      const int n=isTop?top:_szwNode[j],nu=isTop?-1:n-_ncpl;                    //(its top: the bottom of the cell directly above, active or not)
       const double h=_X[_reduced[n]]*_hf,b=_botm[n],t=isTop?_top[ic]:_botm[nu],mg=max(0.05*(t-b),0.05);
       if (h>=b+mg){up=n; break;}
       if ((h>b) && (wet<0)){wet=n; const double x=(h-b)/mg; fw=x*x*(3.0-2.0*x);} //(smooth: 0 at the bottom, 1 at the margin)
@@ -134,7 +134,15 @@ void CGroundwaterModel::SZUpNodes()
     if (up>=0){_szxUp[e]=up; _szxUpF[e]=1.0;}
     else if ((wet>=0) && ((wet==top) || (_szwQ!=NULL))){_szxUp[e]=wet; _szxUpF[e]=fw;} //(a cell near drying: the rates fade out with
     else {_szxUp[e]=-1; _szxUpF[e]=0.0;}                                         // its water, no switch)
+    _szxUpCHD[e]=(_szxUp[e]>=0) && (_szxUp[e]!=top) && NodeCHD(_szxUp[e]);       //(a specified head below: MODFLOW ignores a well there)
+    if (_szxUpCHD[e]){_szxUpF[e]=1.0;}
   }
+}
+bool CGroundwaterModel::NodeCHD(const int n)
+{
+  if (_ibPtr==NULL){string a=_mf6.GetVarAddress(_mname,"","IBOUND"); if (_mf6.HasVar(a)){_ibPtr=_mf6.GetIntPtr(a);}}
+  if (_ibPtr!=NULL){const int r=_reduced[n]; return (r>=0) && (_ibPtr[r]<0);}
+  return std::find(_chdNode.begin(),_chdNode.end(),n)!=_chdNode.end();
 }
 
 //////////////////////////////////////////////////////////////////
@@ -257,7 +265,7 @@ void CGroundwaterModel::SZBuildEntries()
     for (int l=top/_ncpl+1;l<_nlay;l++){const int n=UserNode(l,ic); if (_idomain[n]>0){_szwNode.push_back(n);}}
   }
   _szwStart[_szxLink.size()]=(int)_szwNode.size();
-  _szxUp.assign(_szxLink.size(),-1); _szxUpF.assign(_szxLink.size(),0.0); _vzUp.assign(_szxLink.size(),0.0); _vzUpQ=0.0;
+  _szxUp.assign(_szxLink.size(),-1); _szxUpF.assign(_szxLink.size(),0.0); _szxUpCHD.assign(_szxLink.size(),0); _vzUp.assign(_szxLink.size(),0.0); _vzUpQ=0.0;
   { double dsmin=1e300; for (size_t e=0;e<_szxCell.size();e++){dsmin=min(dsmin,_szxCell[e].ds);}
     if ((_szxCell.size()>0) && (dsmin<0.1)){
       WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: SEEPAGE_SMOOTHING_DEPTH of the cells' profiles is as small as "+to_string(dsmin)+
@@ -516,7 +524,9 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
         if (_vzUse[e]){ //the unsaturated column carried the unsaturated share this step: its bottom flux recharges the
                         //aquifer, and the saturated share is rejected with the saturated fraction its inflow used
           double rj=V*share*_vzFp[e]+_vzRejV[e];
-          _Qcol[L.ic]+=(_vzUp[e]>0.0)?0.0:_vzQ[e]; rej+=rj; _szxRej[e]=rj;          //(upflow from a lower cell: SZW_RAVEN)
+          if ((_vzQ[e]<0.0) && (e<(int)_szxUpCHD.size()) && _szxUpCHD[e]){_szRchCHD+=_vzQ[e];} //(upflow out of a specified head below: supplied by it,
+          else {_Qcol[L.ic]+=(_vzUp[e]>0.0)?0.0:_vzQ[e];}                          // MODFLOW does not see it; from a lower cell: SZW_RAVEN)
+          rej+=rj; _szxRej[e]=rj;
           continue;
         }
       }
@@ -674,7 +684,7 @@ void CGroundwaterModel::SZSetArrays(const bool steady)
     const int sw=max(_szwNcol,1);
     for (size_t j=0;j<_szwNode.size();j++){_szwQ[j*sw]=0.0;}
     for (size_t e=0;(e<_szxLink.size()) && (e+1<_szwStart.size());e++){
-      const int up=(e<_szxUp.size())?_szxUp[e]:-1; if ((up<0) || (up==TopNode(_aLinks[_szxLink[e]].ic))){continue;}
+      const int up=(e<_szxUp.size())?_szxUp[e]:-1; if ((up<0) || (up==TopNode(_aLinks[_szxLink[e]].ic)) || _szxUpCHD[e]){continue;}
       const double q=((e<_szxCapQ.size())?_szxCapQ[e]:0.0)+((e<_szxRepay.size())?_szxRepay[e]:0.0)+((e<_vzUp.size())?_vzUp[e]:0.0);
       for (int j=_szwStart[e];j<_szwStart[e+1];j++){if (_szwNode[j]==up){_szwQ[j*sw]-=q/_qf; break;}}
     }
