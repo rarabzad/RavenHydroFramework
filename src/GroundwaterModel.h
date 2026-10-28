@@ -300,7 +300,8 @@ private:/*----------------------------------------------------*/
   vector<double>         _szSyncOvf;     ///< per HRU: overflow when Raven's gains were shared among full columns this step [m3]
   bool                   _szCapUpd;      ///< the current update is the last before the interface freezes (boundary supply-limited)
   double                 _szMovedV;      ///< water moved up between soil-zone layers when Raven's changes were shared this step [m3]
-  double                 _szWithheldV;   ///< discharge to Raven withheld this step for MODFLOW's residual and the soil-zone shortfall [m3]
+  double                 _szWithheldV;   ///< discharge to Raven withheld this step for MODFLOW's residual and the soil-zone shortfall: from seepage and the soil-zone inflow [m3]
+  double                 _szWithheldG;   ///< the same, from river and surface-store gains [m3]
   int                    _szGuardN;      ///< warnings written by that guard
   vector<char>           _szRchByArea;   ///< per HRU: recharge leaves the bottom layer at a constant rate (PERC_CONSTANT): columns give it up by area
   vector<double>         _szxFw;         ///< per SZX entry: the recharge its column gave up this step [m3] (recharge shares)
