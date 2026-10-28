@@ -9,6 +9,8 @@
   Raven-MODFLOW 6 groundwater coupling: libmf6 wrapper
 ----------------------------------------------------------------*/
 #include "MF6Engine.h"
+#include "RavenInclude.h"   // WriteWarning, ExitGracefully (version guard)
+#include <cctype>
 #include <cstdlib>
 #include <cstring>
 #include <climits>
@@ -146,7 +148,77 @@ bool CMF6Engine::Load(const string &libpath)
 #else
   _get_version=(f_errmsg)dlsym(_lib,"get_version");
 #endif
+  if (ok){CheckVersion(libpath);}
   return ok;
+}
+
+//////////////////////////////////////////////////////////////////
+/// \brief numeric parts of a MODFLOW version string: "6.8.1" -> {6,8,1}. Leading blanks and a sign are read as strtol
+/// reads them; reading stops at the first character that does not continue the number, so " 6.8.1", "6.8.1-dev",
+/// "6.8.1+abc.dirty" and "6.08.01" read as 6.8.1, "6.5.0rc1" as 6.5.0, "6..9" as 6 and "-1.0" as -1.0
+/// \return false if the string does not start with a number ("", "abc", "v6.8.1")
+//
+bool CMF6Engine::ParseVersion(const string &v,vector<long> &c)
+{
+  c.clear();
+  const char *p=v.c_str(); char *e=NULL;
+  long x=strtol(p,&e,10);
+  if (e==p){return false;}
+  c.push_back(x); p=e;
+  while ((*p=='.') && isdigit((unsigned char)(p[1]))){
+    x=strtol(p+1,&e,10); c.push_back(x); p=e;
+  }
+  return true;
+}
+/// \brief compares versions part by part as numbers (6.10.0 > 6.8.1; missing parts count as 0, so 6.5 == 6.5.0)
+int CMF6Engine::CompareVersions(const vector<long> &a,const vector<long> &b)
+{
+  for (size_t i=0;i<max(a.size(),b.size());i++){
+    long x=(i<a.size())?a[i]:0, y=(i<b.size())?b[i]:0;
+    if (x<y){return -1;}
+    if (x>y){return  1;}
+  }
+  return 0;
+}
+
+//////////////////////////////////////////////////////////////////
+/// \brief version guard, right after the library is loaded: a library older than MF6_MIN_VERSION stops the run; any
+/// version other than MF6_TESTED_VERSION, no version, or a version that cannot be read gives one warning per run
+//
+void CMF6Engine::CheckVersion(const string &libpath)
+{
+  static bool warned=false;
+  string v=GetVersion();
+  vector<long> have,lo,tested;
+  ParseVersion(MF6_MIN_VERSION,lo); ParseVersion(MF6_TESTED_VERSION,tested);
+  string need=string("the coupling needs MODFLOW 6 ")+MF6_MIN_VERSION+" or newer and was tested with "+MF6_TESTED_VERSION;
+  string warn="";
+  if (_get_version==NULL){
+    warn="the MODFLOW 6 library "+libpath+" does not report its version (no get_version); "+need;
+  }
+  else if (v==""){
+    warn="the MODFLOW 6 library "+libpath+" does not report its version; "+need;
+  }
+  else if (!ParseVersion(v,have)){
+    warn="the MODFLOW 6 library "+libpath+" reports a version that cannot be read (\""+v+"\"); "+need;
+  }
+  else if (CompareVersions(have,lo)<0){
+    ExitGracefully(("CGroundwaterModel: the MODFLOW 6 library "+libpath+" is version "+v+"; the coupling needs MODFLOW 6 "+
+                    MF6_MIN_VERSION+" or newer (tested with "+MF6_TESTED_VERSION+"). Get the tested version with "
+                    "tools/get_mf6.py of RavenHydroFramework-extra, or build Raven with -DRAVEN_MF6=PREBUILT or SOURCE, "
+                    "which puts it next to the Raven executable, and remove :MF6Library or RAVEN_MF6_LIB if they name "
+                    "the old library").c_str(),BAD_DATA);
+    return;
+  }
+  else if (CompareVersions(have,tested)!=0){
+    warn="the MODFLOW 6 library "+libpath+" is version "+v+"; the coupling was tested with MODFLOW 6 "+MF6_TESTED_VERSION+
+         " (another version can give slightly different results; tools/get_mf6.py of RavenHydroFramework-extra gets "
+         "the tested one)";
+  }
+  if ((warn!="") && (!warned)){
+    WriteWarning("CGroundwaterModel: "+warn,true);
+    warned=true;
+  }
 }
 
 string CMF6Engine::GetVersion()
