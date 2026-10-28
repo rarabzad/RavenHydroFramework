@@ -452,6 +452,7 @@ void CGroundwaterModel::ExtEditNameFile(const bool addRaven)
       O<<"  RCH6  raven.rch  RCH_RAVEN   # added by Raven\n";
       if (_extSeepage){O<<"  DRN6  raven.drn  DRN_RAVEN   # added by Raven\n";}
       if (_szxLink.size()>0){O<<"  GHB6  raven.szx  SZX_RAVEN   # added by Raven (:SoilZone PHYSICAL)\n  WEL6  raven.szq  SZQ_RAVEN   # added by Raven\n  DRN6  raven.szd  SZD_RAVEN   # added by Raven\n";}
+      if (_szwNode.size()>0){O<<"  WEL6  raven.szw  SZW_RAVEN   # added by Raven\n";}
     }
     if (!w.empty() && (Upper(w[0])=="END")){block="";}
     if ((block=="PACKAGES") && (w.size()>=2) && (Upper(w[0])!="BEGIN")){
@@ -838,6 +839,13 @@ void CGroundwaterModel::ExtWritePackages(const optStruct &Options)
     F<<"BEGIN DIMENSIONS\n  MAXBOUND "<<_szxLink.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(12);
     for (size_t e=0;e<_szxLink.size();e++){int ic=_aLinks[_szxLink[e]].ic,n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<_extTopRaw[ic]<<" 0.0 0.0\n";}
     F<<"END PERIOD\n"; F.close();
+    if (_szwNode.size()>0){
+      F.open((_mf6dir+"/raven.szw").c_str());
+      F<<"# soil zone <-> aquifer, fourth part: upward flows out of the cell holding the water table below a dried top cell; rates set by Raven\n";
+      F<<"BEGIN OPTIONS\nEND OPTIONS\n\nBEGIN DIMENSIONS\n  MAXBOUND "<<_szwNode.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n";
+      for (size_t j=0;j<_szwNode.size();j++){int n=_szwNode[j]; F<<"  "<<CellID(n/_ncpl,n%_ncpl)<<" 0.0\n";}
+      F<<"END PERIOD\n"; F.close();
+    }
   }
   if (_hotHeads.size()>0){
     F.open((_mf6dir+"/raven.ic").c_str());

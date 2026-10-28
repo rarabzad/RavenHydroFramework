@@ -22,7 +22,7 @@ void CGroundwaterModel::VZSetup()
   _vzUse.assign(ne,0); _vzQ.assign(ne,0.0); _vzAbsQ.assign(ne,0.0); _vzRejV.assign(ne,0.0); _vzFp.assign(ne,0.0);
   _vzInV.assign(ne,0.0); _vzCapV.assign(ne,0.0); _vzCapL.assign(ne*_szNLayers,0.0);
   gwvz::SetAccuracy(_vzAcc);
-  vector<char> warned(_aClasses.size(),0); string noUnsat="";
+  vector<char> warned(_aClasses.size(),0),warnSy(_aClasses.size(),0); string noUnsat="",badSy=""; bool extBadSy=false;
   for (size_t e=0;e<ne;e++){
     const gw_link &L=_aLinks[_szxLink[e]]; const int ic=L.ic;
     const gw_profile &P=_aProfiles[_colProfile[ic]];
@@ -44,10 +44,25 @@ void CGroundwaterModel::VZSetup()
         m.ths=C.porosity; m.b=C.clapp_b; m.psia=C.psia; m.Ks=C.Kv; m.Sy=C.Sy; m.Ss=max(C.Ss,1e-7);
         if (!C.unsatGiven && !warned[P.layers[l].iclass]){warned[P.layers[l].iclass]=1; noUnsat+=(noUnsat==""?"":", ")+C.name;}
       }
+      { //Sy against the drainable porosity of the retention curve 1 m above the water table (soil_zone_columns_plan.md 1.5): a
+        //rising water table releases the column's water above equilibrium to MODFLOW, which stores it with Sy; with Sy
+        //much smaller each step's rise releases more than the last (a feedback that stops only at the soil-zone base)
+        const double dp=m.ths-gwvz::Theta(m,-1.0);
+        if ((m.Sy>2.0*dp) || (m.Sy<0.5*dp)){
+          if (IsExternal()){extBadSy=true;}
+          else {const int ic2=P.layers[l].iclass; if (!warnSy[ic2]){warnSy[ic2]=1; badSy+=(badSy==""?"":", ")+_aClasses[ic2].name+" (Sy "+to_string(m.Sy)+", drainable porosity "+to_string(dp)+")";}}
+        }
+      }
       double zt=(S.mat.empty())?1e9:S.zbot.back();                             //(the first material extends up without limit)
       S.ztop.push_back(zt); S.zbot.push_back(_botm[n]); S.mat.push_back(m);
     }
     if (!S.zbot.empty()){S.zbot.back()=-1e9;}                                  //(and the last one down)
+  }
+  if ((badSy!="") || extBadSy){
+    WriteWarning("CGroundwaterModel: :SoilZoneVadose RICHARDS: the specific yield differs by more than a factor 2 from the drainable porosity "
+                 "theta_s - theta(psi = -1 m) of POROSITY, CLAPP_B and AIR_ENTRY_PRESSURE"+(badSy!=""?(" for "+badSy):string(" in cells of the model and :SoilZoneAquiferClass"))+
+                 "; a rising water table then releases more (or less) water from the unsaturated column than MODFLOW stores with Sy, and with Sy too small "
+                 "the water table rises step by step to the soil-zone base",false);
   }
   if (noUnsat!=""){
     WriteWarning("CGroundwaterModel: :SoilZoneVadose RICHARDS: aquifer classes "+noUnsat+" have no CLAPP_B and AIR_ENTRY_PRESSURE; the unsaturated column "
@@ -127,7 +142,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
 {
   const int n=_szNLayers;
   const bool cap=(_szCapRise==1) || ((_szCapRise<0) && (_vzMode>0));
-  _vzInVol=_vzOutVol=_vzCapVol=0.0;
+  _vzInVol=_vzOutVol=_vzCapVol=0.0; _vzUpQ=0.0;
   vector<double> QL(max(n,1),0.0),QW(max(n,1),0.0);
   for (size_t i=0;i<_aqHRUs.size();i++)
   {
@@ -136,7 +151,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
     for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){
       const int e=_szxOfHRU[k][jj],li=_szxLink[e],c=_szxCol[e]; const gw_link &L=_aLinks[li];
       const double a=_szColA[c];
-      _vzUse[e]=0; _vzQ[e]=0.0; _vzAbsQ[e]=0.0; _vzRejV[e]=0.0; _vzInV[e]=0.0; _vzCapV[e]=0.0;
+      _vzUse[e]=0; _vzQ[e]=0.0; _vzAbsQ[e]=0.0; _vzRejV[e]=0.0; _vzInV[e]=0.0; _vzCapV[e]=0.0; _vzUp[e]=0.0;
       for (int j=0;j<n;j++){_vzCapL[e*n+j]=0.0;}
       if (!(a>0.0) || _colCHDTop[L.ic]){continue;}                              //(a specified head this step: its recharge goes there)
       gwvz::vz_column &col=_vzCol[e]; const gwvz::vz_strat &S=_vzStrat[e];
@@ -144,8 +159,29 @@ void CGroundwaterModel::VZStep(const double &tstep)
       //follow the water table: a rising one takes the excess over equilibrium below it, a falling one opens cells at
       //equilibrium; a column shorter than Lmin (5 cm) is the soil zone's contact exchange and capillary rise instead
       if (col.active){
-        double ab=(zb-h<=Lmin)?gwvz::MoveBottom(col,S,zb,_vzN):gwvz::MoveBottom(col,S,h,_vzN);
-        _vzAbsQ[e]=ab*a/tstep;
+        //a rising water table takes the column's water above equilibrium below it, at most what MODFLOW stores for that
+        //rise (Sy dh): with Sy smaller than the drainable porosity each step's rise would release more than the last (a
+        //feedback with gain eps/Sy > 1, design note 1.5); the column's bottom then follows more slowly, releasing the rest
+        //in the next steps (with consistent parameters eps <= Sy and this does not apply)
+        const double zt=(zb-h<=Lmin)?zb:h;
+        if ((zt<zb) && (zt>col.zbot+1e-9)){                                       //(not once the water table reaches the base: the column goes)
+          const double z0=col.zbot,Sy=S.mat[S.Find(z0+1e-6)].Sy,capV=Sy*(zt-z0);   //[m]
+          gwvz::vz_column t=col; const double abT=gwvz::MoveBottom(t,S,zt,_vzN);
+          if (abT>capV*(1.0+1e-9)){
+            double lo=z0,hi=min(zt,col.ztop);
+            for (int it=0;it<40;it++){ //(the excess below a level grows with the level)
+              const double zm=0.5*(lo+hi); t=col;
+              if (gwvz::MoveBottom(t,S,zm,_vzN)>capV){hi=zm;} else {lo=zm;}
+              if (hi-lo<1e-4){break;}
+            }
+            const double zn=(lo>col.ztop-0.01)?col.ztop:lo;                      //(a remainder thinner than 1 cm: the column goes)
+            _vzAbsQ[e]=gwvz::MoveBottom(col,S,zn,_vzN)*a/tstep;
+            if (_vzSlowed++==0){WriteWarning("CGroundwaterModel: :SoilZoneVadose RICHARDS: a rising water table met more water above equilibrium in an unsaturated "
+                                             "column than MODFLOW stores with Sy; the column releases at most Sy dh per step (Sy below the drainable porosity?)",false);}
+          }
+          else {col=t; _vzAbsQ[e]=abT*a/tstep;}
+        }
+        else {_vzAbsQ[e]=gwvz::MoveBottom(col,S,zt,_vzN)*a/tstep;}
       }
       else if (zb-h>Lmin){
         gwvz::Build(col,S,zb,h,_vzN);                                            //(at equilibrium: no excess, nothing exchanged)
@@ -168,11 +204,11 @@ void CGroundwaterModel::VZStep(const double &tstep)
         const double Ae=a*(1.0-min(max(F,0.0),1.0));
         const double Qc=SZRiseLayers(k,c,zb,col.zc[0],max(-col.psi[0],0.0),a,Ae,0.0,tstep,&QL[0],&psL);
         if (Qc>0.0){
-          const double bot0=_botm[TopNode(L.ic)],top0=_top[L.ic];
-          const double Qw=(h<bot0+max(0.05*(top0-bot0),0.05))?0.0:                //(as SZCapRiseWT: none out of a (nearly) dry cell)
-                          SZRiseLayers(k,c,zb,h,0.0,a,Ae,max(SZCellSy(L.ic),0.01),tstep,&QW[0],NULL);
           const gwvz::vz_mat &m0=S.mat[col.im[0]];
           const double avail=max(col.th[0]-gwvz::Theta(m0,-min(psL,1e5)),0.0)*col.dz[0]*a; //[m3] the top node down to the lowest layer's suction
+          const int up=_szxUp[e];                                                //(as SZCapRiseWT: from the cell holding the water table; only
+          const double Qw=((up<0) || (Qc<=avail/tstep))?0.0:                     // needed when the top node cannot give the rise)
+                          SZRiseLayers(k,c,zb,_X[_reduced[up]]*_hf,0.0,a,Ae,max(SZNodeSy(up),0.01),tstep,&QW[0],NULL,VZGapMat(e))*_szxUpF[e];
           const double Q=min(Qc,max(avail/tstep,Qw));                            //[m3/d]
           if (Q>0.0){
             R=Q/a;                                                               //[m/d] out of the column's top
@@ -182,16 +218,20 @@ void CGroundwaterModel::VZStep(const double &tstep)
         }
       }
       double rej=0.0; gwvz::vz_step_info inf;
-      const double bot=_botm[TopNode(L.ic)],ctop=_top[L.ic];
-      const bool noUp=(h<bot+max(0.05*(ctop-bot),0.05));                         //(a top cell MODFLOW has (nearly) dried: no upward flow
-      double qb=gwvz::Step(col,S,tstep,P/(a*tstep)-R,rej,&inf,noUp);             // out of it, which MODFLOW could not supply)
-      if (noUp && (qb<0.0)){ //(the Newton tolerance leaves a trace of upward flow: it is taken back out of the bottom node,
-        const size_t ib=col.th.size()-1;                                         // not drawn from a dry cell)
-        col.th[ib]=max(col.th[ib]+qb*tstep/col.dz[ib],0.0); col.psi[ib]=gwvz::PsiOf(S.mat[col.im[ib]],col.th[ib]); qb=0.0;
+      const bool noUp=(_szxUp[e]<0);                                            //(no cell holds any water table: no upward
+      double qb=gwvz::Step(col,S,tstep,P/(a*tstep)-R,rej,&inf,noUp);             // flow, which MODFLOW could not supply)
+      if ((qb<0.0) && (noUp || (_szxUpF[e]<1.0))){ //upflow out of a cell near drying is scaled down with its water (none out of a
+        //dry one; with noUp the Newton tolerance leaves only a trace): the part MODFLOW does not supply is taken back out of
+        //the column's bottom node, down to air-dry (what remains there came from the aquifer after all)
+        const size_t ib=col.th.size()-1; const gwvz::vz_mat &mb=S.mat[col.im[ib]];
+        const double f=noUp?0.0:_szxUpF[e];
+        const double want=(1.0-f)*(-qb)*tstep,room=max(col.th[ib]-gwvz::Theta(mb,-1e5),0.0)*col.dz[ib],take=min(want,room);
+        col.th[ib]-=take/col.dz[ib]; col.psi[ib]=gwvz::PsiOf(mb,col.th[ib]); qb+=take/tstep;
       }
       _vzSub+=inf.substeps; _vzNewton+=inf.newton;
       if (rej<0.0){_vzCapV[e]=max(_vzCapV[e]+rej*a,0.0); _vzCapVol+=rej*a; rej=0.0;} //(an upward demand the column could not supply)
       _vzRejV[e]=rej*a; _vzQ[e]=qb*a; _vzUse[e]=1;
+      if ((qb<0.0) && (_szxUp[e]!=TopNode(L.ic))){_vzUp[e]=-qb*a; _vzUpQ+=_vzUp[e];} //(upflow from a lower cell: SZW_RAVEN, not recharge)
       _vzInVol+=P-_vzRejV[e]; _vzOutVol+=(_vzQ[e]+_vzAbsQ[e])*tstep;           //(inflow the column took; its rejection is in the rejected recharge)
     }
     for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){int e=_szxOfHRU[k][jj]; if (!_vzUse[e]){_vzOutVol+=_vzAbsQ[e]*tstep;}}
@@ -227,14 +267,15 @@ void CGroundwaterModel::SZCapRiseWT(const double &tstep)
       const double a=_szColA[c];
       if (!(a>0.0)){continue;}
       if (!ch && (_vzMode>0) && (e<(int)_vzCol.size()) && _vzCol[e].active){continue;}  //(the column's own rise, VZStep)
-      const double h=_X[_reduced[TopNode(L.ic)]]*_hf;
-      const double bot=_botm[TopNode(L.ic)],top=_top[L.ic];
-      if (!ch && (h<bot+max(0.05*(top-bot),0.05))){continue;}                   //(MODFLOW reduces a rate taken near the cell bottom)
+      const int up=ch?TopNode(L.ic):_szxUp[e];                                  //(the cell holding the water table: the top cell, or one below
+      if (up<0){continue;}                                                       // a dried top cell through SZW_RAVEN; none: no rise)
+      const double h=_X[_reduced[up]]*_hf;
       vector<double> &CL=sc?_szcCapL:_szxCapL;
       const double F=min(max(_linkF[li],0.0),1.0); if (F>=1.0){continue;}
       const double z0=sc?SZBase(L.k,L.ic):_szxZb[e];
-      const double Sy=ch?0.0:max(SZCellSy(L.ic),0.01);                         //(a specified head does not draw down)
-      const double Qs=SZRiseLayers(k,c,z0,h,0.0,a,a*(1.0-F),Sy,tstep,&CL[e*n],NULL);
+      const double Sy=ch?0.0:max(SZNodeSy(up),0.01);                            //(a specified head does not draw down)
+      double Qs=SZRiseLayers(k,c,z0,h,0.0,a,a*(1.0-F),Sy,tstep,&CL[e*n],NULL,sc?NULL:VZGapMat(e));
+      if (!ch && (_szxUpF[e]<1.0)){Qs*=_szxUpF[e]; for (int j=0;j<n;j++){CL[e*n+j]*=_szxUpF[e];}} //(a cell near drying: fades out)
       if (!(Qs>0.0)){continue;}
       if (!ch){_szxCapQ[e]=Qs; _szCapWT+=Qs;}
     }
@@ -250,57 +291,89 @@ void CGroundwaterModel::SZCapRiseWT(const double &tstep)
 ///  dry top. With Sy > 0 the source is the water table and the rate is implicit in its drawdown: Q = T(Q dt/(Sy Ae)),
 ///  the rate with the water table lowered by the risen volume over the share's area (no lateral resupply: the bound of
 ///  a local column, stable for every step length; the explicit rate overshoots, e.g. 0.1 m of rise and 0.7 m of
-///  drawdown in one day). QL gets each layer's rate [m3/d]; psisLow the suction of the lowest receiving layer [m].
+///  drawdown in one day). With gap (the aquifer material just below the base, :SoilZoneVadose) the water from the water
+///  table first crosses that material: at most its steady rise to an infinitely dry top over the gap (the column above
+///  the shortest column length sees the same material). QL gets each layer's rate [m3/d]; psisLow the suction of the
+///  lowest receiving layer [m].
 //
 double CGroundwaterModel::SZRiseLayers(const int k,const int c,const double zb,const double zs,const double s1,const double a,
-                                       const double Ae,const double Sy,const double tstep,double *QL,double *psisLow) const
+                                       const double Ae,const double Sy,const double tstep,double *QL,double *psisLow,const gwvz::vz_mat *gap) const
 {
   const int n=_szNLayers; const CHydroUnit *pHRU=_pModel->GetHydroUnit(k);
-  vector<double> d0(n,-1.0),Ks(n,0.0),pa(n,0.0),bs(n,1.0),ps(n,0.0),room(n,0.0); int jl=-1;
+  //jl: the lowest layer whose middle lies above the source, through which all rising water passes (also when it is at
+  //field capacity itself: the cap below and the column's limit use it, so a layer reaching field capacity switches nothing)
+  vector<double> d0(n,-1.0),Ks(n,0.0),pa(n,0.0),bs(n,1.0),ps(n,0.0),room(n,0.0); int jl=-1; bool any=false;
   double z=zb;
   for (int j=0;j<n;j++){
     QL[j]=0.0; d0[j]=-1.0;
     const gwsz::sz_layer &Lj=_szLay[k][j]; const double phi=_szColPhi[c*n+j];
     const double zm=z+0.5*Lj.H; z+=Lj.H;
-    if ((zm<=zs) || (phi>=Lj.phifc)){continue;}                                  //(below the source, or wet enough)
+    if (zm<=zs){continue;}                                                       //(below the source)
     const soil_struct *sp=pHRU->GetSoilProps(n-1-j);
     if (sp==NULL){continue;}
     bs[j]=max(sp->clapp_b,0.1); pa[j]=max(sp->air_entry_pressure,0.0)/MM_PER_METER; Ks[j]=max(sp->hydraul_cond,0.0)/MM_PER_METER;
     if (!(Ks[j]>0.0) || !(pa[j]>0.0)){continue;}
     const double Ssat=min(max(phi/max(Lj.phimax,1e-12),0.01),1.0);
-    ps[j]=pa[j]*pow(Ssat,-bs[j]); d0[j]=zm-zs; room[j]=(Lj.phifc-phi)/MM_PER_METER*a/tstep;
-    if (jl<0){jl=j;}
+    ps[j]=pa[j]*pow(Ssat,-bs[j]);
+    if (jl<0){jl=j; d0[j]=-(zm-zs);}                                             //(its distance kept for the cap: -d)
+    if (phi>=Lj.phifc){continue;}                                                //(wet enough: takes none)
+    d0[j]=zm-zs; room[j]=(Lj.phifc-phi)/MM_PER_METER*a/tstep; any=true;
   }
   if (psisLow!=NULL){*psisLow=(jl>=0)?ps[jl]:0.0;}
-  if ((jl<0) || !(Ae>0.0)){return 0.0;}
-  auto T=[&](const double D,const bool fill)->double{                            //all layers' rate with the source lowered by D
+  if ((jl<0) || !any || !(Ae>0.0)){return 0.0;}
+  const double dl=fabs(d0[jl]);                                                  //(distance to the lowest layer's middle)
+  vector<double> buf(n,0.0),bufLo(n,0.0);
+  auto T=[&](const double D,double *fill)->double{                               //all layers' rate with the source lowered by D
     double Qs=0.0;
     for (int j=jl;j<n;j++){
-      if (d0[j]<0.0){continue;}
+      if (d0[j]<0.0){if (fill){fill[j]=0.0;} continue;}                          //(below the source, or at field capacity)
       const double Q=min(gwvz::RiseBetween(Ks[j],pa[j],bs[j],d0[j]+D,s1,ps[j])*Ae,room[j]);
-      if (fill){QL[j]=Q;} Qs+=Q;
+      if (fill){fill[j]=Q;} Qs+=Q;
     }
     if (!(Qs>0.0)){return 0.0;}
-    const double Qmax=gwvz::RiseBetween(Ks[jl],pa[jl],bs[jl],d0[jl]+D,s1,-1.0)*Ae;
-    if (Qs>Qmax){if (fill){for (int j=jl;j<n;j++){QL[j]*=Qmax/Qs;}} Qs=Qmax;}
+    double Qmax=gwvz::RiseBetween(Ks[jl],pa[jl],bs[jl],dl+D,s1,-1.0)*Ae;
+    if ((gap!=NULL) && (zb>zs-D)){                                               //(through the aquifer between the water table and the base,
+      Qmax=min(Qmax,gwvz::RiseBetween(gap->Ks,gap->psia,gap->b,zb-zs+D,0.0,-1.0)*Ae); // at most its own rise to an infinitely dry top)
+    }
+    if (Qs>Qmax){if (fill){for (int j=jl;j<n;j++){fill[j]*=Qmax/Qs;}} Qs=Qmax;}
     return Qs;
   };
-  const double T0=T(0.0,false);
+  auto Put=[&](const double Q,const double Tq,const double *f)->double{        //the layers' shares of T at Q's drawdown, scaled to Q
+    for (int j=jl;j<n;j++){QL[j]=(Tq>0.0)?f[j]*Q/Tq:0.0;}
+    return Q;
+  };
+  const double T0=T(0.0,&buf[0]);
   if (!(T0>0.0)){return 0.0;}
-  if (!(Sy>0.0)){return T(0.0,true);}
-  //implicit in the drawdown: g(Q) = Q - T(Q dt/(Sy Ae)) increases from -T0 (Q = 0) to >= 0 (Q = T0); Illinois
-  const double w=tstep/(Sy*Ae);
-  double lo=0.0,hi=T0,glo=-T0,ghi=T0-T(T0*w,false);
-  if (ghi<=0.0){return T(0.0,true);}                                             //(no measurable drawdown)
-  int side=0;
-  for (int it=0;it<60;it++){
-    if (hi-lo<=1e-6*T0){break;}
-    const double Q=(lo*ghi-hi*glo)/(ghi-glo),g=Q-T(Q*w,false);
-    if (g>0.0){hi=Q; ghi=g; if (side==1){glo*=0.5;} side=1;}
-    else      {lo=Q; glo=g; if (side==-1){ghi*=0.5;} side=-1;}
+  if (!(Sy>0.0)){return Put(T0,T0,&buf[0]);}
+  //implicit in the drawdown: g(Q) = Q - T(Q w), w = dt/(Sy Ae), increases; T falls with D, so the root lies between
+  //lo = T(T0 w) and T0, with g(T0) = T0 - lo known. Illinois on that bracket (a geometric bisection step after one that
+  //does not halve it) to 0.2 % of the root (the rise table itself is within about 2 %): 2 to 5 evaluations of T; none
+  //beyond the first when the drawdown changes the rate by less than that. The result is the bracket's low side (never
+  //more than the root)
+  const double RTOL=2e-3,w=tstep/(Sy*Ae);
+  double lo=T(T0*w,&buf[0]),hi=T0;
+  if (hi-lo<=RTOL*lo){return Put(lo,lo,&buf[0]);}                              //(the shares at T0's drawdown: within the tolerance)
+  double Tlo=T(lo*w,&bufLo[0]);
+  double glo=lo-Tlo,ghi=hi-lo;
+  //the best lower bound Lb of the root: lo, and T(Q w) for every Q above the root (T falls); its layer shares
+  double Lb=lo,LbT=Tlo; vector<double> bufLb(bufLo);
+  int side=0; bool bis=false; double wprev=hi-lo;
+  for (int it=0;(it<60) && (hi-Lb>RTOL*Lb) && (glo<0.0);it++){
+    const double Q=bis?((lo>0.0)?sqrt(lo*hi):0.5*(lo+hi)):(lo*ghi-hi*glo)/(ghi-glo);
+    const double Tq=T(Q*w,&buf[0]),g=Q-Tq;
+    if (g>0.0){hi=Q; ghi=g; if (side==1){glo*=0.5;} side=1; if (Tq>Lb){Lb=Tq; LbT=Tq; bufLb=buf;}}
+    else      {lo=Q; glo=g; if (side==-1){ghi*=0.5;} side=-1; if (Q>Lb){Lb=Q; LbT=Tq; bufLb=buf;}}
+    bis=(hi-lo>0.5*wprev); wprev=hi-lo;                                         //(no halving, e.g. at a layer's room: bisect next)
   }
-  const double Q=lo;                                                             //(the bracket's low side: never more than the root)
-  const double Tq=T(Q*w,true);
-  if (Tq>0.0){for (int j=jl;j<n;j++){QL[j]*=Q/Tq;}}
-  return Q;
+  return Put(Lb,LbT,&bufLb[0]);
+}
+
+//////////////////////////////////////////////////////////////////
+/// \brief aquifer material just below the soil-zone base of SZX entry e (with :SoilZoneVadose), else NULL
+//
+const gwvz::vz_mat *CGroundwaterModel::VZGapMat(const int e) const
+{
+  if ((_vzMode<=0) || (e<0) || (e>=(int)_vzStrat.size()) || _vzStrat[e].mat.empty()){return NULL;}
+  const int i=_vzStrat[e].Find(_szxZb[e]-1e-6);
+  return (i>=0)?&_vzStrat[e].mat[i]:NULL;
 }

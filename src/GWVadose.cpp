@@ -310,13 +310,13 @@ namespace gwvz
     return I;
   }
   //root in ln Q of f (decreasing) on [a,b] (Brent); f(a) > 0 > f(b) checked by the caller
-  template<class F> static double RootLnQ(F f,double a,double b,double fa,double fb)
+  template<class F> static double RootLnQ(F f,double a,double b,double fa,double fb,const double rtol=1e-11)
   {
     double c=a,fc=fa,dd=b-a,e=dd;
     for (int it=0;it<100;it++){
       if (fb*fc>0.0){c=a; fc=fa; dd=e=b-a;}
       if (std::fabs(fc)<std::fabs(fb)){a=b; b=c; c=a; fa=fb; fb=fc; fc=fa;}
-      const double tol=1e-11*std::max(1.0,std::fabs(b)),xm=0.5*(c-b);
+      const double tol=rtol*std::max(1.0,std::fabs(b)),xm=0.5*(c-b);
       if ((std::fabs(xm)<=tol) || (fb==0.0)){break;}
       if ((std::fabs(e)>=tol) && (std::fabs(fa)>std::fabs(fb))){
         double p,q,r,ss=fb/fa;
@@ -333,7 +333,7 @@ namespace gwvz
     return b;
   }
   static const double LQ0=-46.0,LQ1=14.0;                                               //range of ln Q
-  template<class G> static double SolveRise(G g,const double x,const double u1,const double us,const double m)
+  template<class G> static double SolveRise(G g,const double x,const double u1,const double us,const double m,const double rtol=1e-11)
   {
     if ((us>=0.0) && (us-u1<=x)){return 0.0;}                                          //hydrostatic or downward
     const bool near=(us>0.0) && (us<=std::exp(2.0)*std::max(u1,1.0));               //(the integral directly: no cancellation)
@@ -343,10 +343,17 @@ namespace gwvz
       const double sat=(u1<1.0)?(std::min(us,1.0)-u1)/(1.0+Q):0.0;                    //(the part below the air entry)
       return sat+((us>1.0)?GDiffNear(Q,std::max(u1,1.0),us,m):0.0)-x;
     };
-    double fa=f(LQ0),fb=f(LQ1);
-    if (fa<=0.0){return std::exp(LQ0);}
-    if (fb>=0.0){return std::exp(LQ1);}
-    return std::exp(RootLnQ(f,LQ0,LQ1,fa,fb));
+    //bracket: from Gardner's estimate for a dry top (Q = (1 + 1.5/(m-1)) x^-m beyond the air entry, 1/x - 1 within it),
+    //widened by 3 in ln Q until the sign changes (f falls with Q), within [LQ0, LQ1]
+    const double xe=std::max(x+u1,1e-12);
+    const double Qg=(xe>1.0)?(1.0+1.5/(m-1.0))*std::pow(xe,-m):std::max(1.0/xe-1.0,1e-3);
+    double a=std::min(std::max(std::log(Qg),LQ0),LQ1),fa=f(a),b,fb;
+    if (fa>0.0){b=a; fb=fa; do {a=b; fa=fb; b=std::min(b+3.0,LQ1); fb=f(b);} while ((fb>0.0) && (b<LQ1));
+                if (fb>=0.0){return std::exp(LQ1);}}
+    else       {b=a; fb=fa; do {b=a; fb=fa; a=std::max(a-3.0,LQ0); fa=f(a);} while ((fa<0.0) && (a>LQ0));
+                if (fa<=0.0){return std::exp(LQ0);}}
+    if (fb==0.0){return std::exp(b);}
+    return std::exp(RootLnQ(f,a,b,fa,fb,rtol));
   }
   double RiseBetweenExact(const double Ks,const double psia,const double b,const double dz,const double psi1,const double psis)
   {
@@ -409,7 +416,7 @@ namespace gwvz
     if (!(Ks>0.0) || !(psia>0.0) || !(b>0.0) || !(dz>0.0)){return 0.0;}
     const rise_table &T=RiseTable(b);
     auto g=[&](double Q,double u){return GTab(T,Q,u);};
-    return Ks*SolveRise(g,dz/psia,std::max(psi1,0.0)/psia,(psis>0.0)?psis/psia:-1.0,T.m);
+    return Ks*SolveRise(g,dz/psia,std::max(psi1,0.0)/psia,(psis>0.0)?psis/psia:-1.0,T.m,1e-6); //(ln Q to 1e-6: the table is within 2 %)
   }
   double Rise(const double Ks,const double psia,const double b,const double d,const double psis)
   {

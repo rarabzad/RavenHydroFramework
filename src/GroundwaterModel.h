@@ -395,8 +395,11 @@ private:/*----------------------------------------------------*/
   double VZRchW         (const int k,double &Aall) const;       ///< sum of the recharge shares of HRU k's columns; Aall its links' area
   double SZCellKv       (const int ic) const;                   ///< vertical conductivity of a column's top active cell [m/d]
   double SZCellSy       (const int ic) const;                   ///< specific yield of a column's top active cell [-]
+  double SZNodeSy       (const int n) const;                    ///< specific yield of a cell (user node) [-]
+  void   SZUpNodes      ();                                     ///< _szxUp from the heads of the last step
+  const gwvz::vz_mat *VZGapMat(const int e) const;              ///< aquifer material just below the soil-zone base of SZX entry e (:SoilZoneVadose), else NULL
   double SZRiseLayers   (const int k,const int c,const double zb,const double zs,const double s1,const double a,const double Ae,
-                         const double Sy,const double tstep,double *QL,double *psisLow) const; ///< capillary rise into the soil-zone layers [m3/d]
+                         const double Sy,const double tstep,double *QL,double *psisLow,const gwvz::vz_mat *gap=NULL) const; ///< capillary rise into the soil-zone layers [m3/d]
   double SZSyncClasses  (const int k,const double *target,const double R,vector<double> &lossR); ///< sync class by class
   bool                   _szClsWarned;   ///< warned that classes need ORDERED_SERIES
   string                 _szExtClass;    ///< :SoilZoneAquiferClass (existing models: retention of the cells for the unsaturated columns)
@@ -408,8 +411,17 @@ private:/*----------------------------------------------------*/
   vector<double>         _vzRejV;        ///< per SZX entry: inflow the saturated column top could not take [m3]
   vector<double>         _vzFp;          ///< per SZX entry: saturated fraction the column's inflow used this step
   vector<double>         _vzInV,_vzCapV; ///< per SZX entry: inflow [m3] and capillary rise into the soil zone [m3] this step
+  long                   _vzSlowed;       ///< steps in which a column's bottom followed a rising water table more slowly (released at most Sy dh)
   vector<double>         _vzCapL;        ///< per SZX entry and soil-zone layer (bottom up, e*n+j): its fraction of _vzCapV
   vector<double>         _szxCapQ;       ///< per SZX entry: capillary rise from the water table into the soil zone this step [m3/d] (a fixed rate taken through SZQ_RAVEN)
+  vector<int>            _szwStart;      ///< SZW_RAVEN: entries of SZX entry e are _szwStart[e].._szwStart[e+1]-1 (the active cells below its top cell)
+  vector<int>            _szwNode;       ///< SZW_RAVEN: user node of each entry
+  double                *_szwQ;          ///< SZW_RAVEN rates (MODFLOW's array; NULL without the package)
+  int                    _szwNcol;       ///< stride of _szwQ (0: Q array, 1: BOUND)
+  vector<int>            _szxUp;         ///< per SZX entry this step: the cell upward flows come from (its top cell; a lower wet cell when the top cell is dry, through SZW_RAVEN; -1 none)
+  vector<double>         _szxUpF;        ///< per SZX entry this step: scale of the upward flows out of _szxUp (1; less when that cell is within max(5 %, 5 cm) of drying)
+  vector<double>         _vzUp;          ///< per SZX entry: upward flow from a lower wet cell into the unsaturated column this step [m3/d] (through SZW_RAVEN)
+  double                 _vzUpQ;         ///< all of _vzUp [m3/d] (MODFLOW recharge, negative)
   vector<double>         _szxCapL;       ///< per SZX entry and soil-zone layer (bottom up, e*n+j): its share of _szxCapQ [m3/d]
   double                 _szCapWT;       ///< capillary rise from the water table, all links [m3/d]
   void   SZCapRiseWT    (const double &tstep);                ///< capillary rise from the water table where there is no unsaturated column

@@ -19,6 +19,7 @@
   with the column's true slope, until heads and soil levels agree.
 ----------------------------------------------------------------*/
 #include "GroundwaterModel.h"
+#include <cstdlib>
 #include "Model.h"
 #include "HydroProcessABC.h"
 #include "GWUtil.h"
@@ -101,6 +102,39 @@ double CGroundwaterModel::SZCellSy(const int ic) const
 {
   if (IsExternal()){return _extSy[TopNode(ic)];}
   return _aClasses[_aProfiles[_colProfile[ic]].layers[0].iclass].Sy;
+}
+
+double CGroundwaterModel::SZNodeSy(const int n) const
+{
+  if (IsExternal()){return _extSy[n];}
+  const int ic=n%_ncpl,l=n/_ncpl; const gw_profile &P=_aProfiles[_colProfile[ic]];
+  if (l<(int)P.layers.size()){return _aClasses[P.layers[l].iclass].Sy;}
+  return SZCellSy(ic);
+}
+
+//////////////////////////////////////////////////////////////////
+/// \brief the cell each SZX entry's upward flows come from this step (heads of the last step): its top cell while that
+///  holds the water table more than max(5 % of its thickness, 5 cm) above its bottom; else the highest cell below that
+///  does (through SZW_RAVEN; MODFLOW cannot supply a rate out of a cell it has dried); when none does, the highest cell
+///  with any water, the rates scaled down smoothly to 0 as it dries (_szxUpF); -1 when no cell has water
+//
+void CGroundwaterModel::SZUpNodes()
+{
+  for (size_t e=0;e<_szxLink.size();e++){
+    const int ic=_aLinks[_szxLink[e]].ic,top=TopNode(ic);
+    int up=-1,wet=-1; double fw=0.0;                                             //(wet: the highest cell with any water, its scale)
+    for (int j=(int)_szwStart[e]-1;(j<_szwStart[e+1]) && (up<0);j++){             //(j = start-1: the top cell; then the cells below it)
+      const bool isTop=(j<_szwStart[e]);
+      if (!isTop && (_szwQ==NULL)){break;}
+      const int n=isTop?top:_szwNode[j],nu=isTop?-1:((j==_szwStart[e])?top:_szwNode[j-1]);
+      const double h=_X[_reduced[n]]*_hf,b=_botm[n],t=isTop?_top[ic]:_botm[nu],mg=max(0.05*(t-b),0.05);
+      if (h>=b+mg){up=n; break;}
+      if ((h>b) && (wet<0)){wet=n; const double x=(h-b)/mg; fw=x*x*(3.0-2.0*x);} //(smooth: 0 at the bottom, 1 at the margin)
+    }
+    if (up>=0){_szxUp[e]=up; _szxUpF[e]=1.0;}
+    else if ((wet>=0) && ((wet==top) || (_szwQ!=NULL))){_szxUp[e]=wet; _szxUpF[e]=fw;} //(a cell near drying: the rates fade out with
+    else {_szxUp[e]=-1; _szxUpF[e]=0.0;}                                         // its water, no switch)
+  }
 }
 
 //////////////////////////////////////////////////////////////////
@@ -214,6 +248,16 @@ void CGroundwaterModel::SZBuildEntries()
   }
   _szcRej.assign(_szcLink.size(),0.0); _szcFw.assign(_szcLink.size(),0.0); _szcQ.assign(_szcLink.size(),0.0); _szcCapL.assign(_szcLink.size()*_szNLayers,0.0);
   _szxCapQ.assign(_szxLink.size(),0.0); _szxCapL.assign(_szxLink.size()*_szNLayers,0.0); //(capillary rise, zero unless it is on)
+  //SZW_RAVEN: upward flows (capillary rise, the unsaturated column's upflow) come from the cell holding the water table
+  //when the top cell has (nearly) dried: one rate per active cell below each entry's top cell
+  _szwStart.assign(_szxLink.size()+1,0); _szwNode.clear();
+  for (size_t e=0;e<_szxLink.size();e++){
+    _szwStart[e]=(int)_szwNode.size();
+    const int ic=_aLinks[_szxLink[e]].ic,top=TopNode(ic);
+    for (int l=top/_ncpl+1;l<_nlay;l++){const int n=UserNode(l,ic); if (_idomain[n]>0){_szwNode.push_back(n);}}
+  }
+  _szwStart[_szxLink.size()]=(int)_szwNode.size();
+  _szxUp.assign(_szxLink.size(),-1); _szxUpF.assign(_szxLink.size(),0.0); _vzUp.assign(_szxLink.size(),0.0); _vzUpQ=0.0;
   { double dsmin=1e300; for (size_t e=0;e<_szxCell.size();e++){dsmin=min(dsmin,_szxCell[e].ds);}
     if ((_szxCell.size()>0) && (dsmin<0.1)){
       WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: SEEPAGE_SMOOTHING_DEPTH of the cells' profiles is as small as "+to_string(dsmin)+
@@ -472,7 +516,7 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
         if (_vzUse[e]){ //the unsaturated column carried the unsaturated share this step: its bottom flux recharges the
                         //aquifer, and the saturated share is rejected with the saturated fraction its inflow used
           double rj=V*share*_vzFp[e]+_vzRejV[e];
-          _Qcol[L.ic]+=_vzQ[e]; rej+=rj; _szxRej[e]=rj;
+          _Qcol[L.ic]+=(_vzUp[e]>0.0)?0.0:_vzQ[e]; rej+=rj; _szxRej[e]=rj;          //(upflow from a lower cell: SZW_RAVEN)
           continue;
         }
       }
@@ -589,19 +633,29 @@ void CGroundwaterModel::SZSetArrays(const bool steady)
   //Hg, at most the link's smoothing depth (the flow at the head of linearization is then the line's), and at least a
   //quarter of it (MODFLOW's Newton iteration converges badly on a sharper kink).
   int st=max(_szxNcol,1),sq=max(_szqNcol,1),sd=max(_szdNcol,1);
+  vector<char> pureRate(_szxLink.size(),0);
   for (size_t e=0;e<_szxLink.size();e++){
     const gw_link &L=_aLinks[_szxLink[e]];
     double h=_X[_reduced[TopNode(L.ic)]]*_hf;                                    //[m]
     double bot=_botm[TopNode(L.ic)]+1e-3;                                         //[m] margin: MODFLOW reads the bottom rounded
     double Cg=_szxCg[e];
-    const double cap=(((e<_szxCapQ.size())?_szxCapQ[e]:0.0)+((e<_szxRepay.size())?_szxRepay[e]:0.0))/_qf; //capillary rise from the water table (SZCapRiseWT) and
+    const bool inQ=(e>=_szxUp.size()) || (_szxUp[e]==TopNode(L.ic));            //(else SZW_RAVEN, out of a lower cell: below)
+    const double cap=inQ?(((e<_szxCapQ.size())?_szxCapQ[e]:0.0)+((e<_szxRepay.size())?_szxRepay[e]:0.0))/_qf:0.0; //capillary rise from the water table (SZCapRiseWT) and
                                                                                  //the repayment of the lagged source's debt (SZRepayRates), out of the aquifer
     //(MODFLOW's arrays in the model's units: heads /_hf, conductances *_hf/_qf, rates /_qf; 1 for generated models)
     const double cf=_hf/_qf;
     _szdElev[e*sd]=_top[L.ic]/_hf; _szdCond[e*sd]=0.0; _szdAux[e]=0.0;
     if ((Cg<=1e-6*_szxC[e]) || _colCHDTop[L.ic]){ //exchange (nearly) independent of the head: a rate (no GHB head far outside the
                                                    //cell); on a specified-head cell (existing models) no boundary at all
-      _szxHead[e*st]=bot/_hf; _szxCond[e*st]=0.0; _szqQ[e*sq]=_colCHDTop[L.ic]?0.0:_szxQc[e]/_qf-cap; continue;
+      _szxHead[e*st]=bot/_hf; _szxCond[e*st]=0.0; _szqQ[e*sq]=_colCHDTop[L.ic]?0.0:_szxQc[e]/_qf-cap;
+      if (!_colCHDTop[L.ic]){ //an outlet for a water table that rises past the soil-zone base during MODFLOW's solve: a rate has no
+                              //slope, and the excess would go into the elastic storage above the cell top (heads far above ground);
+                              //the drain starts at the lowest base sample, where the soil begins to saturate (zero flow below it,
+                              //so a solve that stays below the base is unchanged); its conductance below, after the recharge
+        const double zl=_szxCell[e].zbs.empty()?_szxZb[e]:_szxCell[e].zbs.front();
+        _szdElev[e*sd]=max(zl,bot)/_hf; _szdCond[e*sd]=_szxC[e]*cf; _szdAux[e]=max(_szxCell[e].ds,1e-3)/_hf; pureRate[e]=1;
+      }
+      continue;
     }
     double Hg=h+_szxQc[e]/Cg;
     double H=max(Hg,bot);
@@ -616,8 +670,24 @@ void CGroundwaterModel::SZSetArrays(const bool steady)
     _szxHead[e*st]=H/_hf; _szxCond[e*st]=Cg*cf;
     _szqQ[e*sq]=Cg*(Hg-H)/_qf-cap;
   }
+  if (_szwQ!=NULL){ //upward flows out of the cell holding the water table below a dried top cell (fixed rates for the step)
+    const int sw=max(_szwNcol,1);
+    for (size_t j=0;j<_szwNode.size();j++){_szwQ[j*sw]=0.0;}
+    for (size_t e=0;(e<_szxLink.size()) && (e+1<_szwStart.size());e++){
+      const int up=(e<_szxUp.size())?_szxUp[e]:-1; if ((up<0) || (up==TopNode(_aLinks[_szxLink[e]].ic))){continue;}
+      const double q=((e<_szxCapQ.size())?_szxCapQ[e]:0.0)+((e<_szxRepay.size())?_szxRepay[e]:0.0)+((e<_vzUp.size())?_vzUp[e]:0.0);
+      for (int j=_szwStart[e];j<_szwStart[e+1];j++){if (_szwNode[j]==up){_szwQ[j*sw]-=q/_qf; break;}}
+    }
+  }
   if (steady){return;}
   SZRecharge(_szTstep,true);
+  for (size_t e=0;e<_szxLink.size();e++){ //the outlet above: the link's conductance, at least what carries the link's inflow (its
+    if (!pureRate[e]){continue;}            //rate and its share of the cell's recharge) out over one soil-zone thickness above the
+    const gw_link &L=_aLinks[_szxLink[e]];  //base, so that a solve without interface updates keeps the head within the soil zone
+    const double Qin=max(_szxQc[e],0.0)+max(_Qcol[L.ic],0.0)*min(L.area/max(MF6CellArea(L.ic),1e-12),1.0);
+    const double Cd=max(_szxC[e],Qin/max(_szD[L.k],0.05));
+    _szdCond[e*sd]=Cd*_hf/_qf;
+  }
   if (_evtCol.size()>0){ //water-table ET only on the unsaturated share of the cell: saturated soil already evaporates in Raven
     vector<double> Fa(_ncpl,0.0);
     for (size_t e=0;e<_szxLink.size();e++){const gw_link &L=_aLinks[_szxLink[e]]; Fa[L.ic]+=L.area*_linkF[_szxLink[e]];}
