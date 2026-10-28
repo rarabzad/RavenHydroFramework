@@ -1,0 +1,106 @@
+name: Raven with MODFLOW 6
+
+# Builds Raven together with the MODFLOW 6 library (cmake/RavenMF6.cmake, -DRAVEN_MF6=SOURCE: MODFLOW 6.8.1 from its
+# pinned release tag with MODFLOW's meson build), installs it, packs it with CPack, and checks that the installed folder
+# still runs after it is moved: Raven starts and the library beside it loads, with its Fortran runtime, and reports
+# MODFLOW 6.8.1. Linux and macOS use the Ninja generator; Windows uses the default Visual Studio generator, whose own
+# Fortran check ignores FC, so meson gets gfortran from FC (set by setup-fortran) through RavenMF6.cmake.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/RavenMF6*.cmake'
+      - 'src/MF6Engine.*'
+      - '.github/workflows/raven-mf6.yml'
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'cmake/RavenMF6*.cmake'
+      - 'src/MF6Engine.*'
+      - '.github/workflows/raven-mf6.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Raven + MODFLOW 6 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            generator: -G Ninja
+          - os: macos-latest
+            generator: -G Ninja
+          - os: windows-latest
+            generator: ''
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python3
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.x'
+
+      - name: Install meson and ninja
+        run: python -m pip install "meson>=1.7" ninja
+
+      - name: Set up gfortran
+        uses: fortran-lang/setup-fortran@v1
+        with:
+          compiler: gcc
+          version: 13
+
+      - name: Configure (RAVEN_MF6=SOURCE)
+        run: cmake -S . -B build ${{ matrix.generator }} -DCMAKE_BUILD_TYPE=Release -DRAVEN_MF6=SOURCE -DRAVEN_MF6_JOBS=3 -DCMAKE_INSTALL_PREFIX="$PWD/stage"
+
+      - name: Build
+        run: cmake --build build --config Release -j 3
+
+      - name: Install and package
+        run: |
+          cmake --install build --config Release
+          cd build && cpack -C Release
+
+      - name: Moved install runs
+        run: |
+          mv stage "$RUNNER_TEMP/raven_moved"
+          bin="$RUNNER_TEMP/raven_moved/bin"
+          ls -l "$bin"
+          head -n 1 "$bin/libmf6_version.txt" | grep -q "MODFLOW 6.8.1"
+          if [ "$RUNNER_OS" = "Windows" ]; then exe="$bin/Raven.exe"; lib="$bin/libmf6.dll";
+          elif [ "$RUNNER_OS" = "macOS" ]; then exe="$bin/Raven"; lib="$bin/libmf6.dylib";
+          else exe="$bin/Raven"; lib="$bin/libmf6.so"; fi
+          "$exe" -v
+          python - "$lib" <<'EOF'
+          import ctypes, os, sys
+          if hasattr(os, 'add_dll_directory'):
+              os.add_dll_directory(os.path.dirname(sys.argv[1]))
+          lib = ctypes.CDLL(sys.argv[1])
+          buf = ctypes.create_string_buffer(512)
+          lib.get_version(buf)
+          v = buf.value.decode().strip()
+          print('libmf6 loads from the moved install; get_version:', v)
+          sys.exit(0 if v.startswith('6.8.1') else 1)
+          EOF
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: raven-mf6-${{ matrix.os }}
+          path: |
+            build/Raven-*.tar.gz
+            build/Raven-*.zip
+          if-no-files-found: warn
