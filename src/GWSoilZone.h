@@ -85,7 +85,7 @@ namespace gwsz
   /// exchange into the aquifer [m3/d] of a column with saturated thickness lam [m]: h [m] the head that drives the
   /// flow, hc [m] the head that sets the connection weights w_s (the same at a converged interface; the iteration lets
   /// hc lag behind h to damp the switching of the connection); F [-] the contact fraction (mean w_s); partial derivatives
-  /// q_h = dq/dh (-C F at hc = h), q_hc = dq/dhc, q_lam = dq/dlam [m2/d]
+  /// q_h = dq/dh = -(C/N) sum over samples with h above their base of w_s, q_hc = dq/dhc, q_lam = dq/dlam [m2/d]
   double SubgridFlux(const sz_cell &s,const double lam,const double h,const double hc,double &F,double &q_h,double &q_hc,
                      double &q_lam);
 
@@ -101,15 +101,19 @@ namespace gwsz
 
   /// saturated fraction: mean over the base samples zbs [m] of SmoothStep((h-zbs)/ds) (a step at zbs for ds<=0); the
   /// share of the recharge that is rejected (the contact weights of SubgridFlux reach 1 already at the base)
-  double SatFraction(const double h,const std::vector<double> &zbs,const double ds,double *dF=0);
+  double SatFraction(const double h,const std::vector<double> &zbs,const double ds);
 
-  /// brings the columns of one HRU (cols[c][j]: water of layer j in column c [mm], weights w[c] summing to 1) to the
-  /// HRU totals target[j] = sum_c w[c] cols[c][j] after it: a gain is shared in proportion to each column's room,
-  /// a loss in proportion to each column's free water (above phifc) and, once that is used up, to its water, so no
-  /// column leaves [0, phimax] that was inside it; what cannot be
-  /// shared that way (only if the target itself lies outside [0, phimax]) is spread uniformly
-  void Distribute(const std::vector<sz_layer> &L,std::vector<std::vector<double> > &cols,const std::vector<double> &w,
-                  const std::vector<double> &target);
+  /// brings the columns of one HRU (cols[c][j]: water of layer j in column c [mm], weights w[c], the column areas over
+  /// the HRU's) to the HRU totals target[j] = sum_c w[c] cols[c][j]: a loss is taken from each column's free water
+  /// (above phifc) first, then in proportion to its water; a gain falls on every column alike, what a full layer cannot
+  /// take stays in the layer above in the same column, and what the top layer cannot take overflows. Returns the
+  /// overflow [mm over the HRU]: the totals then fall short of the gains by that much, possibly moved between layers.
+  /// Optionally layer jR has a known outflow R [mm over the HRU] (the recharge): it is taken by area (byArea, a
+  /// constant-rate process) or from free water first, before the layer's other changes are shared, and lossR receives
+  /// each column's part of it [mm over the column].
+  double Distribute(const std::vector<sz_layer> &L,std::vector<std::vector<double> > &cols,const std::vector<double> &w,
+                    const std::vector<double> &target,const int jR=-1,const double R=0.0,const bool byArea=false,
+                    std::vector<double> *lossR=0);
 }
 
 #endif

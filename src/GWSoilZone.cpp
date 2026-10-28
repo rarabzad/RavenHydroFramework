@@ -207,46 +207,72 @@ namespace gwsz
     if (x>=1.0){return 1.0;}
     return x*x*(3.0-2.0*x);
   }
-  double SatFraction(const double h,const std::vector<double> &zbs,const double ds,double *dF)
+  double SatFraction(const double h,const std::vector<double> &zbs,const double ds)
   {
-    if (dF){*dF=0.0;}
     if (zbs.empty()){return 0.0;}
-    double s=0.0,sp=0.0;
+    double s=0.0;
     for (size_t i=0;i<zbs.size();i++){
       if (ds<=0.0){s+=(h>zbs[i])?1.0:0.0;}
-      else {double x=(h-zbs[i])/ds; s+=SmoothStep(x); if ((x>0.0) && (x<1.0)){sp+=6.0*x*(1.0-x)/ds;}}
+      else {s+=SmoothStep((h-zbs[i])/ds);}
     }
-    if (dF){*dF=sp/(double)zbs.size();}
     return s/(double)zbs.size();
   }
-  void Distribute(const std::vector<sz_layer> &L,std::vector<std::vector<double> > &cols,const std::vector<double> &w,
-                  const std::vector<double> &target)
+  //takes a loss dd>0 [mm over the HRU] from layer j: by area (each column alike, limited to its water) or from free water
+  //first; then in proportion to the water left. loss[c] (if given) receives each column's share [mm over the column]
+  static void TakeLoss(const sz_layer &Lj,std::vector<std::vector<double> > &cols,const std::vector<double> &w,const size_t j,
+                       double dd,const bool byArea,std::vector<double> *loss)
   {
     const size_t nc=cols.size();
-    for (size_t j=0;j<L.size();j++){
-      double mean=0.0,ws=0.0; for (size_t c=0;c<nc;c++){mean+=w[c]*cols[c][j]; ws+=w[c];}
-      double d=target[j]-mean;
-      if (d>0.0){
-        double R=0.0; for (size_t c=0;c<nc;c++){R+=w[c]*std::max(L[j].phimax-cols[c][j],0.0);}
-        double f=(R>0.0)?std::min(d/R,1.0):0.0;
-        for (size_t c=0;c<nc;c++){cols[c][j]+=f*std::max(L[j].phimax-cols[c][j],0.0);}
-        d-=f*R;
-      }
-      else if (d<0.0){
-        //a loss comes first from free water (above field capacity: the water Raven's drainage acts on sits in the
-        //saturated columns), then in proportion to the water left
-        double S1=0.0; for (size_t c=0;c<nc;c++){S1+=w[c]*std::max(cols[c][j]-L[j].phifc,0.0);}
-        double f1=(S1>0.0)?std::min(-d/S1,1.0):0.0;
-        for (size_t c=0;c<nc;c++){cols[c][j]-=f1*std::max(cols[c][j]-L[j].phifc,0.0);}
-        d+=f1*S1;
-        if (d<0.0){
-          double S=0.0; for (size_t c=0;c<nc;c++){S+=w[c]*std::max(cols[c][j],0.0);}
-          double f=(S>0.0)?std::min(-d/S,1.0):0.0;
-          for (size_t c=0;c<nc;c++){cols[c][j]-=f*std::max(cols[c][j],0.0);}
-          d+=f*S;
-        }
-      }
-      if ((d!=0.0) && (ws>0.0)){for (size_t c=0;c<nc;c++){cols[c][j]+=d/ws;}} //target outside [0,phimax] (round-off or overfill)
+    double ws=0.0; for (size_t c=0;c<nc;c++){ws+=w[c];}
+    std::vector<double> before(nc); for (size_t c=0;c<nc;c++){before[c]=cols[c][j];}
+    if (byArea && (ws>0.0)){
+      double u=dd/ws,got=0.0;
+      for (size_t c=0;c<nc;c++){double r=std::min(u,std::max(cols[c][j],0.0)); cols[c][j]-=r; got+=w[c]*r;}
+      dd-=got;
     }
+    else {
+      double S1=0.0; for (size_t c=0;c<nc;c++){S1+=w[c]*std::max(cols[c][j]-Lj.phifc,0.0);}
+      double f1=(S1>0.0)?std::min(dd/S1,1.0):0.0;
+      for (size_t c=0;c<nc;c++){cols[c][j]-=f1*std::max(cols[c][j]-Lj.phifc,0.0);}
+      dd-=f1*S1;
+    }
+    if (dd>0.0){
+      double S=0.0; for (size_t c=0;c<nc;c++){S+=w[c]*std::max(cols[c][j],0.0);}
+      double f=(S>0.0)?std::min(dd/S,1.0):0.0;
+      for (size_t c=0;c<nc;c++){cols[c][j]-=f*std::max(cols[c][j],0.0);}
+      dd-=f*S;
+    }
+    if ((dd>0.0) && (ws>0.0)){for (size_t c=0;c<nc;c++){cols[c][j]-=dd/ws;}} //round-off only
+    if (loss){for (size_t c=0;c<nc;c++){(*loss)[c]+=before[c]-cols[c][j];}}
   }
+  double Distribute(const std::vector<sz_layer> &L,std::vector<std::vector<double> > &cols,const std::vector<double> &w,
+                    const std::vector<double> &target,const int jR,const double R,const bool byArea,std::vector<double> *lossR)
+  {
+    const size_t nc=cols.size(),n=L.size();
+    double ws=0.0; for (size_t c=0;c<nc;c++){ws+=w[c];}
+    std::vector<double> d(n),carry(nc,0.0);
+    for (size_t j=0;j<n;j++){double mean=0.0; for (size_t c=0;c<nc;c++){mean+=w[c]*cols[c][j];} d[j]=target[j]-mean;}
+    if (lossR){lossR->assign(nc,0.0);}
+    for (size_t j=0;j<n;j++){ //bottom up
+      double gain=d[j];
+      if (((int)j==jR) && (R>0.0)){ //a known outflow of this layer (the recharge): taken as the process takes it, the
+        TakeLoss(L[j],cols,w,j,R,byArea,lossR);   //rest of the change is the layer's other gains and losses
+        gain=d[j]+R;
+      }
+      if (gain<0.0){TakeLoss(L[j],cols,w,j,-gain,false,NULL); gain=0.0;}
+      //a gain falls on every column alike (rain does not move to where there is room); what a full layer cannot take
+      //stays in the layer above in the same column (percolation into a full layer does not happen), and what the top
+      //layer cannot take overflows
+      const double g=gain/((ws>0.0)?ws:1.0);
+      for (size_t c=0;c<nc;c++){
+        double add=g+carry[c];
+        if (add<=0.0){carry[c]=0.0; continue;}
+        double room=std::max(L[j].phimax-cols[c][j],0.0),put=std::min(add,room);
+        cols[c][j]+=put; carry[c]=add-put;
+      }
+    }
+    double ovf=0.0; for (size_t c=0;c<nc;c++){ovf+=w[c]*carry[c];}
+    return ovf;
+  }
+
 }

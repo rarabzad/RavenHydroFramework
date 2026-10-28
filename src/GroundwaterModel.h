@@ -296,9 +296,11 @@ private:/*----------------------------------------------------*/
   vector<double>         _szxQc,_szxCg;  ///< per SZX entry: exchange at the current head [m3/d] and its slope -dq/dh [m2/d]
   vector<double>         _szxHc;         ///< per SZX entry: head that sets the connection weights (lags the head inside the iteration) [m]
   vector<double>         _szxHp,_szxHr;  ///< per SZX entry: previous hc and its residual h - hc [m] (-HUGE_VAL: none yet this step)
-  vector<double>         _szxRq;         ///< per SZX entry: the link's share of the HRU's recharge this step [m3/d] (before rejection)
+  vector<double>         _szxFc;         ///< per SZX entry: contact fraction (mean contact weight) of the last local solve
+  vector<double>         _szSyncOvf;     ///< per HRU: overflow when Raven's gains were shared among full columns this step [m3]
+  bool                   _szRchByArea;   ///< recharge leaves the bottom layer at a constant rate (PERC_CONSTANT): columns give it up by area
   vector<double>         _szxFw;         ///< per SZX entry: free water in the bottom layer of its column at the start of the step [m3] (recharge shares)
-  vector<double>         _szxHq,_szxQq,_szxLq; ///< per SZX entry: head [m], exchange [m3/d] and lambda [m] of the last local solve this step (_szxHq -HUGE_VAL: none)
+  vector<double>         _szxHq,_szxQq;  ///< per SZX entry: head [m] and exchange [m3/d] of the last local solve this step (_szxHq -HUGE_VAL: none)
   vector<double>         _szxBa,_szxBra,_szxBb,_szxBrb; ///< per SZX entry: bracket of the root of h - hc (ends, residuals) [m]
   vector<int>            _szxBk;         ///< per SZX entry: bracket state (0 none, else the end replaced last: 1 a, 2 b)
   vector<double>         _szxLam;        ///< per SZX entry: saturated thickness of its column, current iterate [m]
@@ -339,7 +341,7 @@ private:/*----------------------------------------------------*/
   void   SZRecharge     (const double &tstep,const bool write);///< _Qcol, _szRej, _szxRej from _szRchV and _linkF (write: RCH array too)
   void   SZLocalSolves  (const double &tstep,const bool steady);///< _szxLam, _szxQc, _szxCg per exchange column
   int    SZNCols        (const int k) const {return (int)_szxOfHRU[k].size()+1;}
-  void   SZSyncColumns  (const int k,const double *target);    ///< columns of HRU k to its soil-zone water target[j] [mm]
+  double SZSyncColumns  (const int k,const double *target,const double R=0.0,vector<double> *lossR=NULL); ///< columns of HRU k to its soil-zone water target[j] [mm] (R: recharge out of the bottom layer [mm], lossR: each column's part); returns the overflow [mm over the HRU]
   vector<int> SZColumnCells(const int k) const;               ///< cell of each column of HRU k (column number of the grid, 1-based; 0 = rest)
   int    SZHotColumns   (const int k,vector<vector<double> > &cols) const; ///< hotstart columns of HRU k: 1 found, 0 none, -1 not matching
   void   SZInitColumns  ();                                    ///< columns at the start: hotstart, else saturated below the initial water table
