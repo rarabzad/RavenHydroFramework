@@ -242,7 +242,8 @@ namespace gwsz
       for (size_t c=0;c<nc;c++){cols[c][j]-=f*std::max(cols[c][j],0.0);}
       dd-=f*S;
     }
-    if ((dd>0.0) && (ws>0.0)){for (size_t c=0;c<nc;c++){cols[c][j]-=dd/ws;}} //round-off only
+    if ((dd>0.0) && (ws>0.0)){for (size_t c=0;c<nc;c++){cols[c][j]-=dd/ws;}} //more than the layer holds (a loss Raven took
+                                                                             //after gains of the same step); made good by them
     if (loss){for (size_t c=0;c<nc;c++){(*loss)[c]+=before[c]-cols[c][j];}}
   }
   double Distribute(const std::vector<sz_layer> &L,std::vector<std::vector<double> > &cols,const std::vector<double> &w,
@@ -251,21 +252,32 @@ namespace gwsz
     const size_t nc=cols.size(),n=L.size();
     double ws=0.0; for (size_t c=0;c<nc;c++){ws+=w[c];}
     std::vector<double> d(n),carry(nc,0.0);
+    std::vector<std::vector<double> > vin(n,std::vector<double>(nc,0.0));
     for (size_t j=0;j<n;j++){double mean=0.0; for (size_t c=0;c<nc;c++){mean+=w[c]*cols[c][j];} d[j]=target[j]-mean;}
     if (lossR){lossR->assign(nc,0.0);}
-    for (size_t j=0;j<n;j++){ //bottom up
-      double gain=d[j];
-      if (((int)j==jR) && (R>0.0)){ //a known outflow of this layer (the recharge): taken as the process takes it, the
-        TakeLoss(L[j],cols,w,j,R,byArea,lossR);   //rest of the change is the layer's other gains and losses
-        gain=d[j]+R;
+    //1. the known outflow of layer jR (the recharge), taken as the process takes it
+    if ((jR>=0) && (jR<(int)n) && (R>0.0)){TakeLoss(L[jR],cols,w,jR,R,byArea,lossR); d[jR]+=R;}
+    //2. percolation between the layers stays in its column: where a layer lost water and the layer below gained, the
+    //   matched part leaves each column's upper layer as the percolation takes it (by area for a constant rate, else
+    //   free water first) and enters the same column's lower layer
+    for (size_t u=n-1;u>=1;u--){
+      const size_t l=u-1;
+      if ((d[u]<0.0) && (d[l]>0.0)){
+        double pm=std::min(-d[u],d[l]);
+        std::vector<double> t(nc,0.0);
+        TakeLoss(L[u],cols,w,u,pm,byArea,&t);
+        for (size_t c=0;c<nc;c++){vin[l][c]+=t[c];}
+        d[u]+=pm; d[l]-=pm;
       }
-      if (gain<0.0){TakeLoss(L[j],cols,w,j,-gain,false,NULL); gain=0.0;}
-      //a gain falls on every column alike (rain does not move to where there is room); what a full layer cannot take
-      //stays in the layer above in the same column (percolation into a full layer does not happen), and what the top
-      //layer cannot take overflows
-      const double g=gain/((ws>0.0)?ws:1.0);
+    }
+    //3. the other losses (evaporation) alike on every column, limited to its water
+    for (size_t j=0;j<n;j++){if (d[j]<0.0){TakeLoss(L[j],cols,w,j,-d[j],true,NULL); d[j]=0.0;}}
+    //4. gains (rain) alike on every column, with the water percolating into the column from above; what a full layer
+    //   cannot take stays in the layer above in the same column, and what the top layer cannot take overflows
+    for (size_t j=0;j<n;j++){
+      const double g=d[j]/((ws>0.0)?ws:1.0);
       for (size_t c=0;c<nc;c++){
-        double add=g+carry[c];
+        double add=g+vin[j][c]+carry[c];
         if (add<=0.0){carry[c]=0.0; continue;}
         double room=std::max(L[j].phimax-cols[c][j],0.0),put=std::min(add,room);
         cols[c][j]+=put; carry[c]=add-put;

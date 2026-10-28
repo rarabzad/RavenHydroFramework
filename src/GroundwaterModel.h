@@ -298,8 +298,9 @@ private:/*----------------------------------------------------*/
   vector<double>         _szxHp,_szxHr;  ///< per SZX entry: previous hc and its residual h - hc [m] (-HUGE_VAL: none yet this step)
   vector<double>         _szxFc;         ///< per SZX entry: contact fraction (mean contact weight) of the last local solve
   vector<double>         _szSyncOvf;     ///< per HRU: overflow when Raven's gains were shared among full columns this step [m3]
-  bool                   _szRchByArea;   ///< recharge leaves the bottom layer at a constant rate (PERC_CONSTANT): columns give it up by area
-  vector<double>         _szxFw;         ///< per SZX entry: free water in the bottom layer of its column at the start of the step [m3] (recharge shares)
+  bool                   _szCapUpd;      ///< the current update is the last before the interface freezes (boundary supply-limited)
+  vector<char>           _szRchByArea;   ///< per HRU: recharge leaves the bottom layer at a constant rate (PERC_CONSTANT): columns give it up by area
+  vector<double>         _szxFw;         ///< per SZX entry: the recharge its column gave up this step [m3] (recharge shares)
   vector<double>         _szxHq,_szxQq;  ///< per SZX entry: head [m] and exchange [m3/d] of the last local solve this step (_szxHq -HUGE_VAL: none)
   vector<double>         _szxBa,_szxBra,_szxBb,_szxBrb; ///< per SZX entry: bracket of the root of h - hc (ends, residuals) [m]
   vector<int>            _szxBk;         ///< per SZX entry: bracket state (0 none, else the end replaced last: 1 a, 2 b)

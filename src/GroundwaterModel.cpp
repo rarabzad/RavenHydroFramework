@@ -13,6 +13,7 @@ static double gw_prof_t0=-1;
 #include "Model.h"
 #include "HydroProcessABC.h"
 #include "SoilWaterMovers.h"
+#include "LateralExchangeABC.h"
 #include "TimeSeries.h"
 #include <cmath>
 #include <iomanip>
@@ -66,7 +67,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea=false;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
 }
 CGroundwaterModel::~CGroundwaterModel()
@@ -94,7 +95,7 @@ void CGroundwaterModel::ResetState()
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea=false;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false;
 }
 void CGroundwaterModel::Reinitialize(const optStruct &Options)
 {
@@ -688,9 +689,21 @@ void CGroundwaterModel::ValidateInputs() const
 void CGroundwaterModel::CheckProcesses()
 {
   bool warned=false;
+  if (SZPhysical()){_szRchByArea.assign(_pModel->GetNumHRUs(),0);}
   for (int j=0;j<_pModel->GetNumProcesses();j++)
   {
     CHydroProcessABC *pProc=_pModel->GetProcess(j);
+    if (SZPhysical() && (pProc->GetNumLatConnections()>0)){ //lateral processes may not reach the pass-through GROUNDWATER either
+      const CLateralExchangeProcessABC *pLat=dynamic_cast<const CLateralExchangeProcessABC*>(pProc);
+      if (pLat!=NULL){
+        const int *lf=pLat->GetLateralFromIndices(),*lt=pLat->GetLateralToIndices(),*kf=pLat->GetFromHRUIndices(),*kt=pLat->GetToHRUIndices();
+        for (int q=0;q<pProc->GetNumLatConnections();q++){
+          bool bad=((lt[q]==_iGW) && (_hruProfile[kt[q]]!=DOESNT_EXIST)) || ((lf[q]==_iGW) && (_hruProfile[kf[q]]!=DOESNT_EXIST));
+          ExitGracefullyIf(bad,("CGroundwaterModel: with :SoilZone PHYSICAL, lateral process #"+to_string(j+1)+" moves water into or out of GROUNDWATER of a coupled HRU; "
+            "recharge must come from the bottom soil-zone layer by a vertical process").c_str(),BAD_DATA);
+        }
+      }
+    }
     const int *iFrom=pProc->GetFromIndices();
     const int *iTo  =pProc->GetToIndices();
     for (int q=0;q<pProc->GetNumConnections();q++)
@@ -707,7 +720,9 @@ void CGroundwaterModel::CheckProcesses()
       if (SZPhysical() && (iTo[q]==_iGW) && (iFrom[q]!=_iGW)){ //recharge must leave the soil zone from its bottom layer
         int iBot=_pModel->GetStateVarIndex(SOIL,_szNLayers-1);
         const CmvPercolation *pPerc=dynamic_cast<const CmvPercolation*>(pProc);
-        if ((pPerc!=NULL) && (iFrom[q]==iBot) && (pPerc->GetPercolationType()==PERC_CONSTANT)){_szRchByArea=true;}
+        if ((pPerc!=NULL) && (iFrom[q]==iBot) && (pPerc->GetPercolationType()==PERC_CONSTANT)){ //HRUs it applies to
+          for (size_t i=0;i<_aqHRUs.size();i++){if (pProc->ShouldApply(_pModel->GetHydroUnit(_aqHRUs[i]))){_szRchByArea[_aqHRUs[i]]=1;}}
+        }
         if (iFrom[q]!=iBot){
           for (size_t i=0;i<_aqHRUs.size();i++){
             if (_szOn[_aqHRUs[i]] && pProc->ShouldApply(_pModel->GetHydroUnit(_aqHRUs[i]))){
@@ -1753,30 +1768,15 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     ExtUpdateCHDTop();
   }
   if (SZPhysical()){ //soil-zone water after Raven's processes this step: start of every local solve
-    //recharge shares: the free water each column's bottom layer gives up when Raven's changes are shared among the
-    //columns (or, if none does, the free water it held before them)
-    //Recharge shares (each column's part of the HRU's recharge): with a constant-rate percolation into GROUNDWATER every
-    //column gives up the same depth (where it has the water): the recharge (end-of-step GROUNDWATER, which only SOIL[M-1]
-    //fills) is taken from the columns by area and the rest of Raven's changes shared after it. With a drainage of free
-    //water (the other types) the columns give up their free water: the net changes are shared (losses from free water
-    //first) and the shares are the free water each column's bottom layer gives up, or if none does, the free water it
-    //held before.
+    //Raven's changes are shared among the columns (gwsz::Distribute); the recharge (end-of-step GROUNDWATER, which only
+    //SOIL[M-1] fills) leaves the columns first, as the process takes it (by area for PERC_CONSTANT, else from free water
+    //first), and each column's part is its share of the recharge
     int iSW=_pModel->GetStateVarIndex(SURFACE_WATER);
-    vector<double> lossR,fw0(_szxLink.size());
-    for (size_t e=0;e<_szxLink.size();e++){
-      int c=_szxCol[e],k=_aLinks[_szxLink[e]].k;
-      fw0[e]=max(_szColPhi[c*_szNLayers]-_szLay[k][0].phifc,0.0)/MM_PER_METER*_szColA[c];
-    }
+    vector<double> lossR;
     for (size_t i=0;i<_aqHRUs.size();i++){int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
       for (size_t j=0;j<_szSV[k].size();j++){_szPhiProc[_szPhiOff[k]+j]=aPhinew[k][_szSV[k][j]];}
-      double ovf=SZSyncColumns(k,&_szPhiProc[_szPhiOff[k]],_szRchByArea?max(aPhinew[k][_iGW],0.0):0.0,&lossR);
-      double W=0.0;
-      for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){
-        int e=_szxOfHRU[k][jj],c=_szxCol[e];
-        double fw1=max(_szColPhi[c*_szNLayers]-_szLay[k][0].phifc,0.0)/MM_PER_METER*_szColA[c];
-        _szxFw[e]=_szRchByArea?lossR[c-_szColOff[k]]/MM_PER_METER*_szColA[c]:max(fw0[e]-fw1,0.0); W+=_szxFw[e];
-      }
-      if (!_szRchByArea && (W<=0.0)){for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){int e=_szxOfHRU[k][jj]; _szxFw[e]=fw0[e];}}
+      double ovf=SZSyncColumns(k,&_szPhiProc[_szPhiOff[k]],max(aPhinew[k][_iGW],0.0),&lossR);
+      for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){int e=_szxOfHRU[k][jj],c=_szxCol[e]; _szxFw[e]=lossR[c-_szColOff[k]]/MM_PER_METER*_szColA[c];}
       //Raven's soil-zone layers become the columns' mean; gains full columns could not take overflow to SURFACE_WATER
       int nc=SZNCols(k),o=_szColOff[k]; double sw=0.0; for (int c=0;c<nc;c++){sw+=_szColA[o+c];}
       for (size_t j=0;j<_szSV[k].size();j++){

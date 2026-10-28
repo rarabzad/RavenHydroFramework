@@ -21,6 +21,7 @@
 #include "GroundwaterModel.h"
 #include "Model.h"
 #include "HydroProcessABC.h"
+#include "GWUtil.h"
 #include <cmath>
 #include <iomanip>
 #include <algorithm>
@@ -228,6 +229,8 @@ void CGroundwaterModel::SZInitColumns()
         pHRU->SetStateVarValue(_szSV[k][j],(sw>0.0)?v/sw:tg[j]);
       }
       if (ovf>0.0){int iSW=_pModel->GetStateVarIndex(SURFACE_WATER); pHRU->SetStateVarValue(iSW,pHRU->GetStateVarValue(iSW)+ovf);}
+      if (ovf>1e-6){WriteWarning("CGroundwaterModel: HRU "+to_string(pHRU->GetHRUID())+": the .rvc soil water exceeds what its :GWSoilZoneColumns hold by "+gwutil::ToStr(ovf)+
+                                 " mm where the columns are full; that water starts in SURFACE_WATER",false);}
       continue;
     }
     for (int c=0;c<nc;c++){for (int j=0;j<n;j++){_szColPhi[(o+c)*n+j]=tg[j];}}
@@ -293,8 +296,8 @@ int CGroundwaterModel::SZHotColumns(const int k,vector<vector<double> > &cols) c
 
 //////////////////////////////////////////////////////////////////
 /// \brief brings the columns of HRU k to its soil-zone water target[j] (layers bottom up) [mm]: Raven's processes
-///  changed the HRU totals since the columns were last set (gains shared by room, losses from free water first, then
-///  by water; gwsz::Distribute).
+///  changed the HRU totals since the columns were last set (gwsz::Distribute: recharge as the process takes it,
+///  percolation within each column, evaporation and rain alike on every column, overflow where full).
 ///  On the first call the columns start from the hotstart file or, without one, uniform.
 //
 double CGroundwaterModel::SZSyncColumns(const int k,const double *target,const double R,vector<double> *lossR)
@@ -310,7 +313,7 @@ double CGroundwaterModel::SZSyncColumns(const int k,const double *target,const d
     if (SZHotColumns(k,hc)>0){cols=hc;}
     else {for (int c=0;c<nc;c++){cols[c]=tg;}}
   }
-  double ovf=gwsz::Distribute(_szLay[k],cols,w,tg,0,R,_szRchByArea,lossR);
+  double ovf=gwsz::Distribute(_szLay[k],cols,w,tg,0,R,(k<(int)_szRchByArea.size()) && _szRchByArea[k],lossR);
   for (int c=0;c<nc;c++){for (int j=0;j<n;j++){_szColPhi[(o+c)*n+j]=cols[c][j];}}
   return ovf;
 }
@@ -446,12 +449,17 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     if (q<0.0){sec=-q/max(h-(cell.zbs[0]-max(cell.ds,0.0)),1e-3);} //no contact below the lowest base minus ds
     Cg=max(max(Cg,sec),1e-9*cell.C);
     //explicit mode (no interface iteration): the boundary may not drain more than the column's free water over the
-    //step whatever the head does (down to the cell bottom), as the river and store exchanges are limited. (Iterated, the
-    //converged flow is the local solve's, which respects it; the limit would only make the slope too small.)
-    if (!steady && (_szMaxIter==0)){
+    //step whatever the head does (down to the cell bottom), as the river and store exchanges are limited, but for water
+    //rising into the soil the slope stays at least the secant to the end of the contact. (A linear boundary cannot hold
+    //both limits exactly: between the lowest base and the end of the contact some water can still rise, the
+    //linearization error of the explicit mode; it creates no water.)
+    //(Iterated, the converged flow is the local solve's, which respects both; the limit would only make the slope
+    //too small.)
+    if (!steady && ((_szMaxIter==0) || _szCapUpd)){
       double avail=gwsz::StackFreeWater(_szLay[k],phi)/MM_PER_METER*a/tstep;           //[m3/d]
       double bot=_botm[UserNode(0,L.ic)];
       Cg=min(Cg,max(avail-q,0.0)/max(h-bot,1e-3));
+      if (q<0.0){Cg=max(Cg,sec);}
     }
     _szxFc[e]=F; _szxQc[e]=q; _szxCg[e]=Cg;
   }
@@ -506,7 +514,11 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   if (_szMaxIter==0){return true;}                                            //explicit: the predictor only
   //the last outer iterations are left to MODFLOW on the boundary it has: an update just before the limit would leave
   //MODFLOW's final solve unconverged, and its residual would be water created or lost
-  if (iter>_maxiter-max(2,_maxiter/10)){return true;}
+  const int freezeAt=_maxiter-max(1,min(max(2,_maxiter/10),_maxiter-1));
+  if (iter>freezeAt){ //(iteration 1 always updates when there is a second)
+    if ((_szIter==0) && (_szMaxIter>0)){_szConv=false;} //no update at all this step: not iterated
+    return true;
+  }
   if (!mf6conv && (iter>nEarly)){return false;}                               //let MODFLOW converge first
   if (mf6conv){_szExtra++;}
   if (_szExtra>_szMaxIter){return true;}
@@ -515,7 +527,9 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   vector<double> F0(_linkF),hc0(_szxHc),lam0(_szxLam),q0(_szxQc),cg0(_szxCg),rej0(_szxRej),srej0(_szRej),fc0(_szxFc);
   SZLinkFractions(true,mf6conv);
   if (!steady){SZRecharge(_szTstep,false);}
+  _szCapUpd=(iter==freezeAt);                         //the boundary of the last update stays: supply-limit it as in explicit mode
   SZLocalSolves(_szTstep,steady);
+  _szCapUpd=false;
   //total exchange of the updated interface at the current heads (into the aquifer) [m3/d] (the boundary MODFLOW gets
   //reproduces it at these heads, whatever Cg)
   double Q=0.0,G=0.0,sC=0.0;

@@ -104,13 +104,14 @@ namespace gwsz
   double SatFraction(const double h,const std::vector<double> &zbs,const double ds);
 
   /// brings the columns of one HRU (cols[c][j]: water of layer j in column c [mm], weights w[c], the column areas over
-  /// the HRU's) to the HRU totals target[j] = sum_c w[c] cols[c][j]: a loss is taken from each column's free water
-  /// (above phifc) first, then in proportion to its water; a gain falls on every column alike, what a full layer cannot
-  /// take stays in the layer above in the same column, and what the top layer cannot take overflows. Returns the
-  /// overflow [mm over the HRU]: the totals then fall short of the gains by that much, possibly moved between layers.
-  /// Optionally layer jR has a known outflow R [mm over the HRU] (the recharge): it is taken by area (byArea, a
-  /// constant-rate process) or from free water first, before the layer's other changes are shared, and lossR receives
-  /// each column's part of it [mm over the column].
+  /// the HRU's) to the HRU totals target[j] = sum_c w[c] cols[c][j]. Layer jR has a known outflow R [mm over the HRU]
+  /// (the recharge), taken first: by area (byArea, a constant-rate process) or from free water first (a drainage), with
+  /// each column's part in lossR [mm over the column]. Where a layer lost water and the layer below gained, the matched
+  /// part percolates within each column (from the upper layer's free water first into the same column's lower layer);
+  /// other losses (evaporation) are taken alike on every column (limited to its water), gains (rain) fall alike on every
+  /// column; what a full layer cannot take stays in the layer above in the same column, and what the top layer cannot
+  /// take overflows. Returns the overflow [mm over the HRU]: the totals then fall short of the gains by that much,
+  /// possibly moved between layers.
   double Distribute(const std::vector<sz_layer> &L,std::vector<std::vector<double> > &cols,const std::vector<double> &w,
                     const std::vector<double> &target,const int jR=-1,const double R=0.0,const bool byArea=false,
                     std::vector<double> *lossR=0);
