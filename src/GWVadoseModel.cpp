@@ -168,7 +168,8 @@ void CGroundwaterModel::VZStep(const double &tstep)
         //rise (Sy dh): with Sy smaller than the drainable porosity each step's rise would release more than the last (a
         //feedback with gain eps/Sy > 1, design note 1.5); the column's bottom then follows more slowly, releasing the rest
         //in the next steps (with consistent parameters eps <= Sy and this does not apply)
-        const double zt=(zb-h<=Lmin)?zb:h;
+        double zlow=-1e300; for (int l=_nlay-1;l>=0;l--){const int nd=UserNode(l,L.ic); if (_idomain[nd]>0){zlow=_botm[nd]; break;}}
+        const double zt=(zb-h<=Lmin)?zb:max(h,zlow);                             //(not below the aquifer's bottom: a dry column's head can be)
         if (zt>col.zbot+1e-9){ //a rising water table (to the base: the column goes)
           const double z0=col.zbot,Sy=S.mat[S.Find(z0+1e-6)].Sy,capV=Sy*(zt-z0);   //[m]
           gwvz::vz_column t=col; const double abT=gwvz::MoveBottom(t,S,zt,_vzN);
@@ -323,7 +324,10 @@ void CGroundwaterModel::SZCapRiseWT(const double &tstep)
       const double Sy=chu?0.0:max(SZNodeSy(up),0.01);                           //(a specified head does not draw down)
       double Qs=SZRiseLayers(k,c,z0,h,0.0,a,a*(1.0-F),Sy,tstep,&CL[e*n],NULL,sc?NULL:VZGapMat(e));
       if (!chu){ //out of an aquifer cell: fades out as it nears drying, and at most half the water it holds above its bottom
-        const double cap=SZUpCap(e,tstep);                                       // under the link per step (a thin cell would be pumped dry)
+        double cap=SZUpCap(e,tstep);                                             // under the link per step (a thin cell would be pumped dry), less
+        if ((_vzMode>0) && (e<(int)_vzAbsQ.size())){                             // what a column removed in this step took out of it
+          cap=max(cap-((up==TopNode(L.ic))?max(-_vzAbsQ[e],0.0):_vzUpA[e]),0.0);
+        }
         const double sc2=(Qs*_szxUpF[e]>cap)?cap/Qs:_szxUpF[e];
         if (sc2<1.0){Qs*=sc2; for (int j=0;j<n;j++){CL[e*n+j]*=sc2;}}
       }

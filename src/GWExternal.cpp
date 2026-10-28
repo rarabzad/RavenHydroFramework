@@ -484,6 +484,7 @@ void CGroundwaterModel::ExtProbe()
       if (W0=="END"){b=""; continue;}
       if ((b=="OPTIONS") && (W0=="NEWTON")){nw=true; for (size_t j=1;j<w.size();j++){if (Upper(w[j])=="UNDER_RELAXATION"){nu=true;}}}
     }
+    _mf6Newton=nw;
     if (SZPhysical() && !nw){
       WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL with an existing model that does not use NEWTON: a top cell that dries leaves "
         "MODFLOW's solve (head HDRY), and the soil zone over it then neither exchanges with the aquifer nor draws capillary rise until "

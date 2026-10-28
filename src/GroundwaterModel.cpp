@@ -67,7 +67,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
-  _vzMode=0; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _ibPtr=NULL; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
+  _vzMode=0; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _ibPtr=NULL; _mf6Newton=true; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
@@ -2014,9 +2014,23 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     if (_nNonConverged<=10){WriteWarning("CGroundwaterModel: MODFLOW 6 did not converge on "+tt.date_string+" (continuing)",Options.noisy);}
   }
   if (!_mf6.FinalizeTimeStep()){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
-  for (size_t n=0;n<_reduced.size();n++){ //(a diverged solve: stop rather than carry NaN through the rest of the run)
-    const int r=_reduced[n]; if ((r>=0) && !std::isfinite(_X[r])){
-      ExitGracefully(("CGroundwaterModel: MODFLOW 6 heads are not finite on "+tt.date_string+" (the solve diverged)").c_str(),RUNTIME_ERR);}
+  { //a diverged solve: stop rather than carry absurd heads through the rest of the run (not finite, or far outside the
+    //model's elevations: more than 10 times its total relief, at least 1 km, beyond its highest top or lowest bottom; an
+    //artesian head above a cell is fine, and a dry cell's HDRY without NEWTON is skipped)
+    double zmax=-1e300,zmin=1e300;
+    for (int ic=0;ic<_ncpl;ic++){for (int l=0;l<_nlay;l++){const int nd=UserNode(l,ic); if (_idomain[nd]>0){zmax=max(zmax,_top[ic]); zmin=min(zmin,_botm[nd]);}}}
+    const double m=max(10.0*(zmax-zmin),1000.0);
+    for (size_t n=0;n<_reduced.size();n++){
+      const int r=_reduced[n]; if (r<0){continue;}
+      const double h=_X[r]*_hf;
+      if (!std::isfinite(h)){ExitGracefully(("CGroundwaterModel: MODFLOW 6 heads are not finite on "+tt.date_string+" (the solve diverged)").c_str(),RUNTIME_ERR);}
+      if (!_mf6Newton && (h<=-1e29)){continue;}
+      if ((h>zmax+m) || (h<zmin-m)){
+        ExitGracefully(("CGroundwaterModel: MODFLOW 6 head "+to_string(h)+" m in cell "+to_string(n+1)+" on "+tt.date_string+
+          " lies far outside the model's elevations ("+to_string(zmin)+" to "+to_string(zmax)+" m): the solve diverged ("+
+          to_string(_nNonConverged)+" unconverged steps so far); shorter time steps or a more robust solver setting may help").c_str(),RUNTIME_ERR);
+      }
+    }
   }
 
   //-- 3. boundary flows from final heads (q = hcof*h - rhs, positive into aquifer)
@@ -2352,9 +2366,8 @@ double CGroundwaterModel::GetObservationWellHead(const long long id) const
 void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
 {
   if ((!_active) || (_X==NULL)){return;}
-  const int hp=SZPhysical()?17:12; //(full precision with the soil zone: its upward limits use the head just above a cell bottom)
-  if ((_gridType==GWGRID_REGULAR) || (IsExternal() && (_disType==0))){RVC<<":GWHeads "<<_nlay<<" "<<_nrow<<" "<<_ncol<<endl<<setprecision(hp);}
-  else {RVC<<":GWHeads "<<_nlay<<" 1 "<<_ncpl<<endl<<setprecision(hp);} //unstructured: one row of cells
+  if ((_gridType==GWGRID_REGULAR) || (IsExternal() && (_disType==0))){RVC<<":GWHeads "<<_nlay<<" "<<_nrow<<" "<<_ncol<<endl<<setprecision(12);}
+  else {RVC<<":GWHeads "<<_nlay<<" 1 "<<_ncpl<<endl<<setprecision(12);} //unstructured: one row of cells
   for (int n=0;n<_nlay*_ncpl;n++){
     double h=(_reduced[n]>=0)?_X[_reduced[n]]:_strt[n];
     RVC<<((n%10==0)?"  ":" ")<<h; if ((n%10==9) || (n==_nlay*_ncpl-1)){RVC<<endl;}
@@ -2377,7 +2390,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
       const vector<int> cell=SZColumnCells(k);
       for (int c=0;c<SZNCols(k);c++){
-        RVC<<"  "<<_pModel->GetHydroUnit(k)->GetHRUID()<<", "<<cell[c]<<setprecision(17);
+        RVC<<"  "<<_pModel->GetHydroUnit(k)->GetHRUID()<<", "<<cell[c]<<setprecision(15);
         for (int j=0;j<_szNLayers;j++){RVC<<", "<<_szColPhi[(_szColOff[k]+c)*_szNLayers+j];}
         RVC<<endl;
       }
@@ -2389,7 +2402,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       for (size_t e=0;e<_vzCol.size();e++){
         const gwvz::vz_column &c=_vzCol[e]; if (!c.active){continue;}
         const gw_link &L=_aLinks[_szxLink[e]];
-        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(17)<<", "<<c.zbot;
+        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(15)<<", "<<c.zbot;
         for (size_t i=0;i<c.th.size();i++){RVC<<", "<<c.th[i];}
         RVC<<endl;
       }
@@ -2399,7 +2412,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       RVC<<":GWSoilZoneLag   # HRU ID, cell (grid column number), exchange of the last step into the aquifer [m3/d], debt the aquifer still repays [m3]"<<endl;
       for (size_t e=0;e<_szxLink.size();e++){
         const gw_link &L=_aLinks[_szxLink[e]];
-        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(17)<<", "<<_szxQprev[e]<<", "<<((e<_szxDebt.size())?_szxDebt[e]:0.0)<<endl;
+        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(15)<<", "<<_szxQprev[e]<<", "<<((e<_szxDebt.size())?_szxDebt[e]:0.0)<<endl;
       }
       RVC<<":EndGWSoilZoneLag"<<endl;
     }
