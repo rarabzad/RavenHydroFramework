@@ -152,11 +152,12 @@ namespace gwsz
       const double z=s.zbs[i];
       double w,wp;
       if (s.ds<=0.0){w=(hc>z)?1.0:0.0; wp=0.0;}
-      else {double x=(hc-z)/s.ds; w=SmoothStep(x); wp=((x>0.0) && (x<1.0))?6.0*x*(1.0-x)/s.ds:0.0;}
+      else {double x=(hc-z)/s.ds+1.0; w=SmoothStep(x); wp=((x>0.0) && (x<1.0))?6.0*x*(1.0-x)/s.ds:0.0;} //full at the base
       if ((w==0.0) && (wp==0.0)){continue;}
       const double l=std::min(std::max(Lv,z),z+s.D);                  //soil water level at the sample
-      //the aquifer side of the sample is the water table, or its base where the water table is below it (only while hc
-      //lags above h): such a sample drains just its own saturated water, never the empty soil beneath it
+      //the aquifer side of the sample is the water table, or its base where the water table is below it (a sample in
+      //contact while the water table is still within ds below its base, or while hc lags above h): such a sample drains
+      //just its own saturated water, never the empty soil beneath it, and nothing rises into it
       const double ha=std::max(h,z);
       sum+=w*(l-ha); sw+=w; shc+=wp*(l-ha);
       if (h>z){sh+=w;}
@@ -206,14 +207,16 @@ namespace gwsz
     if (x>=1.0){return 1.0;}
     return x*x*(3.0-2.0*x);
   }
-  double SatFraction(const double h,const std::vector<double> &zbs,const double ds)
+  double SatFraction(const double h,const std::vector<double> &zbs,const double ds,double *dF)
   {
+    if (dF){*dF=0.0;}
     if (zbs.empty()){return 0.0;}
-    double s=0.0;
+    double s=0.0,sp=0.0;
     for (size_t i=0;i<zbs.size();i++){
       if (ds<=0.0){s+=(h>zbs[i])?1.0:0.0;}
-      else {s+=SmoothStep((h-zbs[i])/ds);}
+      else {double x=(h-zbs[i])/ds; s+=SmoothStep(x); if ((x>0.0) && (x<1.0)){sp+=6.0*x*(1.0-x)/ds;}}
     }
+    if (dF){*dF=sp/(double)zbs.size();}
     return s/(double)zbs.size();
   }
   void Distribute(const std::vector<sz_layer> &L,std::vector<std::vector<double> > &cols,const std::vector<double> &w,

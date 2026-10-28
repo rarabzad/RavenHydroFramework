@@ -60,6 +60,8 @@ void CGroundwaterModel::SZSetup()
       ExitGracefully(("CGroundwaterModel: HRU "+id+": soil class "+nk->second+" of SOIL["+to_string(_szNLayers-1)+
         "] (the bottom of the soil zone) needs HYDRAUL_COND in the .rvp file with :SoilZone PHYSICAL (it sets the soil-aquifer conductance)").c_str(),BAD_DATA);
     }
+    ExitGracefullyIf(_aProfiles[_hruProfile[k]].recharge_delay>0.0,("CGroundwaterModel: HRU "+id+": RECHARGE_DELAY of aquifer profile "+_aProfiles[_hruProfile[k]].name+
+      " cannot be used with :SoilZone PHYSICAL (the delay store would hold recharge that the saturated soil zone rejects); set it to 0").c_str(),BAD_DATA);
     double ks=pHRU->GetSoilProps(_szNLayers-1)->hydraul_cond;
     ExitGracefullyIf(!(ks>0.0),("CGroundwaterModel: HRU "+id+": HYDRAUL_COND of SOIL["+to_string(_szNLayers-1)+"] (the bottom of the soil zone) must be positive with :SoilZone PHYSICAL").c_str(),BAD_DATA);
     ExitGracefullyIf(_szD[k]>20.0,("CGroundwaterModel: HRU "+id+": the soil zone SOIL[0.."+to_string(_szNLayers-1)+"] is "+to_string(_szD[k])+
@@ -69,6 +71,11 @@ void CGroundwaterModel::SZSetup()
     _szOn[k]=1; nOn++;
   }
   if (nThick>0){WriteWarning("CGroundwaterModel: "+to_string(nThick)+" HRUs have a soil zone thicker than 5 m (up to "+to_string(Dmax)+" m); check that SOIL[0.."+to_string(_szNLayers-1)+"] are physical soil layers",false);}
+  if ((nOn>0) && (_maxiter<20)){WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL with :SolverMaxOuterIterations "+to_string(_maxiter)+": the soil-zone interface is updated within MODFLOW's outer iterations; a limit below 20 leaves many steps unconverged",false);}
+  for (size_t i=0;i<_aqHRUs.size();i++){int k=_aqHRUs[i];
+    if (_szOn[k] && (_aProfiles[_hruProfile[k]].seep_smooth_depth<0.05)){
+      WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: SEEPAGE_SMOOTHING_DEPTH of aquifer profile "+_aProfiles[_hruProfile[k]].name+" is below 0.05 m; the soil-zone connection then switches almost abruptly and the interface may not converge (0.1 to 0.5 m is typical)",false); break;}
+  }
   if (nOn==0){WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: no coupled HRU has soil layers; the setting has no effect",false);}
   for (size_t p=0;p<_aProfiles.size();p++){
     if (_aProfiles[p].soil_zone_depth>0){WriteWarning("CGroundwaterModel: SOIL_ZONE_DEPTH of aquifer profile "+_aProfiles[p].name+" is ignored with :SoilZone PHYSICAL (the soil-zone base comes from the soil layers)",false);}
@@ -171,7 +178,7 @@ void CGroundwaterModel::SZBuildEntries()
     _szColA.push_back(max(A-sum,0.0));                                            //rest of the HRU
   }
   _szColPhi.assign(_szColA.size()*_szNLayers,0.0); _szColInit=false;
-  _szxLam.assign(_szxLink.size(),0.0); _szxRej.assign(_szxLink.size(),0.0);
+  _szxLam.assign(_szxLink.size(),0.0); _szxRej.assign(_szxLink.size(),0.0); _szxFw.assign(_szxLink.size(),0.0); _szxRq.assign(_szxLink.size(),0.0); _szxLq.assign(_szxLink.size(),0.0);
   _szxQc.assign(_szxLink.size(),0.0); _szxCg.assign(_szxLink.size(),0.0);
   size_t ne=_szxLink.size();
   _szxHc.assign(ne,0.0); _szxHp.assign(ne,0.0); _szxHr.assign(ne,-HUGE_VAL); _szxHq.assign(ne,-HUGE_VAL); _szxQq.assign(ne,0.0);
@@ -352,13 +359,18 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
   {
     int k=_aqHRUs[i]; double V=_szRchV[k],rej=0.0;
     if (_hruRchArea[k]<=0){if (_szOn[k]){_szRej[k]=0.0;} continue;} //all on specified-head cells (counted in _QrchCHD)
+    //an HRU with a soil zone: recharge leaves the columns that hold free water in the bottom layer (Raven's drainage acts
+    //on the HRU mean, and its loss is taken from the columns' free water first, gwsz::Distribute), not by area: drainage
+    //from saturated columns spread over unsaturated ones would recharge the aquifer upslope of where it came from
+    double W=0.0;
+    if (_szOn[k]){for (size_t j=0;j<_hruLinks[k].size();j++){int li=_hruLinks[k][j]; if (!_colCHDTop[_aLinks[li].ic] && (_linkSzx[li]>=0)){W+=_szxFw[_linkSzx[li]];}}}
     for (size_t j=0;j<_hruLinks[k].size();j++){
       int li=_hruLinks[k][j]; const gw_link &L=_aLinks[li];
       if (_colCHDTop[L.ic]){continue;}
-      double share=L.area/_hruRchArea[k],F=_linkF[li];
+      double share=(W>0.0)?((_linkSzx[li]>=0)?_szxFw[_linkSzx[li]]/W:0.0):L.area/_hruRchArea[k],F=_linkF[li];
       _Qcol[L.ic]+=V/tstep*share*(1.0-F);
       rej+=V*share*F;
-      if (_linkSzx[li]>=0){_szxRej[_linkSzx[li]]=V*share*F;}
+      if (_linkSzx[li]>=0){_szxRej[_linkSzx[li]]=V*share*F; _szxRq[_linkSzx[li]]=V*share/tstep;}
     }
     if (_szOn[k]){_szRej[k]=rej;}
   }
@@ -394,8 +406,9 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     //held; its change is found by the update of hc):
     //   dq/dh = q_h / (1 + c q_lam lambda') = -F C / (1 + c q_lam lambda'),   lambda' = dlambda/dV [m/mm]
     //Cg sets only how fast the interface converges. For water rising into the soil it is kept at least the secant to
-    //the lowest base, below which nothing can rise: the linear boundary then never extracts water from a cell that has
-    //fallen below every base, as a too small slope would (a fixed-rate well drying its cell).
+    //the level where the contact ends (the lowest base minus ds), below which nothing can rise: the linear boundary then
+    //never extracts water from a cell that has fallen below every base, as a too small slope would (a fixed-rate well
+    //drying its cell). (A floor taken at the base itself is far too stiff just above it, and the iteration creeps.)
     double F,qh,qc,ql;
     double q=gwsz::SubgridFlux(cell,lam,h,_szxHc[e],F,qh,qc,ql);
     if (_szxHc[e]!=h){ //the connection still lags the head: the exchange it misses, in head units (q/C)
@@ -405,16 +418,17 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     double x=steady?0.0:MM_PER_METER*tstep/a*ql*lamp;
     double Cg=-qh/(1.0+x),sec=0.0; (void)qc;
     //never below the secant through the last local solve of this step: the exchange as a function of the head steepens
-    //where the column fills (lambda' falls to 0) or a sample connects; a slope taken on the flat side would let MODFLOW
-    //overshoot across that kink and cycle (a slope too large only slows the convergence, one too small can diverge)
+    //where the column fills (lambda' falls to 0, the slope jumps from -q_h/(1 + c q_lam lambda') to -q_h) or a sample
+    //connects; a slope taken on the flat side lets MODFLOW overshoot across that kink and cycle (a slope too large only
+    //slows the convergence, one too small can diverge)
     if (!steady){
       if ((_szxHq[e]!=-HUGE_VAL) && (fabs(h-_szxHq[e])>1e-6)){
         double s=-(q-_szxQq[e])/(h-_szxHq[e]);
         if (s>Cg){Cg=min(s,max(-qh,Cg));}
       }
-      _szxHq[e]=h; _szxQq[e]=q;
+      _szxHq[e]=h; _szxQq[e]=q; _szxLq[e]=lam;
     }
-    if (q<0.0){sec=-q/max(h-cell.zbs[0],1e-3);}
+    if (q<0.0){sec=-q/max(h-(cell.zbs[0]-max(cell.ds,0.0)),1e-3);} //no contact below the lowest base minus ds
     _szxQc[e]=q; _szxCg[e]=max(max(Cg,sec),1e-9*cell.C);
   }
   _szResid=maxd;
@@ -464,7 +478,7 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   //together); after that only when MODFLOW has converged on the interface it was given, so that the changing
   //boundary does not keep MODFLOW's own iteration (its under-relaxation and backtracking) from converging. The update
   //budget counts the updates made after MODFLOW had converged; when it is used up the values are frozen.
-  const int nEarly=5;
+  const int nEarly=min(5,max(1,_maxiter/5));
   if (_szMaxIter==0){return true;}                                            //explicit: the predictor only
   if (!mf6conv && (iter>nEarly)){return false;}                               //let MODFLOW converge first
   if (mf6conv){_szExtra++;}

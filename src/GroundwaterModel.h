@@ -296,7 +296,9 @@ private:/*----------------------------------------------------*/
   vector<double>         _szxQc,_szxCg;  ///< per SZX entry: exchange at the current head [m3/d] and its slope -dq/dh [m2/d]
   vector<double>         _szxHc;         ///< per SZX entry: head that sets the connection weights (lags the head inside the iteration) [m]
   vector<double>         _szxHp,_szxHr;  ///< per SZX entry: previous hc and its residual h - hc [m] (-HUGE_VAL: none yet this step)
-  vector<double>         _szxHq,_szxQq;  ///< per SZX entry: head [m] and exchange [m3/d] of the last local solve this step (-HUGE_VAL: none)
+  vector<double>         _szxRq;         ///< per SZX entry: the link's share of the HRU's recharge this step [m3/d] (before rejection)
+  vector<double>         _szxFw;         ///< per SZX entry: free water in the bottom layer of its column at the start of the step [m3] (recharge shares)
+  vector<double>         _szxHq,_szxQq,_szxLq; ///< per SZX entry: head [m], exchange [m3/d] and lambda [m] of the last local solve this step (_szxHq -HUGE_VAL: none)
   vector<double>         _szxBa,_szxBra,_szxBb,_szxBrb; ///< per SZX entry: bracket of the root of h - hc (ends, residuals) [m]
   vector<int>            _szxBk;         ///< per SZX entry: bracket state (0 none, else the end replaced last: 1 a, 2 b)
   vector<double>         _szxLam;        ///< per SZX entry: saturated thickness of its column, current iterate [m]

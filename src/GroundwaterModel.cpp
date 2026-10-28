@@ -90,7 +90,7 @@ void CGroundwaterModel::ResetState()
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=_riverAppliedVol=_riverDeficitVol=0.0;
   _szOn.clear(); _szSV.clear(); _szLay.clear(); _szD.clear(); _szLam.clear(); _szRchV.clear(); _szRej.clear(); _szOvfV.clear(); _szNetV.clear(); _szW.clear();
   _linkF.clear(); _cellDem.clear(); _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _colCoverNS.clear(); _szxOfHRU.clear();
-  _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
+  _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxRq.clear(); _szxLq.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0;
@@ -1750,6 +1750,10 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     ExtUpdateCHDTop();
   }
   if (SZPhysical()){ //soil-zone water after Raven's processes this step: start of every local solve
+    for (size_t e=0;e<_szxLink.size();e++){ //free water of each column's bottom layer before Raven's processes: recharge shares
+      int c=_szxCol[e],k=_aLinks[_szxLink[e]].k;
+      _szxFw[e]=max(_szColPhi[c*_szNLayers]-_szLay[k][0].phifc,0.0)/MM_PER_METER*_szColA[c];
+    }
     for (size_t i=0;i<_aqHRUs.size();i++){int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
       for (size_t j=0;j<_szSV[k].size();j++){_szPhiProc[_szPhiOff[k]+j]=aPhinew[k][_szSV[k][j]];}
       SZSyncColumns(k,&_szPhiProc[_szPhiOff[k]]);} //Raven's changes since the last step shared among the columns
@@ -1949,17 +1953,16 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   //-- guard: an unconverged solution can produce spurious flows. Seepage returned to Raven is then limited to
   //   the water that entered the aquifer this step (recharge + river leakage), scaled down uniformly
   if (!_lastConverged){ //all discharge returned to Raven (seepage + river gains) limited to this step's inflow
+                        //(not the soil-zone exchange: the soil zone takes any flow MODFLOW booked, the excess overflows)
     double cap=max(_Qrch+_Qriv_in+_Qswx_in+max(_Qres,0.0)+max(_Qwel,0.0)+max(_Qghb,0.0)+max(_Qchd,0.0)
                    +(IsExternal()?max(_Qother,0.0):0.0)+_Qsz_in,0.0); //all inflows this step (with an existing model, its own packages too)
     double gains=0.0; for (size_t p=0;p<_sbGain.size();p++){gains+=max(_sbGain[p],0.0);}
     for (size_t e=0;e<_swxQ.size();e++){gains+=max(-_swxQ[e],0.0);} //discharge into surface stores
-    for (size_t e=0;e<_szxQ.size();e++){gains+=max(-_szxQ[e],0.0);} //discharge into the soil zone
     if (_Qseep_tot+gains>cap){
       double f=(_Qseep_tot+gains>0)?cap/(_Qseep_tot+gains):0.0;
       for (int ic=0;ic<_ncpl;ic++){_Qseep[ic]*=f;}
       for (size_t p=0;p<_sbGain.size();p++){if (_sbGain[p]>0){_sbGain[p]*=f;}}
       for (size_t e=0;e<_swxQ.size();e++){if (_swxQ[e]<0){_swxQ[e]*=f;}}
-      for (size_t e=0;e<_szxQ.size();e++){if (_szxQ[e]<0){_Qsz_out+=_szxQ[e]*(1.0-f); _szxQ[e]*=f;}}
       WriteWarning("CGroundwaterModel: unconverged step ending "+EndDate(tt.model_time+tstep)+": discharge returned to Raven limited from "+
                    ToStr(_Qseep_tot+gains)+" to "+ToStr(cap)+" m3/d",false);
       _Qseep_tot*=f;
