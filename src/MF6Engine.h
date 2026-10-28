@@ -10,6 +10,7 @@
 #define MF6ENGINE_H
 #include <string>
 #include <vector>
+#include <functional>
 using namespace std;
 
 class CMF6Engine
@@ -48,8 +49,12 @@ public:
   bool   Load            (const string &libpath);
   bool   Initialize      (const string &workdir);
   bool   PrepareTimeStep (double dt);
+  /// afterIter (optional): called after every outer iteration with (iteration, MODFLOW converged); it may change
+  /// package values and returns whether its own (coupling) iteration has converged. The step ends when MODFLOW and
+  /// afterIter both report convergence; without afterIter the loop is the plain MODFLOW loop.
   bool   SolveTimeStep   (int maxiter,bool &converged,int &niter,
-                          double *dvclose=NULL,double relaxedTol=0.0,int relaxedAfter=0,bool *relaxed=NULL);
+                          double *dvclose=NULL,double relaxedTol=0.0,int relaxedAfter=0,bool *relaxed=NULL,
+                          const std::function<bool(int,bool)> &afterIter=std::function<bool(int,bool)>());
   bool   FinalizeTimeStep();
   void   Finalize        ();
 

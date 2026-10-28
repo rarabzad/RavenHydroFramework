@@ -185,7 +185,8 @@ bool CMF6Engine::PrepareTimeStep(double dt)
 /// variable), a step not converged after relaxedAfter iterations continues with the tolerance raised to relaxedTol
 /// for the rest of that step only (*relaxed = true if it then converges); the tolerance is restored afterwards.
 bool CMF6Engine::SolveTimeStep(int maxiter,bool &converged,int &niter,
-                               double *dvclose,double relaxedTol,int relaxedAfter,bool *relaxed)
+                               double *dvclose,double relaxedTol,int relaxedAfter,bool *relaxed,
+                               const std::function<bool(int,bool)> &afterIter)
 {
   CDGuard g(_workdir);
   if (!g.ok()){_lasterr="cannot enter MODFLOW 6 folder "+_workdir; return false;}
@@ -197,7 +198,10 @@ bool CMF6Engine::SolveTimeStep(int maxiter,bool &converged,int &niter,
   for (niter=1;niter<=maxiter;niter++){
     if (tiered && (niter==relaxedAfter+1)){*dvclose=relaxedTol;}
     if (!Check(_solve(&sol,&conv),"solve")){if (tiered){*dvclose=target;} return false;}
-    if (conv==1){converged=true; if (tiered && (niter>relaxedAfter) && (relaxed!=NULL)){*relaxed=true;} break;}
+    bool cpl=true;
+    if (afterIter){cpl=afterIter(niter,conv==1);}
+    if ((conv==1) && cpl){converged=true; if (tiered && (niter>relaxedAfter) && (relaxed!=NULL)){*relaxed=true;} break;}
+    if (niter==maxiter){converged=(conv==1);} //coupling not converged at the limit: report MODFLOW's own state
   }
   if (tiered){*dvclose=target;}
   if (niter>maxiter){niter=maxiter;}

@@ -116,6 +116,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":GWRechargeStore"             )){code=52; }
     else if  (!strcmp(s[0],":GWReservoirSeepage"          )){code=53; }
     else if  (!strcmp(s[0],":GWRiverLossCarry"            )){code=54; }
+    else if  (!strcmp(s[0],":GWSoilZoneColumns"           )){code=55; }
     else if  (!strcmp(s[0],":EndHRUStateVariableTable"    )){code=-2; }
     else if  (!strcmp(s[0],":InitialConcentrationTable"   )){code=4; concname=s[1]; }
     else if  (!strcmp(s[0],":EndInitialConcentrationTable")){code=-2; }
@@ -148,6 +149,9 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":BasinStageHist"              )){code=16;}
     else if  (!strcmp(s[0],":BasinAreaHist"               )){code=17;}
 
+    if ((code>=50) && (code<=55) && (pModel->GetGroundwaterModel()==NULL)){
+      ExitGracefully(("ParseInitialConditionsFile: "+string(s[0])+" needs :GroundwaterModel MODFLOW6 in the .rvi file").c_str(),BAD_DATA); break;
+    }
     switch(code)
     {
     case(-1):  //----------------------------------------------
@@ -947,6 +951,19 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWRechargeStore")){break;}
         if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRechargeStore(s_to_ll(s[0]),s_to_d(s[1]));}
+      }
+      break;
+    }
+    case(55):  //----------------------------------------------
+    {/*:GWSoilZoneColumns  {HRU ID, column, water of each soil-zone layer from the bottom up [mm]} x n
+       :EndGWSoilZoneColumns  (soil-zone columns of :SoilZone PHYSICAL, hotstart) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWSoilZoneColumns")){break;}
+        if (Len>=3){
+          vector<double> phi; for (int i=2;i<Len;i++){phi.push_back(s_to_d(s[i]));}
+          pModel->GetGroundwaterModel()->SetHotstartSoilZoneColumn(s_to_ll(s[0]),s_to_i(s[1]),phi);
+        }
       }
       break;
     }

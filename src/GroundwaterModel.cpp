@@ -63,6 +63,10 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _Qriv_in=_Qriv_out=_riverAppliedVol=_riverDeficitVol=0.0; _budgetLineOpen=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
+  _szMode=0; _szNLayers=0; _szMaxIter=50; _szTolH=1e-4; _szTolQ=1e-6; _szOmega=1.0; _szSubgrid=5;
+  _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0;
+  _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false;
 }
 CGroundwaterModel::~CGroundwaterModel()
 {
@@ -84,6 +88,12 @@ void CGroundwaterModel::ResetState()
   _resP.clear(); _resNode.clear(); _resR.clear(); _resW.clear();
   _X=NULL; _active=false; _stepCount=0; _nNonConverged=0; _budgetLineOpen=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=_riverAppliedVol=_riverDeficitVol=0.0;
+  _szOn.clear(); _szSV.clear(); _szLay.clear(); _szD.clear(); _szLam.clear(); _szRchV.clear(); _szRej.clear(); _szOvfV.clear(); _szNetV.clear(); _szW.clear();
+  _linkF.clear(); _cellDem.clear(); _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _colCoverNS.clear(); _szxOfHRU.clear();
+  _linkFp.clear(); _linkZb.clear(); _szxDl.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
+  _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear(); _linkW.clear(); _linkDF.clear();
+  _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0;
 }
 void CGroundwaterModel::Reinitialize(const optStruct &Options)
 {
@@ -463,6 +473,7 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
     for (int m=0;m<_pModel->GetNumSoilLayers();m++){th+=_pModel->GetHydroUnit(k)->GetSoilThickness(m);}
     if (toSoil && (th<=0.0)){_hruReturnSV[k]=_pModel->GetStateVarIndex(SURFACE_WATER);}
   }
+  if (SZPhysical()){SZSetup();}
 
   CheckProcesses();
   if (IsExternal()){ExtBuild(Options); GWPROF("ExtBuild");}
@@ -490,6 +501,7 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
     for (int l=0;l<_chdNode[e]/_ncpl;l++){if (_idomain[UserNode(l,ic)]>0){top=false;}} if (top){_colCHDTop[ic]=1;}}
   _hruRchArea.assign(_pModel->GetNumHRUs(),0.0);
   for (size_t li=0;li<_aLinks.size();li++){if (!_colCHDTop[_aLinks[li].ic]){_hruRchArea[_aLinks[li].k]+=_aLinks[li].area;}}
+  if (SZPhysical()){SZBuildEntries();}
   //surface-water store <-> aquifer exchanges: one head-dependent cell per column holding group HRUs
   for (size_t x=0;x<_aSWX.size();x++){
     gw_swx &S=_aSWX[x]; int lay=0;
@@ -589,7 +601,7 @@ double CGroundwaterModel::WaterTable(const int ic) const
 void CGroundwaterModel::ClearHotstartData()
 {
   _hotHeads.clear(); _hotDims[0]=_hotDims[1]=_hotDims[2]=0;
-  _hotRchStore.clear(); _hotResSeep.clear(); _hotRivCarry.clear();
+  _hotRchStore.clear(); _hotResSeep.clear(); _hotRivCarry.clear(); _hotSzCols.clear();
   _initMode="FROM_PROFILE"; _initValue=0.0;
 }
 void CGroundwaterModel::ValidateInputs() const
@@ -687,6 +699,17 @@ void CGroundwaterModel::CheckProcesses()
             WriteWarning("CGroundwaterModel: process #"+to_string(j+1)+" sends water to GROUNDWATER in HRU "+to_string(_pModel->GetHydroUnit(k)->GetHRUID())+
                          ", which has no AQUIFER_PROFILE: that water leaves the model. Restrict the process with :-->Conditional",false);
             warned=true; break;
+          }
+        }
+      }
+      if (SZPhysical() && (iTo[q]==_iGW) && (iFrom[q]!=_iGW)){ //recharge must leave the soil zone from its bottom layer
+        int iBot=_pModel->GetStateVarIndex(SOIL,_szNLayers-1);
+        if (iFrom[q]!=iBot){
+          for (size_t i=0;i<_aqHRUs.size();i++){
+            if (_szOn[_aqHRUs[i]] && pProc->ShouldApply(_pModel->GetHydroUnit(_aqHRUs[i]))){
+              ExitGracefully(("CGroundwaterModel: with :SoilZone PHYSICAL, recharge must come from the bottom soil-zone layer SOIL["+to_string(_szNLayers-1)+
+                "]; process #"+to_string(j+1)+" sends water to GROUNDWATER from another store in HRU "+to_string(_pModel->GetHydroUnit(_aqHRUs[i])->GetHRUID())).c_str(),BAD_DATA);
+            }
           }
         }
       }
@@ -915,6 +938,13 @@ void CGroundwaterModel::BuildVertical(const optStruct &Options)
   _top.assign(_ncpl,0.0); _bedrock.assign(_ncpl,0.0);
   _botm.assign(_nlay*_ncpl,0.0); _strt.assign(_nlay*_ncpl,0.0); _idomain.assign(_nlay*_ncpl,0);
   int nThin=0;
+  vector<double> colD; //:SoilZone PHYSICAL: overlap-weighted soil-zone thickness of the column (0 for HRUs without soil)
+  if (SZPhysical()){
+    colD.assign(_ncpl,0.0); vector<double> colA(_ncpl,0.0);
+    for (size_t i=0;i<_aqHRUs.size();i++){int k=_aqHRUs[i];
+      for (map<int,double>::iterator it=_hruCells[k].begin();it!=_hruCells[k].end();it++){colA[it->first]+=it->second; colD[it->first]+=it->second*_szD[k];}}
+    for (int ic=0;ic<_ncpl;ic++){colD[ic]=(colA[ic]>0)?colD[ic]/colA[ic]:0.0;}
+  }
   for (int ic=0;ic<_ncpl;ic++)
   {
     int ip=_colProfile[ic];
@@ -922,7 +952,7 @@ void CGroundwaterModel::BuildVertical(const optStruct &Options)
     {
       const gw_profile &P=_aProfiles[ip];
       double land=_land[ic];
-      double top =land-P.soil_zone_depth;
+      double top =SZPhysical()?land-colD[ic]:land-P.soil_zone_depth;
       double bedrock=land-P.default_bedrock_depth;
       bool ok=false;
       if (bed.IsLoaded()){double b=MeanRaster(bed,ic,ok); if (ok){bedrock=b;}}
@@ -1324,6 +1354,7 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
   if (_chdNode.size()>0){F<<"  CHD6  gwf.chd  CHD_RAVEN\n";}
   if (_swxCol.size()>0) {F<<"  RIV6  gwf.swx  SWX_RAVEN\n";}
   if (_resNode.size()>0){F<<"  WEL6  gwf.res  RES_RAVEN\n";}
+  if (_szxLink.size()>0){F<<"  GHB6  gwf.szx  SZX_RAVEN\n  WEL6  gwf.szq  SZQ_RAVEN\n";}
   F<<"  OC6   gwf.oc   OC\nEND PACKAGES\n"; F.close();
 
   //-- discretization: DIS (regular grids), DISV (quadtree), DISU (meshes, imported cells, connections by elevation)
@@ -1480,6 +1511,8 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
   for (size_t i=0;i<_bndCol.size();i++){
     int ic=_bndCol[i];
     double cond=_aProfiles[_colProfile[ic]].seep_leakance*_grid.area[ic];
+    //:SoilZone PHYSICAL: where soil-zone HRUs cover the column the exchange is SZX_RAVEN; the drain serves the rest
+    if (SZPhysical() && (_colCover[ic]>0)){cond*=_colCoverNS[ic]/_colCover[ic];}
     //MODFLOW refuses a drain whose smoothing interval reaches below the cell bottom: limit it to the top layer
     double dsm=min(_aProfiles[_colProfile[ic]].seep_smooth_depth,_top[ic]-_botm[UserNode(0,ic)]);
     F<<"  "<<CellID(0,ic)<<" "<<_top[ic]<<" "<<cond<<" "<<-dsm<<endl;
@@ -1502,7 +1535,8 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
     F<<"BEGIN OPTIONS\nEND OPTIONS\n\nBEGIN DIMENSIONS\n  MAXBOUND "<<_evtCol.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(10);
     for (size_t i=0;i<_evtCol.size();i++){
       int ic=_evtCol[i];
-      F<<"  "<<CellID(0,ic)<<" "<<_land[ic]<<" 0.0 "<<_aProfiles[_colProfile[ic]].extinction_depth<<endl;
+      //surface: land, or with :SoilZone PHYSICAL the model top (soil-zone base): Raven evaporates the soil zone itself
+      F<<"  "<<CellID(0,ic)<<" "<<(SZPhysical()?_top[ic]:_land[ic])<<" 0.0 "<<_aProfiles[_colProfile[ic]].extinction_depth<<endl;
     }
     F<<"END PERIOD\n"; F.close();
   }
@@ -1540,6 +1574,20 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
     for (size_t e=0;e<_resNode.size();e++){int n=_resNode[e],ic=n%_ncpl; F<<"  "<<CellID(0,ic)<<" 0.0"<<endl;}
     F<<"END PERIOD\n"; F.close();
   }
+  if (_szxLink.size()>0){
+    F.open((d+"gwf.szx").c_str());
+    F<<"# soil zone <-> aquifer (:SoilZone PHYSICAL): one entry per HRU-cell link, the exchange of the link's soil-zone\n";
+    F<<"# column with the cell as a linear (Robin) boundary; head and conductance set by Raven every iteration\n";
+    F<<"BEGIN OPTIONS\nEND OPTIONS\n\nBEGIN DIMENSIONS\n  MAXBOUND "<<_szxLink.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(10);
+    for (size_t e=0;e<_szxLink.size();e++){int ic=_aLinks[_szxLink[e]].ic; F<<"  "<<CellID(0,ic)<<" "<<max(_szxZb[e],_botm[UserNode(0,ic)])<<" 0.0"<<endl;}
+    F<<"END PERIOD\n"; F.close();
+    F.open((d+"gwf.szq").c_str());
+    F<<"# soil zone <-> aquifer, second part: where the boundary head of SZX_RAVEN would lie below the cell bottom (which\n";
+    F<<"# MODFLOW does not accept) that head is raised to the bottom and this rate carries the difference; set by Raven\n";
+    F<<"BEGIN OPTIONS\nEND OPTIONS\n\nBEGIN DIMENSIONS\n  MAXBOUND "<<_szxLink.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n";
+    for (size_t e=0;e<_szxLink.size();e++){int ic=_aLinks[_szxLink[e]].ic; F<<"  "<<CellID(0,ic)<<" 0.0"<<endl;}
+    F<<"END PERIOD\n"; F.close();
+  }
   F.open((d+"gwf.oc").c_str());
   F<<"BEGIN OPTIONS\n  HEAD FILEOUT gwf.hds\nEND OPTIONS\n\nBEGIN PERIOD 1\n  SAVE HEAD FREQUENCY "<<max(1,_headSaveFreq)<<"\n  PRINT BUDGET LAST\nEND PERIOD\n"; F.close();
 }
@@ -1570,8 +1618,8 @@ string CGroundwaterModel::MF6LibraryHelp() const
            "environment variable, then";
   vector<string> c=CMF6Engine::LibraryCandidates();
   for (size_t i=0;i<c.size();i++){s+=" "+c[i]+((i+1<c.size())?",":";");}
-  s+=" then "+CMF6Engine::DefaultLibraryName()+" on the system library path. Download it with get_mf6.py of the Raven-MF6 "
-     "repository (https://github.com/rarabzad/Raven-MF6), or from https://github.com/MODFLOW-ORG/modflow6/releases "
+  s+=" then "+CMF6Engine::DefaultLibraryName()+" on the system library path. Download it with get_mf6.py of the RavenHydroFramework-extra "
+     "repository (https://github.com/rarabzad/RavenHydroFramework-extra), or from https://github.com/MODFLOW-ORG/modflow6/releases "
      "(the library is in the bin folder of the release zip), and put it next to the Raven executable";
   return s;
 }
@@ -1662,6 +1710,17 @@ void CGroundwaterModel::RefreshPointers()
     _swxHcof=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SWX_RAVEN","HCOF")); _swxRhs=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SWX_RAVEN","RHS"));
     ExitGracefullyIf((_swxHead==NULL) || (_swxCond==NULL) || (_swxRbot==NULL) || (_swxHcof==NULL) || (_swxRhs==NULL),"CGroundwaterModel: cannot access MODFLOW 6 surface-water exchange arrays",RUNTIME_ERR);
   }
+  if (_szxLink.size()>0){ //MODFLOW >= 6.5 re-reads BHEAD/COND every outer iteration (tests/soilzone/spike_xmi.py)
+    string a=_mf6.GetVarAddress(_mname,"SZX_RAVEN","BHEAD");
+    if (_mf6.HasVar(a)){_szxNcol=0; _szxHead=_mf6.GetDoublePtr(a); _szxCond=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZX_RAVEN","COND"));}
+    else {_szxNcol=2; _szxHead=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZX_RAVEN","BOUND")); _szxCond=(_szxHead==NULL)?NULL:_szxHead+1;}
+    _szxHcof=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZX_RAVEN","HCOF")); _szxRhs=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZX_RAVEN","RHS"));
+    ExitGracefullyIf((_szxHead==NULL) || (_szxCond==NULL) || (_szxHcof==NULL) || (_szxRhs==NULL),"CGroundwaterModel: cannot access MODFLOW 6 soil-zone exchange arrays",RUNTIME_ERR);
+    a=_mf6.GetVarAddress(_mname,"SZQ_RAVEN","Q");
+    if (_mf6.HasVar(a)){_szqNcol=0; _szqQ=_mf6.GetDoublePtr(a);} else {_szqNcol=1; _szqQ=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZQ_RAVEN","BOUND"));}
+    _szqHcof=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZQ_RAVEN","HCOF")); _szqRhs=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"SZQ_RAVEN","RHS"));
+    ExitGracefullyIf((_szqQ==NULL) || (_szqHcof==NULL) || (_szqRhs==NULL),"CGroundwaterModel: cannot access MODFLOW 6 soil-zone exchange arrays (SZQ_RAVEN)",RUNTIME_ERR);
+  }
   if (_resNode.size()>0){
     string a=_mf6.GetVarAddress(_mname,"RES_RAVEN","Q");
     if (_mf6.HasVar(a)){_resNcol=0; _resQ=_mf6.GetDoublePtr(a);} else {_resNcol=1; _resQ=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"RES_RAVEN","BOUND"));}
@@ -1689,6 +1748,13 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     RefreshPointers();
     ExtUpdateCHDTop();
   }
+  if (SZPhysical()){ //soil-zone water after Raven's processes this step: start of every local solve
+    for (size_t i=0;i<_aqHRUs.size();i++){int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
+      for (size_t j=0;j<_szSV[k].size();j++){_szPhiProc[_szPhiOff[k]+j]=aPhinew[k][_szSV[k][j]];}
+      SZSyncColumns(k,&_szPhiProc[_szPhiOff[k]]);} //Raven's changes since the last step shared among the columns
+    _szColInit=true;
+    _szTstep=tstep; SZResetRelaxation(); _szResid=0.0; _szIter=0; _szConv=true;
+  }
   //-- 1. Raven recharge -> column flows [m3/d], mass-conservative per HRU
   std::fill(_Qcol.begin(),_Qcol.end(),0.0);
   _ravenRchVol=0.0; _QrchCHD=0.0;
@@ -1704,6 +1770,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       V=_rchStore[k]*(1.0-exp(-tstep/tau));
       _rchStore[k]-=V;
     }
+    if (SZPhysical()){_szRchV[k]=V;} //distributed with rejection by SZRecharge
     if (_hruRchArea[k]<=0){_QrchCHD+=V/tstep; continue;} //HRU entirely on specified-head cells
     for (size_t j=0;j<_hruLinks[k].size();j++){
       const gw_link &L=_aLinks[_hruLinks[k][j]];
@@ -1734,6 +1801,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     //MODFLOW multiplies the rate by the whole cell area: spread the unmet-PET volume of the coupled HRUs over the cell,
     //so the maximum ET MODFLOW can remove equals that volume (not more where HRUs cover only part of the cell)
     for (size_t i=0;i<_evtCol.size();i++){int ic=_evtCol[i]; _evtRate[i*es]=_work[ic]/_grid.area[ic];}
+    if (SZPhysical()){_evtBase.assign(_evtCol.size(),0.0); for (size_t i=0;i<_evtCol.size();i++){_evtBase[i]=_evtRate[i*es];}}
   }
   SetBoundaryArrays(tt.model_time,tstep);
   //reservoirs: seepage Raven computed during the previous step's routing enters the aquifer now (one-step lag)
@@ -1776,14 +1844,24 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     int st=max(_swxNcol,1); _swxHead[e*st]=bhead; _swxCond[e*st]=C; _swxRbot[e*st]=_top[ic]; //bed set in memory: exactly equal to stage when the store is empty
   }
   bool conv; int niter;
+  std::function<bool(int,bool)> szcb; //:SoilZone PHYSICAL: interface update after every MODFLOW outer iteration
+  if (_szxLink.size()>0){
+    SZLinkFractions(false); SZRecharge(tstep,false); SZLocalSolves(tstep); SZSetArrays(false); //predictor from the heads of the last step
+    _szPrevQ=HUGE_VAL;
+    szcb=[this,aPhinew](int it,bool){return SZIterate(aPhinew,it,false,_szPrevQ);};
+  }
   //target: _dvclose; a step not converged after 100 iterations continues with MODFLOW's tolerance at 10*_dvclose
   double *dvc=_mf6.GetDoublePtr("SLN_1/DVCLOSE"); //MODFLOW's own tolerance: raised for the rest of a hard step only
   //hard steps: after 100 iterations (or half the iteration limit, if that is smaller) MODFLOW's own tolerance is relaxed
   //tenfold for the rest of the step (in the model's
   //units: with an existing model its own DVCLOSE is the target)
   double relaxTol=(IsExternal() && (_extDvclose>0))?10.0*_extDvclose/_hf:10.0*_dvclose;
-  if (!_mf6.SolveTimeStep(_maxiter,conv,niter,dvc,relaxTol,min(100,max(1,_maxiter/2)),&_lastRelaxed)){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
+  if (!_mf6.SolveTimeStep(_maxiter,conv,niter,dvc,relaxTol,min(100,max(1,_maxiter/2)),&_lastRelaxed,szcb)){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
   _lastConverged=conv; _lastIter=niter;
+  if ((_szxLink.size()>0) && !_szConv){
+    _szNotConv++;
+    if (_szNotConv<=10){WriteWarning("CGroundwaterModel: soil-zone interface did not converge on "+tt.date_string+" (last change "+ToStr(_szResid)+" m; continuing with MODFLOW's flows)",Options.noisy);}
+  }
   if (!conv){
     _nNonConverged++;
     if (_nNonConverged<=10){WriteWarning("CGroundwaterModel: MODFLOW 6 did not converge on "+tt.date_string+" (continuing)",Options.noisy);}
@@ -1843,30 +1921,38 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     int ic=_evtCol[i];
     _Qevt-=(_evtHcof[i]*_X[_reduced[TopNode(ic)]]-_evtRhs[i])*_qf; //EVT flow is out of the aquifer
   }
+  _Qsz_in=_Qsz_out=0.0;
+  for (size_t e=0;e<_szxLink.size();e++){ //soil zone <-> aquifer, MODFLOW's booked flow (+ into aquifer)
+    double h=_X[_reduced[TopNode(_aLinks[_szxLink[e]].ic)]];
+    double q=(_szxHcof[e]*h-_szxRhs[e])*_qf+(_szqHcof[e]*h-_szqRhs[e])*_qf;     //SZX_RAVEN + SZQ_RAVEN
+    _szxQ[e]=q; if (q>0){_Qsz_in+=q;} else {_Qsz_out-=q;}
+  }
   _Qsto=0.0;
   if (_strgss!=NULL){
     int nn=0; for (int n=0;n<_nlay*_ncpl;n++){if (_idomain[n]>0){nn++;}}
     for (int n=0;n<nn;n++){_Qsto+=(_strgss[n]+_strgsy[n])*_qf;}
-    _Qerr=_Qrch+_Qsto-_Qseep_tot+_Qriv_in-_Qriv_out-_Qevt+_Qwel+_Qghb+_Qchd+_Qswx_in-_Qswx_out+_Qres; //(_QrchCHD never enters MODFLOW)
+    _Qerr=_Qrch+_Qsto-_Qseep_tot+_Qriv_in-_Qriv_out-_Qevt+_Qwel+_Qghb+_Qchd+_Qswx_in-_Qswx_out+_Qres+_Qsz_in-_Qsz_out; //(_QrchCHD never enters MODFLOW)
     if (IsExternal()){_Qerr+=_Qother;}
   }
   else if (IsExternal() && _extNoSto){ //an existing model without a storage package is steady state: no storage flow, the residual is MODFLOW's error
     _Qsto=0.0; _Qerr=_Qrch-_Qseep_tot+_Qriv_in-_Qriv_out-_Qevt+_Qwel+_Qghb+_Qchd+_Qswx_in-_Qswx_out+_Qres+_Qother;
   }
-  else {_Qsto=_Qseep_tot-_Qrch-_Qriv_in+_Qriv_out+_Qevt-_Qwel-_Qghb-_Qchd-_Qswx_in+_Qswx_out-_Qres-_Qother; _Qerr=0.0;}
+  else {_Qsto=_Qseep_tot-_Qrch-_Qriv_in+_Qriv_out+_Qevt-_Qwel-_Qghb-_Qchd-_Qswx_in+_Qswx_out-_Qres-_Qother-_Qsz_in+_Qsz_out; _Qerr=0.0;}
 
   //-- guard: an unconverged solution can produce spurious flows. Seepage returned to Raven is then limited to
   //   the water that entered the aquifer this step (recharge + river leakage), scaled down uniformly
   if (!_lastConverged){ //all discharge returned to Raven (seepage + river gains) limited to this step's inflow
     double cap=max(_Qrch+_Qriv_in+_Qswx_in+max(_Qres,0.0)+max(_Qwel,0.0)+max(_Qghb,0.0)+max(_Qchd,0.0)
-                   +(IsExternal()?max(_Qother,0.0):0.0),0.0); //all inflows this step (with an existing model, its own packages too)
+                   +(IsExternal()?max(_Qother,0.0):0.0)+_Qsz_in,0.0); //all inflows this step (with an existing model, its own packages too)
     double gains=0.0; for (size_t p=0;p<_sbGain.size();p++){gains+=max(_sbGain[p],0.0);}
     for (size_t e=0;e<_swxQ.size();e++){gains+=max(-_swxQ[e],0.0);} //discharge into surface stores
+    for (size_t e=0;e<_szxQ.size();e++){gains+=max(-_szxQ[e],0.0);} //discharge into the soil zone
     if (_Qseep_tot+gains>cap){
       double f=(_Qseep_tot+gains>0)?cap/(_Qseep_tot+gains):0.0;
       for (int ic=0;ic<_ncpl;ic++){_Qseep[ic]*=f;}
       for (size_t p=0;p<_sbGain.size();p++){if (_sbGain[p]>0){_sbGain[p]*=f;}}
       for (size_t e=0;e<_swxQ.size();e++){if (_swxQ[e]<0){_swxQ[e]*=f;}}
+      for (size_t e=0;e<_szxQ.size();e++){if (_szxQ[e]<0){_Qsz_out+=_szxQ[e]*(1.0-f); _szxQ[e]*=f;}}
       WriteWarning("CGroundwaterModel: unconverged step ending "+EndDate(tt.model_time+tstep)+": discharge returned to Raven limited from "+
                    ToStr(_Qseep_tot+gains)+" to "+ToStr(cap)+" m3/d",false);
       _Qseep_tot*=f;
@@ -1890,12 +1976,19 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       _swxAppliedVol+=dV;
     }
   }
+  //-- soil zone: MODFLOW's exchange, rejected recharge and overflow to Raven (:SoilZone PHYSICAL)
+  if (SZPhysical()){SZApply(aPhinew,tstep);}
   //-- 4. seepage -> Raven store of overlapping HRUs (share of column by overlap area)
   _returnVol=0.0;
   for (size_t li=0;li<_aLinks.size();li++){
     const gw_link &L=_aLinks[li];
     if (_Qseep[L.ic]==0.0){continue;}
-    double V=_Qseep[L.ic]*tstep*L.area/_colCover[L.ic]; //[m3]
+    double cover=_colCover[L.ic];
+    if (SZPhysical()){ //the drain serves only the HRUs without a soil zone in the column
+      if (_szOn[L.k]){continue;}
+      cover=_colCoverNS[L.ic]; if (cover<=0.0){continue;}
+    }
+    double V=_Qseep[L.ic]*tstep*L.area/cover; //[m3]
     aPhinew[L.k][_hruReturnSV[L.k]]+=V/(_pModel->GetHydroUnit(L.k)->GetArea()*M2_PER_KM2)*MM_PER_METER;
     _returnVol+=V;
   }
@@ -1968,7 +2061,12 @@ void CGroundwaterModel::RunSteadyState()
   int nx=0; for (size_t i=0;i<_reduced.size();i++){if (_reduced[i]>=0){nx++;}}
   vector<double> x0; if (_X!=NULL){x0.assign(_X,_X+nx);}
   bool conv; int niter;
-  if (!_mf6.SolveTimeStep(_maxiter,conv,niter)){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
+  if (_szxLink.size()>0){ //soil zone not yet active: SZX acts as a drain at each link's base (no soil water, no supply)
+    SZLinkFractions(false); SZSetArrays(true); _szPrevQ=HUGE_VAL; SZResetRelaxation();
+    std::function<bool(int,bool)> cb=[this](int it,bool){return SZIterate(NULL,it,true,_szPrevQ);};
+    if (!_mf6.SolveTimeStep(_maxiter,conv,niter,NULL,0.0,0,NULL,cb)){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
+  }
+  else if (!_mf6.SolveTimeStep(_maxiter,conv,niter)){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
   if (!_mf6.FinalizeTimeStep()){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
   cout<<"  Groundwater steady-state initialization "<<(conv?"converged":"DID NOT CONVERGE")<<" in "<<niter<<" outer iterations"<<endl;
   if (!conv){
@@ -2077,6 +2175,18 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
     for (size_t p=0;p<_sbLossRemain.size();p++){if (_sbLossRemain[p]>0){RVC<<"  "<<_pModel->GetSubBasin((int)p)->GetID()<<", "<<setprecision(15)<<_sbLossRemain[p]<<endl;}}
     RVC<<":EndGWRiverLossCarry"<<endl;
   }
+  if (SZPhysical() && _szColInit){ //water of the soil-zone columns (Raven's SOIL[m] holds only their mean)
+    RVC<<":GWSoilZoneColumns   # HRU ID, column (last: rest of the HRU), water of SOIL["<<_szNLayers-1<<"] up to SOIL[0] in the column [mm]"<<endl;
+    for (size_t i=0;i<_aqHRUs.size();i++){
+      int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
+      for (int c=0;c<SZNCols(k);c++){
+        RVC<<"  "<<_pModel->GetHydroUnit(k)->GetHRUID()<<", "<<c<<setprecision(15);
+        for (int j=0;j<_szNLayers;j++){RVC<<", "<<_szColPhi[(_szColOff[k]+c)*_szNLayers+j];}
+        RVC<<endl;
+      }
+    }
+    RVC<<":EndGWSoilZoneColumns"<<endl;
+  }
   bool anyDelay=false; for (size_t p=0;p<_aProfiles.size();p++){if (_aProfiles[p].recharge_delay>0){anyDelay=true;}}
   if (anyDelay){
     RVC<<":GWRechargeStore   # HRU ID, water in recharge-delay reservoir [m3]"<<endl;
@@ -2125,6 +2235,7 @@ void CGroundwaterModel::FinishBudgetLine()
     for (size_t r=0;r<_resP.size();r++){_resPendingVol+=_pModel->GetSubBasin(_resP[r])->GetReservoir()->GetReservoirGWLosses(1.0);}
     _BUDGET<<","<<_Qres_spec<<","<<_Qres<<","<<_resPendingVol<<","<<_resShortVol;
     if (IsExternal()){_BUDGET<<","<<_Qother;}
+    if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid;}
     _BUDGET<<endl;
   }
   _budgetLineOpen=false;
@@ -2168,7 +2279,15 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
          <<"MF6 balance error [m3/d],MF6 balance error [%],returned to Raven [m3],outer iterations,converged,recharge delay storage [m3],recharge onto CHD cells [m3/d],"
          <<"river leakage to aquifer [m3/d],aquifer discharge to rivers [m3/d],river exchange applied to Raven [m3],river loss carried to next step [m3],water-table ET [m3/d],wells specified [m3/d],wells actual [m3/d],GHB [m3/d],CHD [m3/d],"
          <<"surface-store leakage to aquifer [m3/d],aquifer discharge to surface stores [m3/d],surface-store exchange applied to Raven [m3],"
-         <<"reservoir seepage sent [m3/d],reservoir seepage delivered [m3/d],reservoir seepage awaiting delivery [m3],reservoir gain not supplied by MODFLOW [m3]"<<(IsExternal()?",other model packages [m3/d]":"")<<endl;
+         <<"reservoir seepage sent [m3/d],reservoir seepage delivered [m3/d],reservoir seepage awaiting delivery [m3],reservoir gain not supplied by MODFLOW [m3]"<<(IsExternal()?",other model packages [m3/d]":"")
+         <<(SZPhysical()?",soil zone to aquifer [m3/d],aquifer to soil zone [m3/d],rejected recharge [m3],soil-zone overflow [m3],soil-zone exchange applied to Raven [m3],"
+                         "soil-zone shortfall [m3],interface updates,interface converged,interface change [m]":"")<<endl;
+  if (SZPhysical()){
+    _SZOUT.open(FilenamePrepare("GWSoilExchange.csv",Options).c_str());
+    ExitGracefullyIf(_SZOUT.fail(),"CGroundwaterModel: cannot open GWSoilExchange.csv",FILE_OPEN_ERR);
+    _SZOUT<<"time [d],date,HRU_ID,soil-zone base [m],soil water level [m],water table [m],saturated fraction [-],"
+          <<"soil zone to aquifer [m3/d],aquifer to soil zone [m3/d],rejected recharge [mm],overflow [mm],soil-zone water [mm],soil-zone capacity [mm],interface updates,interface change [m]"<<endl;
+  }
   if (_aObsWells.size()>0){
     _HEADS.open(FilenamePrepare("GWHeads.csv",Options).c_str());
     _HEADS<<"time [d],date";
@@ -2190,7 +2309,7 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
 void CGroundwaterModel::WriteStepOutputs(const double &tstep,const time_struct &tt)
 {
   double t=tt.model_time+tstep;
-  double scale=max(fabs(_Qrch)+fabs(_Qseep_tot)+fabs(_Qsto)+_Qriv_in+_Qriv_out+fabs(_Qevt)+fabs(_Qwel)+fabs(_Qghb)+fabs(_Qchd)+_Qswx_in+_Qswx_out+fabs(_Qres)+fabs(_Qother),1.0); //gross flow through the aquifer [m3/d]
+  double scale=max(fabs(_Qrch)+fabs(_Qseep_tot)+fabs(_Qsto)+_Qriv_in+_Qriv_out+fabs(_Qevt)+fabs(_Qwel)+fabs(_Qghb)+fabs(_Qchd)+_Qswx_in+_Qswx_out+fabs(_Qres)+fabs(_Qother)+_Qsz_in+_Qsz_out,1.0); //gross flow through the aquifer [m3/d]
   string dstr=EndDate(t);
   _BUDGET<<setprecision(10)<<t<<","<<dstr<<","<<_ravenRchVol/tstep<<","<<_Qrch<<","<<_Qseep_tot<<","<<_Qsto<<","
          <<_Qerr<<","<<100.0*_Qerr/scale<<","<<_returnVol<<","<<_lastIter<<","<<(_lastConverged?(_lastRelaxed?2:1):0)<<","<<_rchStoreTot<<","<<_QrchCHD; //line completed in FinishBudgetLine
@@ -2202,6 +2321,7 @@ void CGroundwaterModel::WriteStepOutputs(const double &tstep,const time_struct &
     _HEADS<<endl;
   }
   WriteConnectivity(t,dstr);
+  if (SZPhysical()){SZWriteStep(t,dstr);}
 
   _HRUSTATE<<setprecision(8)<<t<<","<<dstr;
   vector<double> head(_aqHRUs.size(),0.0),depth(_aqHRUs.size(),0.0);
@@ -2282,6 +2402,17 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
     if (IsExternal()){S<<"layers from the model, ";} else {S<<_aProfiles[p].layers.size()<<" layers, ";}
     S<<n<<" columns"<<endl;
   }
+  if (SZPhysical()){
+    int nOn=0; double dmin=1e300,dmax=0,cmin=1e300,cmax=0;
+    for (size_t i=0;i<_aqHRUs.size();i++){int k=_aqHRUs[i]; if (_szOn[k]){nOn++; dmin=min(dmin,_szD[k]); dmax=max(dmax,_szD[k]);}}
+    for (size_t e=0;e<_szxC.size();e++){double a=_aLinks[_szxLink[e]].area; cmin=min(cmin,_szxC[e]/a); cmax=max(cmax,_szxC[e]/a);}
+    S<<"  soil zone             : PHYSICAL, SOIL[0.."<<_szNLayers-1<<"]; "<<nOn<<" HRUs with a soil zone, "<<_aqHRUs.size()-nOn<<" without (seepage drain)"<<endl;
+    if (nOn>0){
+      S<<"  soil-zone thickness   : "<<dmin<<" to "<<dmax<<" m; model top = land surface - overlap-weighted thickness"<<endl;
+      if (_szxC.size()>0){S<<"  soil-zone links       : "<<_szxC.size()<<" (SZX_RAVEN), conductance per area "<<cmin<<" to "<<cmax<<" 1/d; Sy/drainable porosity "<<_szRatioMin<<" to "<<_szRatioMax<<endl;}
+      S<<"  interface iteration   : up to "<<_szMaxIter<<" updates, tolerances "<<_szTolH<<" m and "<<_szTolQ<<", relaxation "<<_szOmega<<"; saturated fraction from "<<_szSubgrid<<"x"<<_szSubgrid<<" DEM samples per cell"<<(_dem.IsLoaded()?"":" (no DEM: cell mean)")<<endl;
+    }
+  }
   S<<endl<<"HRU_ID,profile,rvh_area_km2,polygon_area_km2,linked_area_km2,linked_fraction_of_polygon,n_cells"<<endl;
   for (size_t i=0;i<_aqHRUs.size();i++){
     int k=_aqHRUs[i]; CHydroUnit *pHRU=_pModel->GetHydroUnit(k);
@@ -2297,6 +2428,11 @@ void CGroundwaterModel::CloseOutputs()
   if (_HRUSTATE.is_open()){_HRUSTATE.close();}
   if (_CONN.is_open()){_CONN.close();}
   if (_HEADS.is_open()){_HEADS.close();}
+  if (_SZOUT.is_open()){_SZOUT.close();}
+  if (_szNotConv>0){
+    cout<<"WARNING: the soil-zone interface did not converge on "<<_szNotConv<<" time steps (see GWBudget.csv, 'interface converged')"<<endl;
+    _szNotConv=0;
+  }
 #ifdef netcdf
   if (_ncid>=0){nc_close(_ncid); _ncid=-1;}
 #endif

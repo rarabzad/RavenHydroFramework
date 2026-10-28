@@ -33,6 +33,7 @@ void  DeletePropArray       (int *indices,double **properties,int num_read);
 void  RVPParameterWarning   (string *aP, class_type *aPC, int &nP, CModel* pModel);
 void  CreateRVPTemplate     (string *aP, class_type *aPC, int &nP, const optStruct &Options);
 void  ImproperFormatWarning(string command,CParser *p,bool noisy);
+bool  GWFileUsesPhysicalSoilZone(const optStruct &Options); //ParseGWFile.cpp
 void  AddToMasterParamList   (string        *&aPm, class_type       *&aPCm, int       &nPm,
                               const string  *aP , const class_type *aPC , const int &nP);
 void  AddNewSoilClass       (CSoilClass **&pSoilClasses, soil_struct **&parsed_soils,
@@ -143,6 +144,14 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
   if (pModel->GetStateVarIndex(DEPRESSION) != DOESNT_EXIST){
     aP [0]="DEP_MAX"; aPC[0]=CLASS_LANDUSE;
     AddToMasterParamList(aPmaster, aPCmaster,nPmaster, aP, aPC, 1);
+  }
+  // Soil parameters of the soil-zone <-> groundwater coupling (:SoilZone PHYSICAL in the .rvg file)
+  //--------------------------------------------------------------------------
+  if (GWFileUsesPhysicalSoilZone(Options)){
+    aP[0]="HYDRAUL_COND";   aPC[0]=CLASS_SOIL;
+    aP[1]="POROSITY";       aPC[1]=CLASS_SOIL;
+    aP[2]="FIELD_CAPACITY"; aPC[2]=CLASS_SOIL;
+    AddToMasterParamList(aPmaster, aPCmaster,nPmaster, aP, aPC, 3);
   }
   //canopy handled in CmvPrecipitation::GetParticipatingParamList
   //Add parameters required for routing
