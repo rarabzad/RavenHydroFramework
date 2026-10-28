@@ -746,6 +746,7 @@
     <ClCompile Include="GWSoilZoneModel.cpp" />
     <ClCompile Include="GWSoilZoneStep.cpp" />
     <ClCompile Include="GWVadose.cpp" />
+    <ClCompile Include="GWVadoseModel.cpp" />
     <ClCompile Include="MF6Engine.cpp" />
     <ClCompile Include="HeatConduction.cpp" />
     <ClCompile Include="HRUGroups.cpp" />
