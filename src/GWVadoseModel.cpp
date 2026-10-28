@@ -21,7 +21,7 @@ void CGroundwaterModel::VZSetup()
   _vzCol.assign(ne,gwvz::vz_column()); _vzStrat.assign(ne,gwvz::vz_strat());
   _vzUse.assign(ne,0); _vzQ.assign(ne,0.0); _vzAbsQ.assign(ne,0.0); _vzRejV.assign(ne,0.0); _vzFp.assign(ne,0.0);
   _vzInV.assign(ne,0.0); _vzCapV.assign(ne,0.0); _vzCapL.assign(ne*_szNLayers,0.0);
-  gwvz::SetAccuracy(_vzAcc);
+  gwvz::SetAccuracy(_vzAcc); gwvz::SetReference((_vzMode==2)?1:0);
   vector<char> warned(_aClasses.size(),0),warnSy(_aClasses.size(),0); string noUnsat="",badSy=""; bool extBadSy=false;
   for (size_t e=0;e<ne;e++){
     const gw_link &L=_aLinks[_szxLink[e]]; const int ic=L.ic;
@@ -59,15 +59,26 @@ void CGroundwaterModel::VZSetup()
     if (!S.zbot.empty()){S.zbot.back()=-1e9;}                                  //(and the last one down)
   }
   if ((badSy!="") || extBadSy){
-    WriteWarning("CGroundwaterModel: :SoilZoneVadose RICHARDS: the specific yield differs by more than a factor 2 from the drainable porosity "
+    WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": the specific yield differs by more than a factor 2 from the drainable porosity "
                  "theta_s - theta(psi = -1 m) of POROSITY, CLAPP_B and AIR_ENTRY_PRESSURE"+(badSy!=""?(" for "+badSy):string(" in cells of the model and :SoilZoneAquiferClass"))+
                  "; a rising water table then releases more (or less) water from the unsaturated column than MODFLOW stores with Sy, and with Sy too small "
                  "the water table rises step by step to the soil-zone base",false);
   }
   if (noUnsat!=""){
-    WriteWarning("CGroundwaterModel: :SoilZoneVadose RICHARDS: aquifer classes "+noUnsat+" have no CLAPP_B and AIR_ENTRY_PRESSURE; the unsaturated column "
+    WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": aquifer classes "+noUnsat+" have no CLAPP_B and AIR_ENTRY_PRESSURE; the unsaturated column "
                  "uses 4 and 0.3 m (give both in :AquiferClasses)",false);
   }
+}
+
+//////////////////////////////////////////////////////////////////
+/// \brief advances one unsaturated column over dt by the method of :SoilZoneVadose (gwvz::Step, StepKinematic, StepLag);
+///  all share the column (grid, contents, equilibrium reference, MoveBottom) and return the flux into the water table
+//
+double CGroundwaterModel::VZColStep(gwvz::vz_column &c,const gwvz::vz_strat &S,const double dt,const double qtop,double &rej,gwvz::vz_step_info *inf,const bool noUp) const
+{
+  if (_vzMode==2){return gwvz::StepKinematic(c,S,dt,qtop,rej,inf);}
+  if (_vzMode==3){return gwvz::StepLag(c,S,dt,qtop,rej,inf,_vzPar);}
+  return gwvz::Step(c,S,dt,qtop,rej,inf,noUp);
 }
 
 //////////////////////////////////////////////////////////////////
@@ -183,7 +194,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
             }
             const double zn=(lo>col.ztop-0.01)?col.ztop:lo;                      //(a remainder thinner than 1 cm: the column goes)
             _vzAbsQ[e]=gwvz::MoveBottom(col,S,zn,_vzN)*a/tstep;
-            if (_vzSlowed++==0){WriteWarning("CGroundwaterModel: :SoilZoneVadose RICHARDS: a rising water table met more water above equilibrium in an unsaturated "
+            if (_vzSlowed++==0){WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": a rising water table met more water above equilibrium in an unsaturated "
                                              "column than MODFLOW stores with Sy; the column releases at most Sy dh per step (Sy below the drainable porosity?)",false);}
           }
           else if ((abT<0.0) && (-abT>capU)){                                    //(the bottom then follows more slowly; the column stays)
@@ -233,7 +244,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
       //rise becomes the water table's (the two meet at the shortest column, no jump), and what the column cannot pass
       //on within the step comes back as an unmet upward demand below
       double R=0.0;
-      if (cap && (sp!=NULL)){
+      if (cap && (sp!=NULL) && VZOwnRise()){                                      //(other methods: from the water table, SZCapRiseWT)
         double psL=0.0;
         const double Ae=a*(1.0-min(max(F,0.0),1.0));
         const double Qc=SZRiseLayers(k,c,zb,col.zc[0],max(-col.psi[0],0.0),a,Ae,0.0,tstep,&QL[0],&psL);
@@ -257,7 +268,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
       }
       double rej=0.0; gwvz::vz_step_info inf;
       const bool noUp=(_szxUp[e]<0);                                            //(no cell holds any water table: no upward
-      double qb=gwvz::Step(col,S,tstep,P/(a*tstep)-R,rej,&inf,noUp);             // flow, which MODFLOW could not supply)
+      double qb=VZColStep(col,S,tstep,P/(a*tstep)-R,rej,&inf,noUp);             // flow, which MODFLOW could not supply)
       if (qb<0.0){ //upflow through the bottom: out of the cell holding the water table, scaled down as it nears drying and at
         //most half the water it holds above its bottom under the column per step (none without such a cell); the part
         //MODFLOW does not supply is taken back out of the column, bottom node first, down to air-dry
@@ -313,7 +324,7 @@ void CGroundwaterModel::SZCapRiseWT(const double &tstep)
       const bool ch=sc || _colCHDTop[L.ic];                                      //(also an exchange column on a cell that is a specified head this step)
       const double a=_szColA[c];
       if (!(a>0.0)){continue;}
-      if (!ch && (_vzMode>0) && (e<(int)_vzCol.size()) && _vzCol[e].active){continue;}  //(the column's own rise, VZStep)
+      if (!ch && VZOwnRise() && (e<(int)_vzCol.size()) && _vzCol[e].active){continue;}  //(the column's own rise, VZStep)
       const int up=ch?TopNode(L.ic):_szxUp[e];                                  //(the cell holding the water table: the top cell, or one below
       if (up<0){continue;}                                                       // a dried top cell through SZW_RAVEN; none: no rise)
       const bool chu=ch || _szxUpCHD[e];                                         //(a specified head supplies it, top cell or below)

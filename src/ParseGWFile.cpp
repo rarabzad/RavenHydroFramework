@@ -257,19 +257,32 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
       else {int n=s_to_i(s[1]); ExitGracefullyIf((n<1) || (n>20),":SoilZoneSubgrid: samples per cell side must be 1 to 20",BAD_DATA); pGW->SetSoilZoneSubgrid(n); szOpts+=" :SoilZoneSubgrid";}
     }
     else if (!strcmp(s[0],":SoilZoneVadose"))
-    {/*:SoilZoneVadose NONE | RICHARDS {accuracy} {nodes}  (default NONE: recharge reaches the water table in the step)
-       RICHARDS: an unsaturated column (Richards equation) between the soil-zone base and the water table delays and
-       stores recharge; accuracy = largest content change in a substep (default 0.02), nodes per column (default 16) */
-      if ((Len<2) || (strcmp(s[1],"NONE") && strcmp(s[1],"RICHARDS"))){GWImproperFormat(s,Options);}
+    {/*:SoilZoneVadose NONE | RICHARDS {accuracy} {nodes} | KINEMATIC {accuracy} {nodes} | LAG {parameter} {nodes}
+       (default NONE: recharge reaches the water table in the step). An unsaturated column between the soil-zone base and
+       the water table delays and stores recharge: RICHARDS (Richards equation), KINEMATIC (gravity-only kinematic wave),
+       LAG (linear storage cascade); accuracy = largest content change in a substep (default 0.02), nodes per column
+       (default 16) */
+      const int mode=(Len<2)?-1:(!strcmp(s[1],"NONE")?0:(!strcmp(s[1],"RICHARDS")?1:(!strcmp(s[1],"KINEMATIC")?2:(!strcmp(s[1],"LAG")?3:-1))));
+      if (mode<0){GWImproperFormat(s,Options);}
       else {
-        double acc=(Len>=3)?s_to_d(s[2]):0.0; int n=(Len>=4)?s_to_i(s[3]):0;
-        ExitGracefullyIf((Len>=3) && !((acc>0.0) && (acc<=0.2)),":SoilZoneVadose: accuracy (largest content change in a substep) must lie in (0, 0.2]",BAD_DATA);
+        double acc=0.0,par=0.0; int n=(Len>=4)?s_to_i(s[3]):0;
+        if (mode==3){par=(Len>=3)?s_to_d(s[2]):0.0; ExitGracefullyIf((Len>=3) && !(par>=0.0),":SoilZoneVadose LAG: the parameter may not be negative",BAD_DATA);}
+        else {
+          acc=(Len>=3)?s_to_d(s[2]):0.0;
+          ExitGracefullyIf((Len>=3) && !((acc>0.0) && (acc<=0.2)),":SoilZoneVadose: accuracy (largest content change in a substep) must lie in (0, 0.2]",BAD_DATA);
+        }
         ExitGracefullyIf((Len>=4) && ((n<3) || (n>200)),":SoilZoneVadose: nodes per column must be 3 to 200",BAD_DATA);
-        pGW->SetSoilZoneVadose(strcmp(s[1],"RICHARDS")?0:1,acc,n); szOpts+=" :SoilZoneVadose";
+        pGW->SetSoilZoneVadose(mode,acc,n,par); szOpts+=" :SoilZoneVadose";
       }
     }
+    else if (!strcmp(s[0],":SoilZoneVadoseClasses"))
+    {/*:SoilZoneVadoseClasses K  (default 1: one unsaturated column per soil-zone column, at its mean base; K > 1: up to K
+       columns, one per depth class of its DEM samples) */
+      if (Len<2){GWImproperFormat(s,Options);}
+      else {int K=s_to_i(s[1]); ExitGracefullyIf((K<1) || (K>10),":SoilZoneVadoseClasses: classes must be 1 to 10",BAD_DATA); pGW->SetSoilZoneVadoseClasses(K); szOpts+=" :SoilZoneVadoseClasses";}
+    }
     else if (!strcmp(s[0],":SoilZoneCapillaryRise"))
-    {/*:SoilZoneCapillaryRise ON | OFF  (default ON with :SoilZoneVadose RICHARDS, else OFF) */
+    {/*:SoilZoneCapillaryRise ON | OFF  (default ON with an unsaturated column, :SoilZoneVadose other than NONE; else OFF) */
       if ((Len<2) || (strcmp(s[1],"ON") && strcmp(s[1],"OFF"))){GWImproperFormat(s,Options);}
       else {pGW->SetSoilZoneCapillaryRise(strcmp(s[1],"ON")?0:1); szOpts+=" :SoilZoneCapillaryRise";}
     }

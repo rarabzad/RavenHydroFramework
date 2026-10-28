@@ -67,7 +67,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
-  _vzMode=0; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _ibPtr=NULL; _mf6Newton=true; _farWarned=false; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
+  _vzMode=0; _vzPar=0.0; _vzClasses=1; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _ibPtr=NULL; _mf6Newton=true; _farWarned=false; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
@@ -650,7 +650,7 @@ void CGroundwaterModel::ValidateInputs() const
     ExitGracefullyIf(!((A.Sy>=0) && (A.Sy<=1)),(n+"SPEC_YIELD must lie between 0 and 1").c_str(),BAD_DATA);
     ExitGracefullyIf(!((A.porosity>=0) && (A.porosity<=1)),(n+"POROSITY must lie between 0 and 1").c_str(),BAD_DATA);
     ExitGracefullyIf(!(A.clapp_b>0) || !(A.psia>0),(n+"CLAPP_B and AIR_ENTRY_PRESSURE must be positive").c_str(),BAD_DATA);
-    ExitGracefullyIf((_vzMode>0) && (A.porosity<A.Sy),(n+"with :SoilZoneVadose RICHARDS, POROSITY (the saturated content of the unsaturated column) may not be smaller than SPEC_YIELD").c_str(),BAD_DATA);
+    ExitGracefullyIf((_vzMode>0) && (A.porosity<A.Sy),(n+"with :SoilZoneVadose "+VZName()+", POROSITY (the saturated content of the unsaturated column) may not be smaller than SPEC_YIELD").c_str(),BAD_DATA);
   }
   for (size_t p=0;p<_aProfiles.size();p++){
     const gw_profile &P=_aProfiles[p]; string n="aquifer profile "+P.name+": ";
@@ -683,7 +683,7 @@ void CGroundwaterModel::ValidateInputs() const
     if (SZPhysical()){while ((pl=gen.find(" :LandSurface"))!=string::npos){gen.erase(pl,13);}} //(with the soil zone: its relief within the cells)
     ExitGracefullyIf(gen!="",(string(msg)+gen+" (these apply to models Raven builds: an existing model keeps its own grid, surfaces and solver settings)").c_str(),BAD_DATA);
     ExitGracefullyIf(SZPhysical() && (_szExtClass!="") && (GetAquiferClassIndex(_szExtClass)==DOESNT_EXIST),("CGroundwaterModel: :SoilZoneAquiferClass "+_szExtClass+" is not in :AquiferClasses").c_str(),BAD_DATA);
-    if (SZPhysical() && (_vzMode>0) && (_szExtClass=="")){WriteWarning("CGroundwaterModel: :SoilZoneVadose RICHARDS with an existing model and no :SoilZoneAquiferClass: the unsaturated columns use CLAPP_B 4, AIR_ENTRY_PRESSURE 0.3 m and a porosity of SY + 0.1",false);}
+    if (SZPhysical() && (_vzMode>0) && (_szExtClass=="")){WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+" with an existing model and no :SoilZoneAquiferClass: the unsaturated columns use CLAPP_B 4, AIR_ENTRY_PRESSURE 0.3 m and a porosity of SY + 0.1",false);}
     ExitGracefullyIf(_writeNC && (_owTable.size()>0),"CGroundwaterModel: :WriteNetCDFHeads needs the cell outlines (:MF6CRS or :MF6GridFile); an :OverlapWeights table has no coordinates",BAD_DATA);
     ExitGracefullyIf(_riverFile!="",(string(msg)+":RiverGeometry (rivers are the model's stream package, :StreamPackage)").c_str(),BAD_DATA);
     ExitGracefullyIf((_aObsWells.size()>0) && (_owTable.size()>0),"CGroundwaterModel: monitoring wells need :MF6CRS or :MF6GridFile (to locate them)",BAD_DATA);
@@ -2654,7 +2654,7 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
     if (nOn>0){
       S<<"  soil-zone thickness   : "<<dmin<<" to "<<dmax<<" m; model top = land surface - overlap-weighted thickness"<<endl;
       if (_szxC.size()>0){S<<"  soil-zone links       : "<<_szxC.size()<<" (SZX_RAVEN), conductance per area "<<cmin<<" to "<<cmax<<" 1/d; Sy/drainable porosity "<<_szRatioMin<<" to "<<_szRatioMax<<endl;}
-      if ((_szxC.size()>0) && (_vzMode>0)){S<<"  unsaturated columns   : Richards, "<<_vzN<<" nodes at most, accuracy "<<_vzAcc<<"; "<<_vzSub<<" substeps and "<<_vzNewton<<" Newton iterations in all"
+      if ((_szxC.size()>0) && (_vzMode>0)){S<<"  unsaturated columns   : "<<VZName()<<", "<<_vzN<<" nodes at most, accuracy "<<_vzAcc<<"; "<<_vzSub<<" substeps and "<<_vzNewton<<" Newton iterations in all"
                                               <<endl;}
       S<<"  interface iteration   : up to "<<_szMaxIter<<" updates after MODFLOW has converged, tolerances "<<_szTolH<<" m and "<<_szTolQ<<"; saturated fraction and contact from "<<_szSubgrid<<"x"<<_szSubgrid<<" DEM samples per cell"<<(_dem.IsLoaded()?"":" (no DEM: cell mean)")<<endl;
       S<<"  soil-zone columns     : "<<_szColA.size()<<" (one per link, plus the rest of each HRU); at the start "<<_szInitHot<<" HRUs from the hotstart file, "

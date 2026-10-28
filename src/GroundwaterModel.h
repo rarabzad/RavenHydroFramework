@@ -349,7 +349,10 @@ private:/*----------------------------------------------------*/
   double                 _szRatioMin,_szRatioMax; ///< range of S_y(top layer)/drainable porosity(bottom soil layer)
   ofstream               _SZOUT;
   //-- soil zone (docs/design/soil_zone_columns_plan.md) --
-  int                    _vzMode;        ///< 0 none (the basic soil zone), 1 RICHARDS: unsaturated column between the soil-zone base and the water table
+  int                    _vzMode;        ///< unsaturated column between the soil-zone base and the water table: 0 NONE (the basic soil zone), 1 RICHARDS,
+                                         ///<  2 KINEMATIC (gravity-only kinematic wave), 3 LAG (linear storage cascade)
+  double                 _vzPar;         ///< parameter of the method (LAG: see SetSoilZoneVadose; 0 = default)
+  int                    _vzClasses;     ///< unsaturated columns per exchange column, by depth class of its DEM samples (1: one, at the mean base)
   double                 _vzAcc;         ///< largest content change of a column in one substep [-]
   int                    _vzN;           ///< nodes of a column at most
   int                    _szCapRise;     ///< capillary rise into the soil zone: -1 default (on with RICHARDS), 0 off, 1 on
@@ -433,6 +436,10 @@ private:/*----------------------------------------------------*/
   double                 _szCapWT;       ///< capillary rise from the water table, all links [m3/d]
   void   SZCapRiseWT    (const double &tstep);                ///< capillary rise from the water table where there is no unsaturated column
   bool   SZCapOn        () const {return (_szCapRise==1) || ((_szCapRise<0) && (_vzMode>0));}
+  bool   VZOwnRise      () const {return (_vzMode==1);}  ///< capillary rise comes out of the unsaturated column's top (RICHARDS);
+                                                         ///<  otherwise from the water table through it (SZCapRiseWT), steady
+  string VZName         () const {return (_vzMode==1)?"RICHARDS":((_vzMode==2)?"KINEMATIC":((_vzMode==3)?"LAG":"NONE"));}
+  double VZColStep      (gwvz::vz_column &c,const gwvz::vz_strat &S,const double dt,const double qtop,double &rej,gwvz::vz_step_info *inf,const bool noUp) const;
   double                 _vzInVol,_vzOutVol,_vzCapVol,_vzStoreVol,_vzStore0; ///< step totals [m3] and storage above the reference [m3]
   long long              _vzSub,_vzNewton; ///< substeps and Newton iterations of the columns (summary)
   map<long long,map<int,vector<double> > > _hotVz; ///< from .rvc :GWVadoseColumns: by HRU ID and cell: zbot, contents
@@ -578,7 +585,8 @@ public:/*-------------------------------------------------------*/
   void   SetSoilZoneIteration (const int maxit,const double tolh,const double tolq){_szMaxIter=maxit;_szTolH=tolh;_szTolQ=tolq;}
   void   SetSoilZoneSubgrid   (const int n){_szSubgrid=n;}
   void   SetSoilZoneOutput    (const string &group){_szOutGroup=group;}
-  void   SetSoilZoneVadose    (const int mode,const double acc,const int n){_vzMode=mode; if (acc>0){_vzAcc=acc;} if (n>0){_vzN=n;}}
+  void   SetSoilZoneVadose    (const int mode,const double acc,const int n,const double par=0.0){_vzMode=mode; if (acc>0){_vzAcc=acc;} if (n>0){_vzN=n;} _vzPar=par;}
+  void   SetSoilZoneVadoseClasses(const int K){_vzClasses=K;}
   void   SetSoilZoneCapillaryRise(const int on){_szCapRise=on;}
   void   SetSoilZoneTiming    (const int t){_szTiming=t;}
   void   SetSoilZoneClasses   (const int k){_szClasses=k;}
