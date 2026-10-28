@@ -450,18 +450,22 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     }
     if (q<0.0){sec=-q/max(h-(cell.zbs[0]-max(cell.ds,0.0)),1e-3);} //no contact below the lowest base minus ds
     Cg=max(max(Cg,sec),1e-9*cell.C);
-    //explicit mode (no interface iteration): the boundary may not drain more than the column's free water over the
-    //step whatever the head does (down to the cell bottom), as the river and store exchanges are limited, but for water
-    //rising into the soil the slope stays at least the secant to the end of the contact. (A linear boundary cannot hold
-    //both limits exactly: between the lowest base and the end of the contact some water can still rise, the
-    //linearization error of the explicit mode; it creates no water.)
+    //explicit mode (no interface iteration) and the last update possible before the interface freezes (iterations or
+    //update budget): the boundary MODFLOW keeps may not drain more than the column's free water over the step whatever
+    //the head does (down to the cell bottom), as the river and store exchanges are limited. The limit wins over the
+    //secant floor for water rising into the soil: with q < 0 a head falling below Hg reverses the linear boundary, and
+    //the floor let it drain columns that held no free water (water created). The cost: such a boundary
+    //can let more water rise than the contact allows (it fills the column and overflows; no water is created), and
+    //keeps extracting when the head falls below every base. MODFLOW needs iterations to settle on that: with fewer
+    //than 5 solves left (a very low outer-iteration limit) the floor is kept, as before.
     //(Iterated, the converged flow is the local solve's, which respects both; the limit would only make the slope
-    //too small.)
+    //too small. Limiting a boundary MODFLOW already iterates on, after the fact, left MODFLOW unconverged.)
     if (!steady && ((_szMaxIter==0) || (SZFreezeAt()<1) || _szCapUpd)){
       double avail=gwsz::StackFreeWater(_szLay[k],phi)/MM_PER_METER*a/tstep;           //[m3/d]
       double bot=_botm[UserNode(0,L.ic)];
       Cg=min(Cg,max(avail-q,0.0)/max(h-bot,1e-3));
-      if (q<0.0){Cg=max(Cg,sec);}
+      if ((q<0.0) && !_szCapWins){Cg=max(Cg,sec);}
+      Cg=max(Cg,1e-9*cell.C);
     }
     _szxFc[e]=F; _szxQc[e]=q; _szxCg[e]=Cg;
   }
@@ -516,9 +520,12 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   if (_szMaxIter==0){return true;}                                            //explicit: the predictor only
   //the last outer iterations (a tenth, at least 2) are left to MODFLOW on the boundary it has: an update just before
   //the limit would leave MODFLOW's final solve unconverged, and its residual would be water created or lost. The
-  //update after iteration SZFreezeAt() (the last one possible) makes its boundary supply-limited, as in explicit mode.
-  //Once frozen nothing changes any more (a supply-limited update after the freeze left too few solves for MODFLOW to
-  //absorb it when MODFLOW could not converge)
+  //update after iteration SZFreezeAt() and the last one the update budget allows make their boundary supply-limited,
+  //as in explicit mode. Once frozen nothing changes any more (a supply-limited update after the freeze left too few
+  //solves for MODFLOW to absorb it when MODFLOW could not converge). When MODFLOW does not converge in
+  //the iterations after the first ones, the last update can be an earlier, unlimited one; with a low outer-iteration
+  //limit its boundary can then take more from a column than it holds (reported as soil-zone shortfall, like MODFLOW's
+  //own residual on such steps)
   const int freezeAt=SZFreezeAt();
   bool frozen=(iter>freezeAt);
   if (!frozen && !(!mf6conv && (iter>nEarly))){if (mf6conv){_szExtra++;} frozen=(_szExtra>_szMaxIter);}
@@ -532,7 +539,9 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   vector<double> F0(_linkF),hc0(_szxHc),lam0(_szxLam),q0(_szxQc),cg0(_szxCg),rej0(_szxRej),srej0(_szRej),fc0(_szxFc);
   SZLinkFractions(true,mf6conv);
   if (!steady){SZRecharge(_szTstep,false);}
-  _szCapUpd=(iter==freezeAt);                         //the boundary of the last update stays: supply-limit it as in explicit mode
+  _szCapUpd=(iter==freezeAt) || (_szExtra>=_szMaxIter); //the last update possible (iterations or budget): its boundary stays,
+                                                        //supply-limited as in explicit mode
+  _szCapWins=(_maxiter-iter>=5);
   SZLocalSolves(_szTstep,steady);
   _szCapUpd=false;
   //total exchange of the updated interface at the current heads (into the aquifer) [m3/d] (the boundary MODFLOW gets

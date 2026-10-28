@@ -68,7 +68,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szMovedV=0.0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szCapWins=true; _szMovedV=0.0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
 }
 CGroundwaterModel::~CGroundwaterModel()
@@ -96,7 +96,7 @@ void CGroundwaterModel::ResetState()
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szMovedV=0.0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szCapWins=true; _szMovedV=0.0;
 }
 void CGroundwaterModel::Reinitialize(const optStruct &Options)
 {
@@ -700,7 +700,7 @@ void CGroundwaterModel::CheckProcesses()
     for (size_t pi=0;pi<procs.size();pi++){
       if (!SZPhysical()){continue;}
       //constant-rate percolation SOIL[M-1] -> GROUNDWATER takes the recharge from the columns by area (HRUs it applies to;
-      //inside a process group the group's conditions apply as well)
+      //inside a process group the group's conditions: Raven does not apply a member's own conditions)
       const CmvPercolation *pPerc=dynamic_cast<const CmvPercolation*>(procs[pi]);
       if ((pPerc!=NULL) && (pPerc->GetPercolationType()==PERC_CONSTANT)){
         const int iBot=_pModel->GetStateVarIndex(SOIL,_szNLayers-1);
@@ -708,7 +708,7 @@ void CGroundwaterModel::CheckProcesses()
         for (int q=0;q<procs[pi]->GetNumConnections();q++){
           if ((pf[q]!=iBot) || (pt[q]!=_iGW)){continue;}
           for (size_t i=0;i<_aqHRUs.size();i++){const CHydroUnit *pH=_pModel->GetHydroUnit(_aqHRUs[i]);
-            if (pProc->ShouldApply(pH) && procs[pi]->ShouldApply(pH)){_szRchByArea[_aqHRUs[i]]=1;}}
+            if (pProc->ShouldApply(pH)){_szRchByArea[_aqHRUs[i]]=1;}}
         }
       }
       if (procs[pi]->GetNumLatConnections()<=0){continue;} //lateral processes may not reach the pass-through GROUNDWATER either
@@ -1895,6 +1895,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   std::function<bool(int,bool)> szcb; //:SoilZone PHYSICAL: interface update after every MODFLOW outer iteration
   if (_szxLink.size()>0){
     _szxHq.assign(_szxHq.size(),-HUGE_VAL);                                       //no local solve yet this step
+    _szCapWins=(_maxiter>=5);
     SZLinkFractions(false); SZRecharge(tstep,false); SZLocalSolves(tstep,false); SZSetArrays(false); //predictor from the heads of the last step
     _szPrevQ=HUGE_VAL;
     szcb=[this,aPhinew](int it,bool c){return SZIterate(aPhinew,it,c,false,_szPrevQ,it>=_maxiter);};
