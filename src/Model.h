@@ -586,6 +586,13 @@ public:/*-------------------------------------------------------*/
   void        IncrementBalance        (const int q_star,
                                        const int k,
                                        const double moved);//[mm] or [MJ/m2] or [mg]
+  void        ClassBalance            (const int q_star,
+                                       const int k,
+                                       const double moved,
+                                       const double weight);//column classes: this class's flow for the processes that follow, its weighted share to the totals
+  void        SetFlowBalance          (const int q_star,
+                                       const int k,
+                                       const double moved);//this step's flow of a connection (the classes' weighted sum)
   void        IncrementLatBalance     (const int j_star,
                                        const double moved);//[mm] or [MJ/m2] or [mg]
   void        IncrementCumulInput     (const optStruct &Options, const time_struct &tt);

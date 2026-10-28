@@ -117,6 +117,8 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":GWReservoirSeepage"          )){code=53; }
     else if  (!strcmp(s[0],":GWRiverLossCarry"            )){code=54; }
     else if  (!strcmp(s[0],":GWSoilZoneColumns"           )){code=55; }
+    else if  (!strcmp(s[0],":GWVadoseColumns"             )){code=57; }
+    else if  (!strcmp(s[0],":GWSoilZoneLag"               )){code=58; }
     else if  (!strcmp(s[0],":EndHRUStateVariableTable"    )){code=-2; }
     else if  (!strcmp(s[0],":InitialConcentrationTable"   )){code=4; concname=s[1]; }
     else if  (!strcmp(s[0],":EndInitialConcentrationTable")){code=-2; }
@@ -149,7 +151,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":BasinStageHist"              )){code=16;}
     else if  (!strcmp(s[0],":BasinAreaHist"               )){code=17;}
 
-    if ((code>=50) && (code<=55) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
+    if ((code>=50) && (code<=58) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
       //groundwater state of a coupled run (e.g. its solution.rvc) in a run without :GroundwaterModel: not used
       WriteWarning("ParseInitialConditionsFile: "+string(s[0])+" ignored (the model has no :GroundwaterModel MODFLOW6)",Options.noisy);
       if (code>50){ //a block: skip to its own end line (:InitialGWHeads is a single line)
@@ -957,6 +959,29 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWRechargeStore")){break;}
         if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRechargeStore(s_to_ll(s[0]),s_to_d(s[1]));}
+      }
+      break;
+    }
+    case(57):  //----------------------------------------------
+    {/*:GWVadoseColumns  {HRU ID, cell (grid column number), water table [m], contents of the nodes from the top} x n
+       :EndGWVadoseColumns  (unsaturated columns of :SoilZoneVadose RICHARDS, hotstart) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWVadoseColumns")){break;}
+        if (Len>=4){
+          vector<double> v; for (int i=2;i<Len;i++){v.push_back(s_to_d(s[i]));}
+          pModel->GetGroundwaterModel()->SetHotstartVadose(s_to_ll(s[0]),s_to_i(s[1]),v);
+        }
+      }
+      break;
+    }
+    case(58):  //----------------------------------------------
+    {/*:GWSoilZoneLag  {HRU ID, cell (grid column number), exchange of the last step into the aquifer [m3/d], outstanding debt [m3]} x n
+       :EndGWSoilZoneLag  (:SoilZoneExchangeTiming LAGGED, hotstart) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWSoilZoneLag")){break;}
+        if (Len>=3){pModel->GetGroundwaterModel()->SetHotstartSoilZoneLag(s_to_ll(s[0]),s_to_i(s[1]),s_to_d(s[2]),(Len>=4)?s_to_d(s[3]):0.0);}
       }
       break;
     }

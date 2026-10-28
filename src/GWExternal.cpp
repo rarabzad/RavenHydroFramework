@@ -451,6 +451,7 @@ void CGroundwaterModel::ExtEditNameFile(const bool addRaven)
     if (!w.empty() && (Upper(w[0])=="END") && (block=="PACKAGES") && addRaven){
       O<<"  RCH6  raven.rch  RCH_RAVEN   # added by Raven\n";
       if (_extSeepage){O<<"  DRN6  raven.drn  DRN_RAVEN   # added by Raven\n";}
+      if (_szxLink.size()>0){O<<"  GHB6  raven.szx  SZX_RAVEN   # added by Raven (:SoilZone PHYSICAL)\n  WEL6  raven.szq  SZQ_RAVEN   # added by Raven\n  DRN6  raven.szd  SZD_RAVEN   # added by Raven\n";}
     }
     if (!w.empty() && (Upper(w[0])=="END")){block="";}
     if ((block=="PACKAGES") && (w.size()>=2) && (Upper(w[0])!="BEGIN")){
@@ -529,6 +530,17 @@ void CGroundwaterModel::ExtProbe()
     }
   }
   _userOf.assign(nodes,-1); for (int n=0;n<nuser;n++){if (_reduced[n]>=0){_userOf[_reduced[n]]=n;}}
+  if (SZPhysical()){ //:SoilZone PHYSICAL: the conductance of each link and the unsaturated columns use the model's own
+                     //vertical conductivity (K33, else K) and specific yield (m/d, -)
+    string npf="NPF"; for (size_t i=0;i<_extPkgs.size();i++){if (Upper(_extPkgs[i].ftype)=="NPF6"){npf=_extPkgs[i].pname;}}
+    string ak=_mf6.GetVarAddress(M,npf,"K33"); if (!_mf6.HasVar(ak)){ak=_mf6.GetVarAddress(M,npf,"K11");}
+    double *kk=_mf6.HasVar(ak)?_mf6.GetDoublePtr(ak):NULL;
+    string as=_mf6.GetVarAddress(M,_stoName,"SY"); double *sy=_mf6.HasVar(as)?_mf6.GetDoublePtr(as):NULL;
+    ExitGracefullyIf(kk==NULL,"CGroundwaterModel: :SoilZone PHYSICAL with an existing model: cannot read the model's hydraulic conductivity (NPF K33/K)",RUNTIME_ERR);
+    if (sy==NULL){WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: the existing model has no specific yield (no STO package or SY); 0.2 is assumed for the soil-zone checks",false);}
+    _extKv.assign(nuser,0.0); _extSy.assign(nuser,0.2);
+    for (int n=0;n<nuser;n++){int r=_reduced[n]; if (r<0){continue;} _extKv[n]=kk[r]*_hf*_extTf; if (sy!=NULL){_extSy[n]=sy[r];}}
+  }
   string dv="SLN_1/DVCLOSE"; if (_mf6.HasVar(dv)){double *d=_mf6.GetDoublePtr(dv); if (d!=NULL){_extDvclose=*d*_hf;}}
   if (_extCRS.IsSet()){ExtCellsFromMemory();}
   _extConn.clear(); _extLocalC.clear();
@@ -804,10 +816,27 @@ void CGroundwaterModel::ExtWritePackages(const optStruct &Options)
     for (size_t i=0;i<_bndCol.size();i++){
       int ic=_bndCol[i],n=TopNode(ic); const gw_profile &P=_aProfiles[_colProfile[ic]];
       double cond=P.seep_leakance*_extArea[ic]*_extLf*_extLf/_extTf; //[L2/T]
+      if (SZPhysical() && (_colCover[ic]>0)){cond*=_colCoverNS[ic]/_colCover[ic];} //(where soil-zone HRUs cover the column the exchange is SZX_RAVEN)
       double d=min(P.seep_smooth_depth,max(_top[ic]-_botm[n]-1e-8*max(1.0,fabs(_top[ic])),0.0)); //MODFLOW refuses a smoothing interval below the
                                                                                         //cell bottom (margin: rounding of the written values)
       F<<"  "<<CellID(n/_ncpl,ic)<<" "<<_extTopRaw[ic]<<" "<<cond<<" "<<-d*_extLf<<"\n";
     }
+    F<<"END PERIOD\n"; F.close();
+  }
+  if (_szxLink.size()>0){ //:SoilZone PHYSICAL: the soil-zone exchange (values set by Raven every iteration; model units)
+    F.open((_mf6dir+"/raven.szx").c_str());
+    F<<"# soil zone <-> aquifer (:SoilZone PHYSICAL): one entry per HRU-cell link, a linear (Robin) boundary set by Raven\nBEGIN OPTIONS\nEND OPTIONS\n\n";
+    F<<"BEGIN DIMENSIONS\n  MAXBOUND "<<_szxLink.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(12);
+    for (size_t e=0;e<_szxLink.size();e++){int ic=_aLinks[_szxLink[e]].ic,n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<max(_szxZb[e],_botm[n]+1e-3)/_hf<<" 0.0\n";}
+    F<<"END PERIOD\n"; F.close();
+    F.open((_mf6dir+"/raven.szq").c_str());
+    F<<"# soil zone <-> aquifer, second part: rates set by Raven\nBEGIN OPTIONS\nEND OPTIONS\n\nBEGIN DIMENSIONS\n  MAXBOUND "<<_szxLink.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n";
+    for (size_t e=0;e<_szxLink.size();e++){int ic=_aLinks[_szxLink[e]].ic,n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" 0.0\n";}
+    F<<"END PERIOD\n"; F.close();
+    F.open((_mf6dir+"/raven.szd").c_str());
+    F<<"# soil zone <-> aquifer, third part: a boundary kept where water rises into the soil, as a drain\nBEGIN OPTIONS\n  AUXILIARY DDRN\n  AUXDEPTHNAME DDRN\nEND OPTIONS\n\n";
+    F<<"BEGIN DIMENSIONS\n  MAXBOUND "<<_szxLink.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(12);
+    for (size_t e=0;e<_szxLink.size();e++){int ic=_aLinks[_szxLink[e]].ic,n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<_extTopRaw[ic]<<" 0.0 0.0\n";}
     F<<"END PERIOD\n"; F.close();
   }
   if (_hotHeads.size()>0){

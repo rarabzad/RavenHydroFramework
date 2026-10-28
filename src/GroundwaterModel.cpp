@@ -67,6 +67,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
+  _vzMode=0; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
@@ -88,13 +89,19 @@ void CGroundwaterModel::ResetState()
   _rivNode.clear(); _rivCol.clear(); _rivSB.clear(); _rivLen.clear(); _rivBed.clear();
   _welNode.clear(); _welWell.clear(); _welFrac.clear(); _ghbNode.clear(); _ghbB.clear(); _chdNode.clear(); _chdB.clear();
   _swxCol.clear(); _swxX.clear(); _swxLinks.clear(); _swxVl.clear(); _swxAppliedVol=0.0;
-  _resP.clear(); _resNode.clear(); _resR.clear(); _resW.clear();
+  _resP.clear(); _resZbot.clear(); _resNode.clear(); _resR.clear(); _resW.clear();
   _X=NULL; _active=false; _stepCount=0; _nNonConverged=0; _budgetLineOpen=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=_riverAppliedVol=_riverDeficitVol=0.0;
   _szOn.clear(); _szSV.clear(); _szLay.clear(); _szD.clear(); _szLam.clear(); _szRchV.clear(); _szRej.clear(); _szOvfV.clear(); _szNetV.clear(); _szW.clear();
   _linkF.clear(); _cellDem.clear(); _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _colCoverNS.clear(); _szxOfHRU.clear();
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szxOne.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
+  _szxCapQ.clear(); _szxCapL.clear(); _szCapWT=0.0;
+  _szCls.clear(); _szClsW.clear(); _szClsPhi.clear(); _szClsRes.clear(); _szClsGW.clear(); _szClsDone.clear();
+  _szcLink.clear(); _szcCol.clear(); _szcCell.clear(); _szcRej.clear(); _szcFw.clear(); _szcQ.clear(); _szcCapL.clear(); _szcOfHRU.clear(); _linkSzc.clear(); _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0;
+  _szxQprev.clear(); _szxLagL.clear(); _szxLagD.clear(); _szLagNet.clear(); _szxDebt.clear(); _szxRepay.clear(); _szDebtVol=_szRepayQ=0.0;
+  _vzCol.clear(); _vzStrat.clear(); _vzUse.clear(); _vzQ.clear(); _vzAbsQ.clear(); _vzRejV.clear(); _vzFp.clear(); _vzInV.clear(); _vzCapV.clear();
+  _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
 }
@@ -561,10 +568,12 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
       for (size_t e=n0;e<_resNode.size();e++){
         int ic=_resNode[e]%_ncpl; for (int l=_nlay-1;l>=0;l--){int n=UserNode(l,ic); if (_idomain[n]>0){zbot=min(zbot,_botm[n]); break;}}
       }
-      ExitGracefullyIf((zbot<1e299) && (pRes->GetResStage()<zbot),("CGroundwaterModel: reservoir in subbasin "+nm+
-        " has stage "+to_string(pRes->GetResStage())+" m, below the bottom of the aquifer under its lake ("+to_string(zbot)+
+      //(Raven sets the reservoirs' initial stages after the groundwater model is built: here their dry stage, which
+      // is on the same datum, and again with the stage in the first step)
+      ExitGracefullyIf((zbot<1e299) && (max(pRes->GetResStage(),pRes->GetDryStage())<zbot),("CGroundwaterModel: reservoir in subbasin "+nm+
+        " has stages from "+to_string(pRes->GetDryStage())+" m, below the bottom of the aquifer under its lake ("+to_string(zbot)+
         " m): coupled reservoirs need absolute stages on the aquifer's datum (e.g. :AbsoluteCrestHeight)").c_str(),BAD_DATA);
-      _resP.push_back(p);
+      _resP.push_back(p); _resZbot.push_back(zbot);
     }
   }
   _doSteady=_steadyInit;
@@ -613,7 +622,7 @@ double CGroundwaterModel::WaterTable(const int ic) const
 void CGroundwaterModel::ClearHotstartData()
 {
   _hotHeads.clear(); _hotDims[0]=_hotDims[1]=_hotDims[2]=0;
-  _hotRchStore.clear(); _hotResSeep.clear(); _hotRivCarry.clear(); _hotSzCols.clear();
+  _hotRchStore.clear(); _hotResSeep.clear(); _hotRivCarry.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotLag.clear(); _hotDebt.clear();
   _initMode="FROM_PROFILE"; _initValue=0.0;
 }
 void CGroundwaterModel::ValidateInputs() const
@@ -626,6 +635,8 @@ void CGroundwaterModel::ValidateInputs() const
     ExitGracefullyIf(!(A.Ss>=0),(n+"SPEC_STORAGE may not be negative").c_str(),BAD_DATA);
     ExitGracefullyIf(!((A.Sy>=0) && (A.Sy<=1)),(n+"SPEC_YIELD must lie between 0 and 1").c_str(),BAD_DATA);
     ExitGracefullyIf(!((A.porosity>=0) && (A.porosity<=1)),(n+"POROSITY must lie between 0 and 1").c_str(),BAD_DATA);
+    ExitGracefullyIf(!(A.clapp_b>0) || !(A.psia>0),(n+"CLAPP_B and AIR_ENTRY_PRESSURE must be positive").c_str(),BAD_DATA);
+    ExitGracefullyIf((_vzMode>0) && (A.porosity<A.Sy),(n+"with :SoilZoneVadose RICHARDS, POROSITY (the saturated content of the unsaturated column) may not be smaller than SPEC_YIELD").c_str(),BAD_DATA);
   }
   for (size_t p=0;p<_aProfiles.size();p++){
     const gw_profile &P=_aProfiles[p]; string n="aquifer profile "+P.name+": ";
@@ -654,7 +665,11 @@ void CGroundwaterModel::ValidateInputs() const
     ExitGracefullyIf((_aWells.size()>0) || (_aBounds.size()>0),(string(msg)+":Wells and head boundaries (keep the model's packages)").c_str(),BAD_DATA);
     ExitGracefullyIf((_aSWX.size()>0) || _resExchange,(string(msg)+":SurfaceWaterExchange and :ReservoirExchange (not yet available with an existing model)").c_str(),BAD_DATA);
     ExitGracefullyIf(_steadyInit,(string(msg)+":GWInitialization (the model's own stress periods decide)").c_str(),BAD_DATA);
-    ExitGracefullyIf(_genOnly!="",(string(msg)+_genOnly+" (these apply to models Raven builds: an existing model keeps its own grid, surfaces and solver settings, and :SoilZone PHYSICAL is not yet available with one)").c_str(),BAD_DATA);
+    string gen=_genOnly; size_t pl;
+    if (SZPhysical()){while ((pl=gen.find(" :LandSurface"))!=string::npos){gen.erase(pl,13);}} //(with the soil zone: its relief within the cells)
+    ExitGracefullyIf(gen!="",(string(msg)+gen+" (these apply to models Raven builds: an existing model keeps its own grid, surfaces and solver settings)").c_str(),BAD_DATA);
+    ExitGracefullyIf(SZPhysical() && (_szExtClass!="") && (GetAquiferClassIndex(_szExtClass)==DOESNT_EXIST),("CGroundwaterModel: :SoilZoneAquiferClass "+_szExtClass+" is not in :AquiferClasses").c_str(),BAD_DATA);
+    if (SZPhysical() && (_vzMode>0) && (_szExtClass=="")){WriteWarning("CGroundwaterModel: :SoilZoneVadose RICHARDS with an existing model and no :SoilZoneAquiferClass: the unsaturated columns use CLAPP_B 4, AIR_ENTRY_PRESSURE 0.3 m and a porosity of SY + 0.1",false);}
     ExitGracefullyIf(_writeNC && (_owTable.size()>0),"CGroundwaterModel: :WriteNetCDFHeads needs the cell outlines (:MF6CRS or :MF6GridFile); an :OverlapWeights table has no coordinates",BAD_DATA);
     ExitGracefullyIf(_riverFile!="",(string(msg)+":RiverGeometry (rivers are the model's stream package, :StreamPackage)").c_str(),BAD_DATA);
     ExitGracefullyIf((_aObsWells.size()>0) && (_owTable.size()>0),"CGroundwaterModel: monitoring wells need :MF6CRS or :MF6GridFile (to locate them)",BAD_DATA);
@@ -1812,8 +1827,12 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     vector<double> lossR;   //(_szMovedV is reset when the budget line is written: a hotstart sync counts in the first step)
     for (size_t i=0;i<_aqHRUs.size();i++){int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
       for (size_t j=0;j<_szSV[k].size();j++){_szPhiProc[_szPhiOff[k]+j]=aPhinew[k][_szSV[k][j]];}
-      double ovf=SZSyncColumns(k,&_szPhiProc[_szPhiOff[k]],max(aPhinew[k][_iGW],0.0),&lossR);
+      double ovf=((SZClassCount(k)>1) && (k<(int)_szClsDone.size()) && _szClsDone[k])?
+                 SZSyncClasses(k,&_szPhiProc[_szPhiOff[k]],max(aPhinew[k][_iGW],0.0),lossR):  //Raven's processes ran per column class
+                 SZSyncColumns(k,&_szPhiProc[_szPhiOff[k]],max(aPhinew[k][_iGW],0.0),&lossR);
+      if (_szTiming==1){SZLagReverse(k);}                                          //LAGGED: the source back out of the columns
       for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){int e=_szxOfHRU[k][jj],c=_szxCol[e]; _szxFw[e]=lossR[c-_szColOff[k]]/MM_PER_METER*_szColA[c];}
+      for (size_t jj=0;jj<_szcOfHRU[k].size();jj++){int e=_szcOfHRU[k][jj],c=_szcCol[e]; _szcFw[e]=lossR[c-_szColOff[k]]/MM_PER_METER*_szColA[c];}
       //Raven's soil-zone layers become the columns' mean; gains full columns could not take overflow to SURFACE_WATER
       int nc=SZNCols(k),o=_szColOff[k]; double sw=0.0; for (int c=0;c<nc;c++){sw+=_szColA[o+c];}
       for (size_t j=0;j<_szSV[k].size();j++){
@@ -1842,7 +1861,10 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       _rchStore[k]-=V;
     }
     if (SZPhysical()){_szRchV[k]=V;} //distributed with rejection by SZRecharge
-    if (_hruRchArea[k]<=0){_QrchCHD+=V/tstep; continue;} //HRU entirely on specified-head cells
+    if (_hruRchArea[k]<=0){ //HRU entirely on specified-head cells (with a soil zone: its columns there, SZRecharge)
+      if (!(SZPhysical() && _szOn[k])){_QrchCHD+=V/tstep;}
+      continue;
+    }
     for (size_t j=0;j<_hruLinks[k].size();j++){
       const gw_link &L=_aLinks[_hruLinks[k][j]];
       if (_colCHDTop[L.ic]){continue;}
@@ -1850,6 +1872,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     }
   }
 
+  _QrchCHD0=_QrchCHD; _szRchCHD=0.0;
   _rchStoreTot=0.0; for (size_t i=0;i<_aqHRUs.size();i++){_rchStoreTot+=_rchStore[_aqHRUs[i]];}
   //-- 2. MODFLOW 6 time step
   if (!IsExternal()){
@@ -1876,6 +1899,14 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   }
   SetBoundaryArrays(tt.model_time,tstep);
   //reservoirs: seepage Raven computed during the previous step's routing enters the aquifer now (one-step lag)
+  if (_stepCount==1){
+    for (size_t r=0;r<_resP.size();r++){
+      CReservoir *pRes=_pModel->GetSubBasin(_resP[r])->GetReservoir(); const double zbot=(r<_resZbot.size())?_resZbot[r]:1e300;
+      ExitGracefullyIf((zbot<1e299) && (pRes->GetResStage()<zbot),("CGroundwaterModel: reservoir in subbasin "+to_string(_pModel->GetSubBasin(_resP[r])->GetID())+
+        " has stage "+to_string(pRes->GetResStage())+" m, below the bottom of the aquifer under its lake ("+to_string(zbot)+
+        " m): coupled reservoirs need absolute stages on the aquifer's datum (e.g. :AbsoluteCrestHeight)").c_str(),BAD_DATA);
+    }
+  }
   _Qres_spec=0.0;
   for (size_t e=0;e<_resNode.size();e++){
     CReservoir *pRes=_pModel->GetSubBasin(_resP[_resR[e]])->GetReservoir();
@@ -1919,9 +1950,18 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   if (_szxLink.size()>0){
     _szxHq.assign(_szxHq.size(),-HUGE_VAL);                                       //no local solve yet this step
     _szOneOK=(_maxiter>=10);
-    SZLinkFractions(false); SZRecharge(tstep,false); SZLocalSolves(tstep,false); SZSetArrays(false); //predictor from the heads of the last step
+    SZLinkFractions(false);
+    if (_vzMode>0){VZStep(tstep);}                                              //unsaturated columns: once per step, heads of the last step
+    if (SZCapOn()){SZCapRiseWT(tstep);}                                          //capillary rise from a water table in or near the soil zone
+    SZRepayRates(tstep);                                                         //LAGGED: repayment of the lagged source's debt
+    SZRecharge(tstep,false); SZLocalSolves(tstep,false); SZSetArrays(false);   //predictor from the heads of the last step
     _szPrevQ=HUGE_VAL;
     szcb=[this,aPhinew](int it,bool c){return SZIterate(aPhinew,it,c,false,_szPrevQ,it>=_maxiter);};
+  }
+  else if (SZPhysical() && (_szcLink.size()>0)){ //every soil-zone link on specified heads: no interface, but their recharge,
+    SZLinkFractions(false);                       //its rejection and the capillary rise still apply
+    if (SZCapOn()){SZCapRiseWT(tstep);}
+    SZRecharge(tstep,true);
   }
   //target: _dvclose; a step not converged after 100 iterations continues with MODFLOW's tolerance at 10*_dvclose
   double *dvc=_mf6.GetDoublePtr("SLN_1/DVCLOSE"); //MODFLOW's own tolerance: raised for the rest of a hard step only
@@ -2000,22 +2040,32 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     _Qevt-=(_evtHcof[i]*_X[_reduced[TopNode(ic)]]-_evtRhs[i])*_qf; //EVT flow is out of the aquifer
   }
   _Qsz_in=_Qsz_out=0.0;
+  if (SZPhysical()){SZCHDSolves(_szTstep);}                                      //columns over specified heads: exact, after the solve
   for (size_t e=0;e<_szxLink.size();e++){ //soil zone <-> aquifer, MODFLOW's booked flow (+ into aquifer)
+    if (_colCHDTop[_aLinks[_szxLink[e]].ic]){ //a specified head this step (existing models): the local solve's exchange with it
+      const gw_link &L=_aLinks[_szxLink[e]];
+      const double q=SZChdExchange(L.k,_szxCol[e],_szxCell[e],_szxRej[e],_X[_reduced[TopNode(L.ic)]]*_hf,_szTstep,(e<_szxLagD.size())?_szxLagD[e]:0.0); _szxQ[e]=q;
+      if (q>0){_QszCHD_in+=q;} else {_QszCHD_out-=q;}
+      for (int j=0;j<_szNLayers;j++){_QszCHD_out+=_szxCapL[e*_szNLayers+j];}
+      continue;
+    }
     double h=_X[_reduced[TopNode(_aLinks[_szxLink[e]].ic)]];
     double q=(_szxHcof[e]*h-_szxRhs[e])*_qf+(_szqHcof[e]*h-_szqRhs[e])*_qf+(_szdHcof[e]*h-_szdRhs[e])*_qf; //SZX_RAVEN + SZQ_RAVEN + SZD_RAVEN
+    if (e<_szxCapQ.size()){q+=_szxCapQ[e];}                                      //(the capillary rise from the water table, a fixed rate in SZQ_RAVEN, is booked apart)
+    if (e<_szxRepay.size()){q+=_szxRepay[e];}                                    //(as is the repayment of the lagged source's debt)
     _szxQ[e]=q; if (q>0){_Qsz_in+=q;} else {_Qsz_out-=q;}
   }
   _Qsto=0.0;
   if (_strgss!=NULL){
     int nn=0; for (int n=0;n<_nlay*_ncpl;n++){if (_idomain[n]>0){nn++;}}
     for (int n=0;n<nn;n++){_Qsto+=(_strgss[n]+_strgsy[n])*_qf;}
-    _Qerr=_Qrch+_Qsto-_Qseep_tot+_Qriv_in-_Qriv_out-_Qevt+_Qwel+_Qghb+_Qchd+_Qswx_in-_Qswx_out+_Qres+_Qsz_in-_Qsz_out; //(_QrchCHD never enters MODFLOW)
+    _Qerr=_Qrch+_Qsto-_Qseep_tot+_Qriv_in-_Qriv_out-_Qevt+_Qwel+_Qghb+_Qchd+_Qswx_in-_Qswx_out+_Qres+_Qsz_in-_Qsz_out-_szCapWT-_szRepayQ; //(_QrchCHD never enters MODFLOW)
     if (IsExternal()){_Qerr+=_Qother;}
   }
   else if (IsExternal() && _extNoSto){ //an existing model without a storage package is steady state: no storage flow, the residual is MODFLOW's error
     _Qsto=0.0; _Qerr=_Qrch-_Qseep_tot+_Qriv_in-_Qriv_out-_Qevt+_Qwel+_Qghb+_Qchd+_Qswx_in-_Qswx_out+_Qres+_Qother;
   }
-  else {_Qsto=_Qseep_tot-_Qrch-_Qriv_in+_Qriv_out+_Qevt-_Qwel-_Qghb-_Qchd-_Qswx_in+_Qswx_out-_Qres-_Qother-_Qsz_in+_Qsz_out; _Qerr=0.0;}
+  else {_Qsto=_Qseep_tot-_Qrch-_Qriv_in+_Qriv_out+_Qevt-_Qwel-_Qghb-_Qchd-_Qswx_in+_Qswx_out-_Qres-_Qother-_Qsz_in+_Qsz_out+_szCapWT+_szRepayQ; _Qerr=0.0;}
 
   //-- :SoilZone PHYSICAL guard: water that MODFLOW's books do not back is not handed to Raven. Two sources: on an
   //   unconverged step, MODFLOW's residual (more outflow booked than its inflows and storage release supply; the soil
@@ -2033,14 +2083,14 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       for (size_t p=0;p<_sbGain.size();p++){if (_pModel->GetSubBasin((int)p)->IsEnabled()){gR+=max(_sbGain[p],0.0);}}
       for (size_t e=0;e<_swxQ.size();e++){gS+=max(-_swxQ[e],0.0);}
       double gains=gR+gS;
-      double up=0.0; for (size_t e=0;e<_szxQ.size();e++){up+=max(-_szxQ[e],0.0);}
+      double up=0.0; for (size_t e=0;e<_szxQ.size();e++){if (!_colCHDTop[_aLinks[_szxLink[e]].ic]){up+=max(-_szxQ[e],0.0);}} //(not from specified heads)
       double D=_Qseep_tot+gains+up,seep0=_Qseep_tot;
       if (D>0.0){
         double f=max(1.0-R/D,0.0);
         for (int ic=0;ic<_ncpl;ic++){_Qseep[ic]*=f;} _Qseep_tot*=f;
         for (size_t p=0;p<_sbGain.size();p++){if (_sbGain[p]>0){_sbGain[p]*=f;}}
         for (size_t e=0;e<_swxQ.size();e++){if (_swxQ[e]<0){_swxQ[e]*=f;}}
-        _Qsz_out=0.0; for (size_t e=0;e<_szxQ.size();e++){if (_szxQ[e]<0){_szxQ[e]*=f;} if (_szxQ[e]<0){_Qsz_out-=_szxQ[e];}}
+        _Qsz_out=0.0; for (size_t e=0;e<_szxQ.size();e++){if (_colCHDTop[_aLinks[_szxLink[e]].ic]){continue;} if (_szxQ[e]<0){_szxQ[e]*=f;} if (_szxQ[e]<0){_Qsz_out-=_szxQ[e];}}
         _szWithheldV=(1.0-f)*(seep0+up)*tstep; _szWithheldG=(1.0-f)*gR*tstep; _szWithheldS=(1.0-f)*gS*tstep; //(split: MODFLOW's own budget
                                                     //books the gains apart, and the river and store exchanges are checked apart)
         if ((_szWithheldV+_szWithheldG+_szWithheldS>1e-6) && (++_szGuardN<=10)){
@@ -2296,6 +2346,26 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       }
     }
     RVC<<":EndGWSoilZoneColumns"<<endl;
+    bool anyVz=false; for (size_t e=0;e<_vzCol.size();e++){if (_vzCol[e].active){anyVz=true;}}
+    if (anyVz){ //unsaturated columns (:SoilZoneVadose RICHARDS)
+      RVC<<":GWVadoseColumns   # HRU ID, cell (grid column number), water table [m], water contents of the nodes from the top [-]"<<endl;
+      for (size_t e=0;e<_vzCol.size();e++){
+        const gwvz::vz_column &c=_vzCol[e]; if (!c.active){continue;}
+        const gw_link &L=_aLinks[_szxLink[e]];
+        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(15)<<", "<<c.zbot;
+        for (size_t i=0;i<c.th.size();i++){RVC<<", "<<c.th[i];}
+        RVC<<endl;
+      }
+      RVC<<":EndGWVadoseColumns"<<endl;
+    }
+    if ((_szTiming==1) && (_szxQprev.size()==_szxLink.size())){ //LAGGED: the last step's exchange is the next step's source
+      RVC<<":GWSoilZoneLag   # HRU ID, cell (grid column number), exchange of the last step into the aquifer [m3/d], debt the aquifer still repays [m3]"<<endl;
+      for (size_t e=0;e<_szxLink.size();e++){
+        const gw_link &L=_aLinks[_szxLink[e]];
+        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(15)<<", "<<_szxQprev[e]<<", "<<((e<_szxDebt.size())?_szxDebt[e]:0.0)<<endl;
+      }
+      RVC<<":EndGWSoilZoneLag"<<endl;
+    }
   }
   bool anyDelay=false; for (size_t p=0;p<_aProfiles.size();p++){if (_aProfiles[p].recharge_delay>0){anyDelay=true;}}
   if (anyDelay){
@@ -2346,6 +2416,10 @@ void CGroundwaterModel::FinishBudgetLine()
     _BUDGET<<","<<_Qres_spec<<","<<_Qres<<","<<_resPendingVol<<","<<_resShortVol;
     if (IsExternal()){_BUDGET<<","<<_Qother;}
     if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid<<","<<_szMovedV<<","<<_szWithheldV<<","<<_szWithheldG<<","<<_szWithheldS;}
+    if (SZPhysical() && (_vzMode>0)){_BUDGET<<","<<_vzInVol<<","<<_vzOutVol<<","<<_vzCapVol<<","<<_vzStoreVol;}
+    if (SZPhysical() && SZCapOn()){_BUDGET<<","<<_szCapWT*_szTstep;}
+    if (SZPhysical() && (_szTiming==1)){_BUDGET<<","<<_szDebtVol<<","<<_szRepayQ*_szTstep;}
+    if (SZPhysical() && ((_szcLink.size()>0) || IsExternal())){_BUDGET<<","<<_QszCHD_in<<","<<_QszCHD_out;}
     _BUDGET<<endl;
   }
   if (_budgetLineOpen){_szMovedV=0.0;} //(called before the first step too: a hotstart sync then counts in step 1)
@@ -2392,7 +2466,11 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
          <<"surface-store leakage to aquifer [m3/d],aquifer discharge to surface stores [m3/d],surface-store exchange applied to Raven [m3],"
          <<"reservoir seepage sent [m3/d],reservoir seepage delivered [m3/d],reservoir seepage awaiting delivery [m3],reservoir gain not supplied by MODFLOW [m3]"<<(IsExternal()?",other model packages [m3/d]":"")
          <<(SZPhysical()?",soil zone to aquifer [m3/d],aquifer to soil zone [m3/d],rejected recharge [m3],soil-zone overflow [m3],soil-zone exchange applied to Raven [m3],"
-                         "soil-zone shortfall [m3],interface updates,interface converged,interface change [m],soil-zone layer redistribution [m3],seepage and soil inflow withheld [m3],river gains withheld [m3],surface-store gains withheld [m3]":"")<<endl;
+                         "soil-zone shortfall [m3],interface updates,interface converged,interface change [m],soil-zone layer redistribution [m3],seepage and soil inflow withheld [m3],river gains withheld [m3],surface-store gains withheld [m3]":"")
+         <<((SZPhysical() && (_vzMode>0))?",unsaturated zone inflow [m3],unsaturated zone to aquifer [m3],capillary rise to soil zone [m3],unsaturated zone storage [m3]":"")
+         <<((SZPhysical() && SZCapOn())?",capillary rise from the water table [m3]":"")
+         <<((SZPhysical() && (_szTiming==1))?",lagged-exchange debt [m3],lagged-exchange repayment [m3]":"")
+         <<((SZPhysical() && ((_szcLink.size()>0) || IsExternal()))?",soil zone to specified heads [m3/d],specified heads to soil zone [m3/d]":"")<<endl;
   if (SZPhysical()){
     _SZOUT.open(FilenamePrepare("GWSoilExchange.csv",Options).c_str());
     ExitGracefullyIf(_SZOUT.fail(),"CGroundwaterModel: cannot open GWSoilExchange.csv",FILE_OPEN_ERR);
@@ -2420,7 +2498,7 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
 void CGroundwaterModel::WriteStepOutputs(const double &tstep,const time_struct &tt)
 {
   double t=tt.model_time+tstep;
-  double scale=max(fabs(_Qrch)+fabs(_Qseep_tot)+fabs(_Qsto)+_Qriv_in+_Qriv_out+fabs(_Qevt)+fabs(_Qwel)+fabs(_Qghb)+fabs(_Qchd)+_Qswx_in+_Qswx_out+fabs(_Qres)+fabs(_Qother)+_Qsz_in+_Qsz_out,1.0); //gross flow through the aquifer [m3/d]
+  double scale=max(fabs(_Qrch)+fabs(_Qseep_tot)+fabs(_Qsto)+_Qriv_in+_Qriv_out+fabs(_Qevt)+fabs(_Qwel)+fabs(_Qghb)+fabs(_Qchd)+_Qswx_in+_Qswx_out+fabs(_Qres)+fabs(_Qother)+_Qsz_in+_Qsz_out+_szCapWT+_szRepayQ,1.0); //gross flow through the aquifer [m3/d]
   string dstr=EndDate(t);
   _BUDGET<<setprecision(10)<<t<<","<<dstr<<","<<_ravenRchVol/tstep<<","<<_Qrch<<","<<_Qseep_tot<<","<<_Qsto<<","
          <<_Qerr<<","<<100.0*_Qerr/scale<<","<<_returnVol<<","<<_lastIter<<","<<(_lastConverged?(_lastRelaxed?2:1):0)<<","<<_rchStoreTot<<","<<_QrchCHD; //line completed in FinishBudgetLine
@@ -2521,6 +2599,7 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
     if (nOn>0){
       S<<"  soil-zone thickness   : "<<dmin<<" to "<<dmax<<" m; model top = land surface - overlap-weighted thickness"<<endl;
       if (_szxC.size()>0){S<<"  soil-zone links       : "<<_szxC.size()<<" (SZX_RAVEN), conductance per area "<<cmin<<" to "<<cmax<<" 1/d; Sy/drainable porosity "<<_szRatioMin<<" to "<<_szRatioMax<<endl;}
+      if ((_szxC.size()>0) && (_vzMode>0)){S<<"  unsaturated columns   : Richards, "<<_vzN<<" nodes at most, accuracy "<<_vzAcc<<"; "<<_vzSub<<" substeps and "<<_vzNewton<<" Newton iterations in all"<<endl;}
       S<<"  interface iteration   : up to "<<_szMaxIter<<" updates after MODFLOW has converged, tolerances "<<_szTolH<<" m and "<<_szTolQ<<"; saturated fraction and contact from "<<_szSubgrid<<"x"<<_szSubgrid<<" DEM samples per cell"<<(_dem.IsLoaded()?"":" (no DEM: cell mean)")<<endl;
       S<<"  soil-zone columns     : "<<_szColA.size()<<" (one per link, plus the rest of each HRU); at the start "<<_szInitHot<<" HRUs from the hotstart file, "
        <<_szInitVol<<" m3 added to saturate the soil zone below the initial water table"<<endl;

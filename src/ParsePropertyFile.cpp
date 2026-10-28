@@ -851,7 +851,8 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
         if (!strcmp(s[0],":Attributes")){attrs.clear(); for (int i=1;i<Len;i++){attrs.push_back(s[i]);} continue;}
         ExitGracefullyIf(attrs.size()==0,"ParseClassPropertiesFile: :AquiferClasses requires an :Attributes line",BAD_DATA);
         ExitGracefullyIf(Len!=(int)attrs.size()+1,"ParseClassPropertiesFile: :AquiferClasses row has the wrong number of values",BAD_DATA);
-        gw_aquifer_class c; c.name=s[0]; c.Kh=-1; c.Kv=-1; c.Ss=1e-5; c.Sy=0.1; c.porosity=0.3; bool kvGiven=false;
+        gw_aquifer_class c; c.name=s[0]; c.Kh=-1; c.Kv=-1; c.Ss=1e-5; c.Sy=0.1; c.porosity=0.3; c.clapp_b=4.0; c.psia=0.3; c.unsatGiven=false; bool kvGiven=false;
+        int nUnsat=0;
         for (size_t i=0;i<attrs.size();i++){
           double v=s_to_d(s[i+1]);
           if      (attrs[i]=="K_HORIZ"     ){c.Kh=v;}
@@ -859,10 +860,13 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
           else if (attrs[i]=="SPEC_STORAGE"){c.Ss=v;}
           else if (attrs[i]=="SPEC_YIELD"  ){c.Sy=v;}
           else if (attrs[i]=="POROSITY"    ){c.porosity=v;}
+          else if (attrs[i]=="CLAPP_B"     ){c.clapp_b=v; nUnsat++;}            //unsaturated column (:SoilZoneVadose RICHARDS)
+          else if (attrs[i]=="AIR_ENTRY_PRESSURE"){c.psia=v; nUnsat++;}       //[m], positive
           else {ExitGracefully(("ParseClassPropertiesFile: unknown :AquiferClasses attribute "+attrs[i]).c_str(),BAD_DATA);}
         }
         ExitGracefullyIf(c.Kh<=0,("ParseClassPropertiesFile: aquifer class "+c.name+" needs a positive K_HORIZ").c_str(),BAD_DATA);
         if (!kvGiven){c.Kv=c.Kh/10.0;} //default only when K_VERT is absent; given values are checked at start-up
+        c.unsatGiven=(nUnsat==2);
         pGW->AddAquiferClass(c);
       }
       break;

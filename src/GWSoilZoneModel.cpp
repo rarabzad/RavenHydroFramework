@@ -89,12 +89,24 @@ void CGroundwaterModel::SZSetup()
 
 double CGroundwaterModel::SZBase(const int k,const int ic) const
 {
+  if (IsExternal()){return _top[ic];}                                            //an existing model: the soil zone lies on its top
   return _land[ic]-_szD[k];
+}
+double CGroundwaterModel::SZCellKv(const int ic) const
+{
+  if (IsExternal()){return _extKv[TopNode(ic)];}
+  return _aClasses[_aProfiles[_colProfile[ic]].layers[0].iclass].Kv;
+}
+double CGroundwaterModel::SZCellSy(const int ic) const
+{
+  if (IsExternal()){return _extSy[TopNode(ic)];}
+  return _aClasses[_aProfiles[_colProfile[ic]].layers[0].iclass].Sy;
 }
 
 //////////////////////////////////////////////////////////////////
-/// \brief one SZX entry per HRU-cell link of a soil-zone HRU (top active cell, not on specified-head cells),
-///  conductances (half the bottom soil layer and half the top aquifer cell in series), DEM samples per cell
+/// \brief one SZX entry per HRU-cell link of a soil-zone HRU (top active cell), conductances (half the bottom soil
+///  layer and half the top aquifer cell in series), DEM samples per cell; links on specified-head cells get a CHD entry
+///  instead (their column exchanges with the fixed head, no MODFLOW boundary)
 //
 void CGroundwaterModel::SZBuildEntries()
 {
@@ -102,34 +114,38 @@ void CGroundwaterModel::SZBuildEntries()
   _linkF.assign(_aLinks.size(),0.0);
   _colCoverNS.assign(_ncpl,0.0);
   _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _szxCell.clear(); _szxOfHRU.assign(nHRUs,vector<int>());
+  _szcLink.clear(); _szcCell.clear(); _szcOfHRU.assign(nHRUs,vector<int>());
   _cellDem.assign(_ncpl,vector<double>());
   int nRatio=0,nMix=0; double rmin=1e300,rmax=0,dmix=0.0;
   for (size_t li=0;li<_aLinks.size();li++)
   {
     const gw_link &L=_aLinks[li];
     if (!_szOn[L.k]){_colCoverNS[L.ic]+=L.area; continue;}
-    if (_colCHDTop[L.ic]){continue;}
+    const bool chd=_colCHDTop[L.ic];
     int ic=L.ic;
     const gw_profile &P=_aProfiles[_colProfile[ic]];
-    const gw_aquifer_class &C1=_aClasses[P.layers[0].iclass];
-    double b1=_top[ic]-_botm[UserNode(0,ic)];                                    //[m] top cell
+    const double Kv1=SZCellKv(ic),Sy1=SZCellSy(ic);
+    ExitGracefullyIf(!(Kv1>0.0),("CGroundwaterModel: :SoilZone PHYSICAL: the top active cell of grid column "+to_string(ic+1)+" has no vertical conductivity").c_str(),BAD_DATA);
+    double b1=_top[ic]-_botm[TopNode(ic)];                                         //[m] top cell
     const gwsz::sz_layer &Lb=_szLay[L.k][0];                                      //bottom soil-zone layer
     double ks=_pModel->GetHydroUnit(L.k)->GetSoilProps(_szNLayers-1)->hydraul_cond/MM_PER_METER; //[m/d]
-    double res=Lb.H/(2.0*ks)+b1/(2.0*C1.Kv);                                     //[d]
+    double res=Lb.H/(2.0*ks)+b1/(2.0*Kv1);                                       //[d]
     double C=L.area/res;                                                          //[m2/d]
-    _szxOfHRU[L.k].push_back((int)_szxLink.size());
-    _szxLink.push_back((int)li); _szxC.push_back(C); _szxZb.push_back(SZBase(L.k,ic)); _szxQ.push_back(0.0);
+    if (!chd){
+      _szxOfHRU[L.k].push_back((int)_szxLink.size());
+      _szxLink.push_back((int)li); _szxC.push_back(C); _szxZb.push_back(SZBase(L.k,ic)); _szxQ.push_back(0.0);
+    }
     //storage consistency: specific yield of the top aquifer layer vs drainable porosity of the bottom soil layer
     double Sd=(Lb.phimax-Lb.phifc)/(Lb.H*MM_PER_METER);
-    double r=C1.Sy/Sd; rmin=min(rmin,r); rmax=max(rmax,r);
+    double r=Sy1/Sd; rmin=min(rmin,r); rmax=max(rmax,r);
     if ((r<0.5) || (r>2.0)){nRatio++;}
     //the model top is the overlap-weighted soil-zone base of the cell: an HRU whose soil zone is thicker or thinner
     //than the cell's mean (cells shared with lakes or other soil profiles) has its base below or above the top
     double dm=fabs(_szD[L.k]-(_land[ic]-_top[ic]));
-    if (dm>max(0.05,0.1*_szD[L.k])){nMix++; dmix=max(dmix,dm);}
+    if (!IsExternal() && (dm>max(0.05,0.1*_szD[L.k]))){nMix++; dmix=max(dmix,dm);}
     //DEM sample points of the cell (sub-grid saturated fraction)
     if (_cellDem[ic].empty()){
-      if (_dem.IsLoaded() && (_szSubgrid>1)){
+      if (_dem.IsLoaded() && (_szSubgrid>1) && !(IsExternal() && !_owTable.empty())){ //(an :OverlapWeights table has no cell outlines)
         vector<gw_pt> pts; _grid.SamplePoints(ic,_szSubgrid,pts);
         for (size_t s=0;s<pts.size();s++){
           double X,Y,lon,lat,v; _grid.ToWorld(pts[s].x,pts[s].y,X,Y); _proj.Inverse(X,Y,lon,lat);
@@ -139,10 +155,15 @@ void CGroundwaterModel::SZBuildEntries()
       if (_cellDem[ic].empty()){_cellDem[ic].push_back(_land[ic]);}
     }
     gwsz::sz_cell cell;                                                           //sub-grid closure of the column (GWSoilZone.h)
-    for (size_t q=0;q<_cellDem[ic].size();q++){cell.zbs.push_back(_cellDem[ic][q]-_szD[L.k]);}
+    if (IsExternal()){ //an existing model: the base is the model top, its relief within the cell from the DEM (about the cell's mean)
+      double mz=0.0; for (size_t q=0;q<_cellDem[ic].size();q++){mz+=_cellDem[ic][q];} mz/=max((double)_cellDem[ic].size(),1.0);
+      for (size_t q=0;q<_cellDem[ic].size();q++){cell.zbs.push_back(_top[ic]+(_cellDem[ic][q]-mz));}
+    }
+    else {for (size_t q=0;q<_cellDem[ic].size();q++){cell.zbs.push_back(_cellDem[ic][q]-_szD[L.k]);}}
     std::sort(cell.zbs.begin(),cell.zbs.end());
     cell.ds=P.seep_smooth_depth; cell.D=_szD[L.k]; cell.C=C;
-    _szxCell.push_back(cell);
+    if (chd){_szcOfHRU[L.k].push_back((int)_szcLink.size()); _szcLink.push_back((int)li); _szcCell.push_back(cell);}
+    else    {_szxCell.push_back(cell);}
   }
   if (nMix>0){
     WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: on "+to_string(nMix)+" links the soil-zone base of the HRU lies up to "+to_string(dmix)+
@@ -161,7 +182,9 @@ void CGroundwaterModel::SZBuildEntries()
   //GSFLOW keeps a gravity reservoir per HRU-cell intersection; Raven's SOIL[m] is their area-weighted mean.
   _linkSzx.assign(_aLinks.size(),-1);
   for (size_t e=0;e<_szxLink.size();e++){_linkSzx[_szxLink[e]]=(int)e;}
-  _szColOff.assign(nHRUs,-1); _szColA.clear(); _szxCol.assign(_szxLink.size(),-1);
+  _linkSzc.assign(_aLinks.size(),-1);
+  for (size_t e=0;e<_szcLink.size();e++){_linkSzc[_szcLink[e]]=(int)e;}
+  _szColOff.assign(nHRUs,-1); _szColA.clear(); _szxCol.assign(_szxLink.size(),-1); _szcCol.assign(_szcLink.size(),-1);
   for (int k=0;k<nHRUs;k++){
     if (!_szOn[k]){continue;}
     double A=_pModel->GetHydroUnit(k)->GetArea()*M2_PER_KM2,S=0.0,sum=0.0;    //[m2]
@@ -173,7 +196,11 @@ void CGroundwaterModel::SZBuildEntries()
       int e=_szxOfHRU[k][j]; double a=_aLinks[_szxLink[e]].area*sc;
       _szxCol[e]=(int)_szColA.size(); _szColA.push_back(a); sum+=a;
     }
-    _szColA.push_back(max(A-sum,0.0));                                            //rest of the HRU
+    for (size_t j=0;j<_szcOfHRU[k].size();j++){                                   //columns over specified heads
+      int e=_szcOfHRU[k][j]; double a=_aLinks[_szcLink[e]].area*sc;
+      _szcCol[e]=(int)_szColA.size(); _szColA.push_back(a); sum+=a;
+    }
+    _szColA.push_back(max(A-sum,0.0));                                            //rest of the HRU (outside the grid)
   }
   //the conductance of a link acts on its column: on the HRU's AREA share, as the column's water does (with the
   //overlap area instead, an HRU whose polygon is larger than its AREA would exchange its soil water that much faster)
@@ -181,6 +208,12 @@ void CGroundwaterModel::SZBuildEntries()
     double la=_aLinks[_szxLink[e]].area,sc=(la>0.0)?_szColA[_szxCol[e]]/la:1.0;
     _szxC[e]*=sc; _szxCell[e].C*=sc;
   }
+  for (size_t e=0;e<_szcLink.size();e++){
+    double la=_aLinks[_szcLink[e]].area,sc=(la>0.0)?_szColA[_szcCol[e]]/la:1.0;
+    _szcCell[e].C*=sc;
+  }
+  _szcRej.assign(_szcLink.size(),0.0); _szcFw.assign(_szcLink.size(),0.0); _szcQ.assign(_szcLink.size(),0.0); _szcCapL.assign(_szcLink.size()*_szNLayers,0.0);
+  _szxCapQ.assign(_szxLink.size(),0.0); _szxCapL.assign(_szxLink.size()*_szNLayers,0.0); //(capillary rise, zero unless it is on)
   { double dsmin=1e300; for (size_t e=0;e<_szxCell.size();e++){dsmin=min(dsmin,_szxCell[e].ds);}
     if ((_szxCell.size()>0) && (dsmin<0.1)){
       WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: SEEPAGE_SMOOTHING_DEPTH of the cells' profiles is as small as "+to_string(dsmin)+
@@ -192,6 +225,7 @@ void CGroundwaterModel::SZBuildEntries()
   size_t ne=_szxLink.size();
   _szxHc.assign(ne,0.0); _szxHp.assign(ne,0.0); _szxHr.assign(ne,-HUGE_VAL); _szxHq.assign(ne,-HUGE_VAL); _szxQq.assign(ne,0.0);
   _szxBa.assign(ne,0.0); _szxBra.assign(ne,0.0); _szxBb.assign(ne,0.0); _szxBrb.assign(ne,0.0); _szxBk.assign(ne,0);
+  if (_vzMode>0){VZSetup();}
 }
 
 //////////////////////////////////////////////////////////////////
@@ -235,11 +269,13 @@ void CGroundwaterModel::SZInitColumns()
     }
     for (int c=0;c<nc;c++){for (int j=0;j<n;j++){_szColPhi[(o+c)*n+j]=tg[j];}}
     double added=0.0;                                                           //[m3]
-    for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){
-      int e=_szxOfHRU[k][jj],c=_szxCol[e]; const gw_link &L=_aLinks[_szxLink[e]];
-      double h0=_X[_reduced[TopNode(L.ic)]];
-      const gwsz::sz_cell &cell=_szxCell[e];
-      _szxHc[e]=h0;
+    const int nx=(int)_szxOfHRU[k].size(),nch=(int)_szcOfHRU[k].size();
+    for (int jj=0;jj<nx+nch;jj++){                                              //(exchange columns, then those over specified heads)
+      const bool ch=(jj>=nx); const int e=ch?_szcOfHRU[k][jj-nx]:_szxOfHRU[k][jj],c=ch?_szcCol[e]:_szxCol[e];
+      const gw_link &L=_aLinks[ch?_szcLink[e]:_szxLink[e]];
+      double h0=_X[_reduced[TopNode(L.ic)]]*_hf;                                //[m]
+      const gwsz::sz_cell &cell=ch?_szcCell[e]:_szxCell[e];
+      if (!ch){_szxHc[e]=h0;}
       if (gwsz::SatFraction(h0,cell.zbs,cell.ds)<=0.0){continue;}               //not connected: the soil keeps Raven's water
       double lamT=gwsz::SubgridThickness(cell,h0);                              //[m] saturated thickness at equilibrium
       vector<double> phi(_szColPhi.begin()+c*n,_szColPhi.begin()+(c+1)*n);
@@ -263,6 +299,18 @@ void CGroundwaterModel::SZInitColumns()
     (void)A;
   }
   _szColInit=true;
+  _szxQprev.assign(_szxLink.size(),0.0);                                         //LAGGED source of the first step: from the hotstart file
+  _szxDebt.assign(_szxLink.size(),0.0); _szxRepay.assign(_szxLink.size(),0.0);
+  if (!_hotLag.empty()){
+    for (size_t e=0;e<_szxLink.size();e++){
+      const gw_link &L=_aLinks[_szxLink[e]];
+      map<long long,map<int,double> >::const_iterator it=_hotLag.find(_pModel->GetHydroUnit(L.k)->GetHRUID());
+      if (it==_hotLag.end()){continue;}
+      map<int,double>::const_iterator jt=it->second.find(L.ic+1);
+      if (jt!=it->second.end()){_szxQprev[e]=jt->second; _szxDebt[e]=max(_hotDebt[it->first][L.ic+1],0.0);}
+    }
+  }
+  if (_vzMode>0){VZInit();}
 }
 
 //////////////////////////////////////////////////////////////////
@@ -275,6 +323,12 @@ vector<int> CGroundwaterModel::SZColumnCells(const int k) const
   for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){
     int e=_szxOfHRU[k][jj];
     cell[_szxCol[e]-_szColOff[k]]=_aLinks[_szxLink[e]].ic+1;
+  }
+  if (k<(int)_szcOfHRU.size()){
+    for (size_t jj=0;jj<_szcOfHRU[k].size();jj++){
+      int e=_szcOfHRU[k][jj];
+      cell[_szcCol[e]-_szColOff[k]]=_aLinks[_szcLink[e]].ic+1;
+    }
   }
   return cell;
 }
@@ -335,7 +389,7 @@ void CGroundwaterModel::SZLinkFractions(const bool relax,const bool mf6conv)
 {
   for (size_t e=0;e<_szxLink.size();e++){
     const gw_link &L=_aLinks[_szxLink[e]];
-    double h=_X[_reduced[TopNode(L.ic)]];
+    double h=_X[_reduced[TopNode(L.ic)]]*_hf;                                    //[m]
     if (!relax || !mf6conv){_szxHc[e]=h; _szxHr[e]=-HUGE_VAL; _szxBk[e]=0;} //heads MODFLOW has not converged on are no residuals of hc
     else {
       double hc=_szxHc[e],r=h-hc,hn=h;
@@ -367,6 +421,10 @@ void CGroundwaterModel::SZLinkFractions(const bool relax,const bool mf6conv)
     }
     _linkF[_szxLink[e]]=gwsz::SatFraction(_szxHc[e],_szxCell[e].zbs,_szxCell[e].ds);
   }
+  for (size_t e=0;e<_szcLink.size();e++){ //over specified heads: the fixed head
+    const gw_link &L=_aLinks[_szcLink[e]];
+    _linkF[_szcLink[e]]=gwsz::SatFraction(_X[_reduced[TopNode(L.ic)]]*_hf,_szcCell[e].zbs,_szcCell[e].ds);
+  }
 }
 
 //////////////////////////////////////////////////////////////////
@@ -375,25 +433,56 @@ void CGroundwaterModel::SZLinkFractions(const bool relax,const bool mf6conv)
 void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
 {
   std::fill(_Qcol.begin(),_Qcol.end(),0.0);
+  _szRchCHD=0.0;
   for (size_t i=0;i<_aqHRUs.size();i++)
   {
     int k=_aqHRUs[i]; double V=_szRchV[k],rej=0.0;
-    if (_hruRchArea[k]<=0){if (_szOn[k]){_szRej[k]=0.0;} continue;} //all on specified-head cells (counted in _QrchCHD)
+    double Aall=_hruRchArea[k];                                                  //(with a soil zone: the columns over specified heads too)
+    if (_szOn[k]){ //(all its links' areas: also those on cells that are specified heads this step)
+      Aall=0.0; for (size_t j=0;j<_hruLinks[k].size();j++){Aall+=_aLinks[_hruLinks[k][j]].area;}
+    }
+    if (Aall<=0){if (_szOn[k]){_szRej[k]=0.0;} continue;} //all on specified-head cells (counted in _QrchCHD)
     //an HRU with a soil zone: recharge leaves the columns that hold free water in the bottom layer (Raven's drainage acts
     //on the HRU mean, and its loss is taken from the columns' free water first, gwsz::Distribute), not by area: drainage
     //from saturated columns spread over unsaturated ones would recharge the aquifer upslope of where it came from
     double W=0.0;
-    if (_szOn[k]){for (size_t j=0;j<_hruLinks[k].size();j++){int li=_hruLinks[k][j]; if (!_colCHDTop[_aLinks[li].ic] && (_linkSzx[li]>=0)){W+=_szxFw[_linkSzx[li]];}}}
+    if (_szOn[k]){
+      for (size_t j=0;j<_hruLinks[k].size();j++){int li=_hruLinks[k][j]; if (_linkSzx[li]>=0){W+=_szxFw[_linkSzx[li]];}}
+      for (size_t j=0;j<_szcOfHRU[k].size();j++){W+=_szcFw[_szcOfHRU[k][j]];}
+    }
     for (size_t j=0;j<_hruLinks[k].size();j++){
       int li=_hruLinks[k][j]; const gw_link &L=_aLinks[li];
+      if (_szOn[k] && (_linkSzc[li]>=0)){ //a column over a specified head: its recharge goes to the specified head, rejected where saturated
+        const int ec=_linkSzc[li];
+        const double share=(W>0.0)?_szcFw[ec]/W:L.area/Aall,F=_linkF[li];
+        _szcRej[ec]=V*share*F; rej+=_szcRej[ec]; _szRchCHD+=V/tstep*share*(1.0-F);
+        continue;
+      }
+      if (_szOn[k] && _colCHDTop[L.ic] && (_linkSzx[li]>=0)){ //the same for an exchange column whose cell is a specified head this
+        const int e2=_linkSzx[li];                                                //step (existing models)
+        const double share=(W>0.0)?_szxFw[e2]/W:L.area/Aall,F=gwsz::SatFraction(_X[_reduced[TopNode(L.ic)]]*_hf,_szxCell[e2].zbs,_szxCell[e2].ds);
+        _szxRej[e2]=V*share*F; rej+=_szxRej[e2]; _szRchCHD+=V/tstep*share*(1.0-F);
+        continue;
+      }
       if (_colCHDTop[L.ic]){continue;}
-      double share=(W>0.0)?((_linkSzx[li]>=0)?_szxFw[_linkSzx[li]]/W:0.0):L.area/_hruRchArea[k],F=_linkF[li];
+      double share=(W>0.0)?((_linkSzx[li]>=0)?_szxFw[_linkSzx[li]]/W:0.0):L.area/(_szOn[k]?Aall:_hruRchArea[k]),F=_linkF[li];
+      const int e=_linkSzx[li];
+      if ((_vzMode>0) && (e>=0) && (e<(int)_vzUse.size())){
+        _Qcol[L.ic]+=_vzAbsQ[e];                                                 //water a risen water table took from the column
+        if (_vzUse[e]){ //the unsaturated column carried the unsaturated share this step: its bottom flux recharges the
+                        //aquifer, and the saturated share is rejected with the saturated fraction its inflow used
+          double rj=V*share*_vzFp[e]+_vzRejV[e];
+          _Qcol[L.ic]+=_vzQ[e]; rej+=rj; _szxRej[e]=rj;
+          continue;
+        }
+      }
       _Qcol[L.ic]+=V/tstep*share*(1.0-F);
       rej+=V*share*F;
-      if (_linkSzx[li]>=0){_szxRej[_linkSzx[li]]=V*share*F;}
+      if (e>=0){_szxRej[e]=V*share*F;}
     }
     if (_szOn[k]){_szRej[k]=rej;}
   }
+  _QrchCHD=_QrchCHD0+_szRchCHD;
   if (write){for (size_t i=0;i<_bndCol.size();i++){_rchBound[i]=_Qcol[_bndCol[i]]/MF6CellArea(_bndCol[i])*_rf;}}
 }
 
@@ -410,13 +499,21 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
   {
     const gw_link &L=_aLinks[_szxLink[e]]; int k=L.k,c=_szxCol[e];
     const gwsz::sz_cell &cell=_szxCell[e];
-    double h=_X[_reduced[TopNode(L.ic)]];
+    double h=_X[_reduced[TopNode(L.ic)]]*_hf;                                    //[m] (the soil zone works in metres and m3/d)
     double a=_szColA[c];                                                         //[m2] column area
     double lam=0.0,lamp=0.0;
     if (!steady){
       phi.assign(_szColPhi.begin()+c*n,_szColPhi.begin()+(c+1)*n);
       gwsz::Fill(_szLay[k],phi,_szxRej[e]/a*MM_PER_METER);                       //rejected recharge back to the column
+      if ((e<_szxLagD.size()) && (_szxLagD[e]!=0.0)){                            //LAGGED: the part of the source not taken back
+        if (_szxLagD[e]>0.0){gwsz::Fill(_szLay[k],phi,_szxLagD[e]);} else {double sh=0.0; gwsz::Apply(_szLay[k],phi,_szxLagD[e],sh);}
+      }
       double dV,ovf;
+      if (_colCHDTop[L.ic]){ //a specified head this step (existing models): no MODFLOW boundary; the exchange with the head is
+                             //found after MODFLOW's solve (SZChdExchange, in the booking)
+        _szxLam[e]=gwsz::SatThickness(_szLay[k],phi); _szxQc[e]=0.0; _szxCg[e]=0.0; _szxOne[e]=0; _szxFc[e]=gwsz::SatFraction(h,cell.zbs,cell.ds); _szxHc[e]=h;
+        continue;
+      }
       lam=gwsz::LocalSolve(_szLay[k],phi,cell,h,_szxHc[e],a,tstep,dV,ovf,lamp);
       if (fabs(lam-_szxLam[e])>maxd){maxd=fabs(lam-_szxLam[e]); _szResE=(int)e;}
     }
@@ -462,7 +559,7 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     _szxOne[e]=0;
     if (!steady && ((_szMaxIter==0) || (SZFreezeAt()<1) || _szCapUpd)){
       double avail=gwsz::StackFreeWater(_szLay[k],phi)/MM_PER_METER*a/tstep;           //[m3/d]
-      double bot=_botm[UserNode(0,L.ic)];
+      double bot=_botm[TopNode(L.ic)];
       double cap=max(avail-q,0.0)/max(h-bot,1e-3);
       if (q>=0.0){Cg=max(min(Cg,cap),1e-9*cell.C);}
       else if (Cg>cap){ //only where the line could take more than the column holds: one-sided, if at least 10 MODFLOW
@@ -494,12 +591,17 @@ void CGroundwaterModel::SZSetArrays(const bool steady)
   int st=max(_szxNcol,1),sq=max(_szqNcol,1),sd=max(_szdNcol,1);
   for (size_t e=0;e<_szxLink.size();e++){
     const gw_link &L=_aLinks[_szxLink[e]];
-    double h=_X[_reduced[TopNode(L.ic)]];
-    double bot=_botm[UserNode(0,L.ic)]+1e-3;                                    //[m] margin: MODFLOW reads the bottom rounded
+    double h=_X[_reduced[TopNode(L.ic)]]*_hf;                                    //[m]
+    double bot=_botm[TopNode(L.ic)]+1e-3;                                         //[m] margin: MODFLOW reads the bottom rounded
     double Cg=_szxCg[e];
-    _szdElev[e*sd]=_top[L.ic]; _szdCond[e*sd]=0.0; _szdAux[e]=0.0;
-    if (Cg<=1e-6*_szxC[e]){ //exchange (nearly) independent of the head: a rate (no GHB head far outside the cell)
-      _szxHead[e*st]=bot; _szxCond[e*st]=0.0; _szqQ[e*sq]=_szxQc[e]; continue;
+    const double cap=(((e<_szxCapQ.size())?_szxCapQ[e]:0.0)+((e<_szxRepay.size())?_szxRepay[e]:0.0))/_qf; //capillary rise from the water table (SZCapRiseWT) and
+                                                                                 //the repayment of the lagged source's debt (SZRepayRates), out of the aquifer
+    //(MODFLOW's arrays in the model's units: heads /_hf, conductances *_hf/_qf, rates /_qf; 1 for generated models)
+    const double cf=_hf/_qf;
+    _szdElev[e*sd]=_top[L.ic]/_hf; _szdCond[e*sd]=0.0; _szdAux[e]=0.0;
+    if ((Cg<=1e-6*_szxC[e]) || _colCHDTop[L.ic]){ //exchange (nearly) independent of the head: a rate (no GHB head far outside the
+                                                   //cell); on a specified-head cell (existing models) no boundary at all
+      _szxHead[e*st]=bot/_hf; _szxCond[e*st]=0.0; _szqQ[e*sq]=_colCHDTop[L.ic]?0.0:_szxQc[e]/_qf-cap; continue;
     }
     double Hg=h+_szxQc[e]/Cg;
     double H=max(Hg,bot);
@@ -507,12 +609,12 @@ void CGroundwaterModel::SZSetArrays(const bool steady)
                                         //not continued by a fixed rate that would pump the dried cell; at most to the link
                                         //conductance, then the flow at h is less than the line's)
       if (Hg<bot){Cg=min(-_szxQc[e]/max(h-bot,1e-6),max(Cg,_szxC[e])); H=bot;}
-      _szxHead[e*st]=bot; _szxCond[e*st]=0.0; _szqQ[e*sq]=0.0;
-      _szdElev[e*sd]=H; _szdCond[e*sd]=Cg; _szdAux[e]=max(max(min(_szxCell[e].ds,0.5*(h-H)),0.25*_szxCell[e].ds),1e-3);
+      _szxHead[e*st]=bot/_hf; _szxCond[e*st]=0.0; _szqQ[e*sq]=-cap;
+      _szdElev[e*sd]=H/_hf; _szdCond[e*sd]=Cg*cf; _szdAux[e]=max(max(min(_szxCell[e].ds,0.5*(h-H)),0.25*_szxCell[e].ds),1e-3)/_hf;
       continue;
     }
-    _szxHead[e*st]=H; _szxCond[e*st]=Cg;
-    _szqQ[e*sq]=Cg*(Hg-H);
+    _szxHead[e*st]=H/_hf; _szxCond[e*st]=Cg*cf;
+    _szqQ[e*sq]=Cg*(Hg-H)/_qf-cap;
   }
   if (steady){return;}
   SZRecharge(_szTstep,true);
@@ -572,7 +674,7 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   //flow test: relative change, or a change no larger than the head tolerances allow on every link
   //(sum of conductances x the larger of the interface tolerance and MODFLOW's DVCLOSE)
   double dQ=fabs(Q-prevQ);
-  _szDQ=dQ; _szDQtol=max(_szTolQ*max(G,1e-6),sC*max(_szTolH,_dvclose));
+  _szDQ=dQ; _szDQtol=max(_szTolQ*max(G,1e-6),sC*max(_szTolH,(IsExternal() && (_extDvclose>0))?_extDvclose:_dvclose));
   bool conv=(_szResid<_szTolH) && (dQ<=_szDQtol);
   prevQ=Q; _szIter++; _szConv=conv; (void)iter;
   if (conv || last){ //keep what MODFLOW solved with (the update changed it by less than the tolerances, or no solve follows:
@@ -593,7 +695,8 @@ void CGroundwaterModel::SZApply(double **aPhinew,const double &tstep)
 {
   int iSW=_pModel->GetStateVarIndex(SURFACE_WATER);
   const int n=_szNLayers;
-  _szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0;
+  _szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szDebtVol=0.0;
+  if (_szxDebt.size()!=_szxLink.size()){_szxDebt.assign(_szxLink.size(),0.0);}
   vector<double> phi(n),tg(n);
   for (size_t i=0;i<_aqHRUs.size();i++)
   {
@@ -609,8 +712,41 @@ void CGroundwaterModel::SZApply(double **aPhinew,const double &tstep)
       double dV=-_szxQ[e]*tstep/a*MM_PER_METER;                                  //[mm] change of the column
       double sh=0.0;
       ovf+=gwsz::Apply(_szLay[k],phi,dV,sh);
+      if ((e<(int)_szxLagD.size()) && (_szxLagD[e]!=0.0)){                       //LAGGED: the part of the source not taken back; what the
+        const double D=_szxLagD[e]; double shD=0.0;                              //column cannot give back (water Raven's processes used that
+        if (D>0.0){ovf+=gwsz::Fill(_szLay[k],phi,D);}                            //the step's exchange did not supply) is a debt the aquifer
+        else {gwsz::Apply(_szLay[k],phi,D,shD);}                                 //repays in the next steps
+        dV+=D+shD;
+        if (shD>0.0){const double v=shD/MM_PER_METER*a; _szxDebt[e]+=v; _szDebtVol+=v;}
+      }
+      if ((_vzMode>0) && (e<(int)_vzCapV.size()) && (_vzCapV[e]>0.0)){             //capillary rise from the unsaturated column into the bottom layer
+        const double v=_vzCapV[e]/a*MM_PER_METER,add=min(v,max(_szLay[k][0].phimax-phi[0],0.0));
+        phi[0]+=add; ovf+=gwsz::Fill(_szLay[k],phi,v-add); dV+=v;
+      }
+      if ((e+1)*n<=(int)_szxCapL.size()){                                          //capillary rise from the water table into its layers
+        for (int j=0;j<n;j++){
+          const double v=_szxCapL[e*n+j]*tstep/a*MM_PER_METER; if (!(v>0.0)){continue;}
+          const double add=min(v,max(_szLay[k][j].phimax-phi[j],0.0));
+          phi[j]+=add; ovf+=gwsz::Fill(_szLay[k],phi,v-add); dV+=v;
+        }
+      }
       for (int j=0;j<n;j++){_szColPhi[c*n+j]=phi[j];}
       ovfV+=ovf/MM_PER_METER*a; netV+=(dV+sh)/MM_PER_METER*a; shV+=sh/MM_PER_METER*a; rejV+=_szxRej[e];
+    }
+    for (size_t jj=0;jj<_szcOfHRU[k].size();jj++){ //columns over specified heads: the local solve's exchange with the fixed head
+      int e=_szcOfHRU[k][jj],c=_szcCol[e]; double a=_szColA[c];
+      if (!(a>0.0)){continue;}
+      for (int j=0;j<n;j++){phi[j]=_szColPhi[c*n+j];}
+      double ovf=gwsz::Fill(_szLay[k],phi,_szcRej[e]/a*MM_PER_METER);
+      double dV=-_szcQ[e]*tstep/a*MM_PER_METER,sh=0.0;
+      ovf+=gwsz::Apply(_szLay[k],phi,dV,sh);
+      for (int j=0;j<n;j++){
+        const double v=_szcCapL[e*n+j]*tstep/a*MM_PER_METER; if (!(v>0.0)){continue;}
+        const double add=min(v,max(_szLay[k][j].phimax-phi[j],0.0));
+        phi[j]+=add; ovf+=gwsz::Fill(_szLay[k],phi,v-add); dV+=v;
+      }
+      for (int j=0;j<n;j++){_szColPhi[c*n+j]=phi[j];}
+      ovfV+=ovf/MM_PER_METER*a; netV+=(dV+sh)/MM_PER_METER*a; shV+=sh/MM_PER_METER*a; rejV+=_szcRej[e];
     }
     //Raven's soil-zone layers: area-weighted mean of the columns (the rest column did not change)
     int nc=SZNCols(k),o=_szColOff[k]; double sw=0.0,W=0.0;
@@ -622,11 +758,14 @@ void CGroundwaterModel::SZApply(double **aPhinew,const double &tstep)
     }
     _szW[k]=W;
     if (ovfV>0.0){aPhinew[k][iSW]+=ovfV/A*MM_PER_METER;}
+    if (k<(int)_szLagNet.size()){netV+=_szLagNet[k];}                           //LAGGED: source and its reversal (given to Raven's soil zone at the sync)
     _szAppliedVol+=rejV+netV;                                                    //net water added to Raven (overflow stays in Raven)
     _szRejVol+=rejV; _szShortVol+=shV;
     ovfV+=_szSyncOvf[k];                                                         //(sent to SURFACE_WATER when the exchange began)
     _szOvfVol+=ovfV; _szOvfV[k]=ovfV; _szNetV[k]=netV;
   }
+  _szxQprev=_szxQ;                                                               //(the LAGGED source of the next step)
+  for (size_t e=0;e<_szxRepay.size() && e<_szxDebt.size();e++){_szxDebt[e]=max(_szxDebt[e]-_szxRepay[e]*tstep,0.0);}
   if ((_szShortVol>1e-6) && (++_szShortN<=10)){
     WriteWarning("CGroundwaterModel: soil-zone exchange: "+to_string(_szShortVol)+" m3 that MODFLOW took from the soil zone was not in it (step "+to_string(_stepCount)+")",false);
   }
@@ -641,11 +780,14 @@ double CGroundwaterModel::SZTrialShortfall(const double &tstep) const
   const int n=_szNLayers; double S=0.0;
   vector<double> phi(n);
   for (size_t e=0;e<_szxLink.size();e++){
-    if (!(_szxQ[e]>0.0)){continue;}                                              //only flow out of the column can fall short
     int c=_szxCol[e],k=_aLinks[_szxLink[e]].k; double a=_szColA[c];
+    if (_colCHDTop[_aLinks[_szxLink[e]].ic]){continue;}                          //(exchange with a specified head: not MODFLOW's water)
+    double dV=-_szxQ[e]*tstep/a*MM_PER_METER;
+    if (!(dV<0.0)){continue;}                                                    //only flow out of the column can fall short (LAGGED: the
+                                                                                 //source not taken back is settled after it, its shortfall a debt)
     for (int j=0;j<n;j++){phi[j]=_szColPhi[c*n+j];}
     gwsz::Fill(_szLay[k],phi,_szxRej[e]/a*MM_PER_METER);
-    double sh=0.0; gwsz::Apply(_szLay[k],phi,-_szxQ[e]*tstep/a*MM_PER_METER,sh);
+    double sh=0.0; gwsz::Apply(_szLay[k],phi,dV,sh);
     S+=sh/MM_PER_METER*a;
   }
   return S;

@@ -2526,6 +2526,23 @@ void CModel::IncrementBalance(const int    q_star,
   _aFlowBal      [k][q_star]= moved;
 }
 //////////////////////////////////////////////////////////////////
+/// \brief one class run of :SoilZoneClasses: the connection's flow is this class's own while the class's processes run
+///  (advection and energy processes read it), its area-weighted share goes to the cumulative balance; the step's flow
+///  is set to the weighted sum of the classes afterwards (SetFlowBalance)
+//
+void CModel::ClassBalance(const int    q_star,
+                          const int    k,
+                          const double moved,
+                          const double weight){
+  _aCumulativeBal[k][q_star]+=weight*moved;
+  _aFlowBal      [k][q_star]= moved;
+}
+void CModel::SetFlowBalance(const int    q_star,
+                            const int    k,
+                            const double moved){
+  _aFlowBal      [k][q_star]= moved;
+}
+//////////////////////////////////////////////////////////////////
 /// \brief Increments lateral flow water/energy balance
 /// \details add cumulative amount of water/energy for each lateral process connection
 /// \note  called from main solver
