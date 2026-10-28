@@ -68,7 +68,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szGuardN=0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
 }
 CGroundwaterModel::~CGroundwaterModel()
@@ -96,7 +96,7 @@ void CGroundwaterModel::ResetState()
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szxOne.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szGuardN=0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
 }
 void CGroundwaterModel::Reinitialize(const optStruct &Options)
 {
@@ -2024,14 +2024,15 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   //   columns that did not hold it, which it then discharged or returned as upflow with balanced books). All discharge to Raven (seepage, gains of enabled subbasins, surface-store gains, the exchange into the soil
   //   zone) is reduced in proportion; what it cannot cover (little discharge this step) stays in the aquifer
   //   (reported: MF6 balance error, soil-zone shortfall; the withheld volume in GWBudget.csv)
-  _szWithheldV=_szWithheldG=0.0;
+  _szWithheldV=_szWithheldG=_szWithheldS=0.0;
   if (SZPhysical()){
     double R=SZTrialShortfall(tstep)/tstep;                                       //[m3/d]
     if (!_lastConverged && (_Qerr<0.0)){R-=_Qerr;}
     if (R>0.0){
-      double gains=0.0;
-      for (size_t p=0;p<_sbGain.size();p++){if (_pModel->GetSubBasin((int)p)->IsEnabled()){gains+=max(_sbGain[p],0.0);}}
-      for (size_t e=0;e<_swxQ.size();e++){gains+=max(-_swxQ[e],0.0);}
+      double gR=0.0,gS=0.0;
+      for (size_t p=0;p<_sbGain.size();p++){if (_pModel->GetSubBasin((int)p)->IsEnabled()){gR+=max(_sbGain[p],0.0);}}
+      for (size_t e=0;e<_swxQ.size();e++){gS+=max(-_swxQ[e],0.0);}
+      double gains=gR+gS;
       double up=0.0; for (size_t e=0;e<_szxQ.size();e++){up+=max(-_szxQ[e],0.0);}
       double D=_Qseep_tot+gains+up,seep0=_Qseep_tot;
       if (D>0.0){
@@ -2040,9 +2041,10 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
         for (size_t p=0;p<_sbGain.size();p++){if (_sbGain[p]>0){_sbGain[p]*=f;}}
         for (size_t e=0;e<_swxQ.size();e++){if (_swxQ[e]<0){_swxQ[e]*=f;}}
         _Qsz_out=0.0; for (size_t e=0;e<_szxQ.size();e++){if (_szxQ[e]<0){_szxQ[e]*=f;} if (_szxQ[e]<0){_Qsz_out-=_szxQ[e];}}
-        _szWithheldV=(1.0-f)*(seep0+up)*tstep; _szWithheldG=(1.0-f)*gains*tstep;   //(split: MODFLOW's own budget books the gains apart)
-        if ((_szWithheldV+_szWithheldG>1e-6) && (++_szGuardN<=10)){
-          WriteWarning("CGroundwaterModel: step ending "+EndDate(tt.model_time+tstep)+": "+ToStr(_szWithheldV+_szWithheldG)+" m3 of discharge to Raven withheld for "
+        _szWithheldV=(1.0-f)*(seep0+up)*tstep; _szWithheldG=(1.0-f)*gR*tstep; _szWithheldS=(1.0-f)*gS*tstep; //(split: MODFLOW's own budget
+                                                    //books the gains apart, and the river and store exchanges are checked apart)
+        if ((_szWithheldV+_szWithheldG+_szWithheldS>1e-6) && (++_szGuardN<=10)){
+          WriteWarning("CGroundwaterModel: step ending "+EndDate(tt.model_time+tstep)+": "+ToStr(_szWithheldV+_szWithheldG+_szWithheldS)+" m3 of discharge to Raven withheld for "
                        "MODFLOW's residual and the soil-zone shortfall (MODFLOW unconverged or an interface boundary it kept)"+(_szGuardN==10?" (further such warnings suppressed)":""),false);
         }
       }
@@ -2343,7 +2345,7 @@ void CGroundwaterModel::FinishBudgetLine()
     for (size_t r=0;r<_resP.size();r++){_resPendingVol+=_pModel->GetSubBasin(_resP[r])->GetReservoir()->GetReservoirGWLosses(1.0);}
     _BUDGET<<","<<_Qres_spec<<","<<_Qres<<","<<_resPendingVol<<","<<_resShortVol;
     if (IsExternal()){_BUDGET<<","<<_Qother;}
-    if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid<<","<<_szMovedV<<","<<_szWithheldV<<","<<_szWithheldG;}
+    if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid<<","<<_szMovedV<<","<<_szWithheldV<<","<<_szWithheldG<<","<<_szWithheldS;}
     _BUDGET<<endl;
   }
   if (_budgetLineOpen){_szMovedV=0.0;} //(called before the first step too: a hotstart sync then counts in step 1)
@@ -2390,7 +2392,7 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
          <<"surface-store leakage to aquifer [m3/d],aquifer discharge to surface stores [m3/d],surface-store exchange applied to Raven [m3],"
          <<"reservoir seepage sent [m3/d],reservoir seepage delivered [m3/d],reservoir seepage awaiting delivery [m3],reservoir gain not supplied by MODFLOW [m3]"<<(IsExternal()?",other model packages [m3/d]":"")
          <<(SZPhysical()?",soil zone to aquifer [m3/d],aquifer to soil zone [m3/d],rejected recharge [m3],soil-zone overflow [m3],soil-zone exchange applied to Raven [m3],"
-                         "soil-zone shortfall [m3],interface updates,interface converged,interface change [m],soil-zone layer redistribution [m3],seepage and soil inflow withheld [m3],river and store gains withheld [m3]":"")<<endl;
+                         "soil-zone shortfall [m3],interface updates,interface converged,interface change [m],soil-zone layer redistribution [m3],seepage and soil inflow withheld [m3],river gains withheld [m3],surface-store gains withheld [m3]":"")<<endl;
   if (SZPhysical()){
     _SZOUT.open(FilenamePrepare("GWSoilExchange.csv",Options).c_str());
     ExitGracefullyIf(_SZOUT.fail(),"CGroundwaterModel: cannot open GWSoilExchange.csv",FILE_OPEN_ERR);
