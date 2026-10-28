@@ -14,6 +14,7 @@ static double gw_prof_t0=-1;
 #include "HydroProcessABC.h"
 #include "SoilWaterMovers.h"
 #include "LateralExchangeABC.h"
+#include "ProcessGroup.h"
 #include "TimeSeries.h"
 #include <cmath>
 #include <iomanip>
@@ -67,7 +68,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szCapped=false;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szCapped=false; _szMovedV=0.0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
 }
 CGroundwaterModel::~CGroundwaterModel()
@@ -95,7 +96,7 @@ void CGroundwaterModel::ResetState()
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
   _szPhiProc.clear(); _szPhiOff.clear(); _evtBase.clear();
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szCapped=false;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szCapped=false; _szMovedV=0.0;
 }
 void CGroundwaterModel::Reinitialize(const optStruct &Options)
 {
@@ -693,11 +694,15 @@ void CGroundwaterModel::CheckProcesses()
   for (int j=0;j<_pModel->GetNumProcesses();j++)
   {
     CHydroProcessABC *pProc=_pModel->GetProcess(j);
-    if (SZPhysical() && (pProc->GetNumLatConnections()>0)){ //lateral processes may not reach the pass-through GROUNDWATER either
-      const CLateralExchangeProcessABC *pLat=dynamic_cast<const CLateralExchangeProcessABC*>(pProc);
+    vector<CHydroProcessABC*> procs(1,pProc);                    //(expanded: process groups hold processes of their own)
+    for (size_t pi=0;pi<procs.size();pi++){const CProcessGroup *pG=dynamic_cast<const CProcessGroup*>(procs[pi]);
+      if (pG!=NULL){for (int s=0;s<pG->GetGroupSize();s++){procs.push_back(pG->GetSubProcess(s));}}}
+    for (size_t pi=0;pi<procs.size();pi++){
+      if (!SZPhysical() || (procs[pi]->GetNumLatConnections()<=0)){continue;} //lateral processes may not reach the pass-through GROUNDWATER either
+      const CLateralExchangeProcessABC *pLat=dynamic_cast<const CLateralExchangeProcessABC*>(procs[pi]);
       if (pLat!=NULL){
         const int *lf=pLat->GetLateralFromIndices(),*lt=pLat->GetLateralToIndices(),*kf=pLat->GetFromHRUIndices(),*kt=pLat->GetToHRUIndices();
-        for (int q=0;q<pProc->GetNumLatConnections();q++){
+        for (int q=0;q<procs[pi]->GetNumLatConnections();q++){
           bool bad=((lt[q]==_iGW) && (_hruProfile[kt[q]]!=DOESNT_EXIST)) || ((lf[q]==_iGW) && (_hruProfile[kf[q]]!=DOESNT_EXIST));
           ExitGracefullyIf(bad,("CGroundwaterModel: with :SoilZone PHYSICAL, lateral process #"+to_string(j+1)+" moves water into or out of GROUNDWATER of a coupled HRU; "
             "recharge must come from the bottom soil-zone layer by a vertical process").c_str(),BAD_DATA);
@@ -1772,7 +1777,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     //SOIL[M-1] fills) leaves the columns first, as the process takes it (by area for PERC_CONSTANT, else from free water
     //first), and each column's part is its share of the recharge
     int iSW=_pModel->GetStateVarIndex(SURFACE_WATER);
-    vector<double> lossR;
+    vector<double> lossR; _szMovedV=0.0;
     for (size_t i=0;i<_aqHRUs.size();i++){int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
       for (size_t j=0;j<_szSV[k].size();j++){_szPhiProc[_szPhiOff[k]+j]=aPhinew[k][_szSV[k][j]];}
       double ovf=SZSyncColumns(k,&_szPhiProc[_szPhiOff[k]],max(aPhinew[k][_iGW],0.0),&lossR);
@@ -2275,7 +2280,7 @@ void CGroundwaterModel::FinishBudgetLine()
     for (size_t r=0;r<_resP.size();r++){_resPendingVol+=_pModel->GetSubBasin(_resP[r])->GetReservoir()->GetReservoirGWLosses(1.0);}
     _BUDGET<<","<<_Qres_spec<<","<<_Qres<<","<<_resPendingVol<<","<<_resShortVol;
     if (IsExternal()){_BUDGET<<","<<_Qother;}
-    if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid;}
+    if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid<<","<<_szMovedV;}
     _BUDGET<<endl;
   }
   _budgetLineOpen=false;
@@ -2321,7 +2326,7 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
          <<"surface-store leakage to aquifer [m3/d],aquifer discharge to surface stores [m3/d],surface-store exchange applied to Raven [m3],"
          <<"reservoir seepage sent [m3/d],reservoir seepage delivered [m3/d],reservoir seepage awaiting delivery [m3],reservoir gain not supplied by MODFLOW [m3]"<<(IsExternal()?",other model packages [m3/d]":"")
          <<(SZPhysical()?",soil zone to aquifer [m3/d],aquifer to soil zone [m3/d],rejected recharge [m3],soil-zone overflow [m3],soil-zone exchange applied to Raven [m3],"
-                         "soil-zone shortfall [m3],interface updates,interface converged,interface change [m]":"")<<endl;
+                         "soil-zone shortfall [m3],interface updates,interface converged,interface change [m],soil-zone layer redistribution [m3]":"")<<endl;
   if (SZPhysical()){
     _SZOUT.open(FilenamePrepare("GWSoilExchange.csv",Options).c_str());
     ExitGracefullyIf(_SZOUT.fail(),"CGroundwaterModel: cannot open GWSoilExchange.csv",FILE_OPEN_ERR);

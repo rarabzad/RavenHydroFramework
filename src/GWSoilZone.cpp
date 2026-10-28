@@ -247,11 +247,13 @@ namespace gwsz
     if (loss){for (size_t c=0;c<nc;c++){(*loss)[c]+=before[c]-cols[c][j];}}
   }
   double Distribute(const std::vector<sz_layer> &L,std::vector<std::vector<double> > &cols,const std::vector<double> &w,
-                    const std::vector<double> &target,const int jR,const double R,const bool byArea,std::vector<double> *lossR)
+                    const std::vector<double> &target,const int jR,const double R,const bool byArea,std::vector<double> *lossR,
+                    double *moved)
   {
     const size_t nc=cols.size(),n=L.size();
     double ws=0.0; for (size_t c=0;c<nc;c++){ws+=w[c];}
     std::vector<double> d(n),carry(nc,0.0);
+    if (moved){*moved=0.0;}
     std::vector<std::vector<double> > vin(n,std::vector<double>(nc,0.0));
     for (size_t j=0;j<n;j++){double mean=0.0; for (size_t c=0;c<nc;c++){mean+=w[c]*cols[c][j];} d[j]=target[j]-mean;}
     if (lossR){lossR->assign(nc,0.0);}
@@ -287,6 +289,10 @@ namespace gwsz
       }
     }
     double ovf=0.0; for (size_t c=0;c<nc;c++){ovf+=w[c]*carry[c];}
+    if (moved){ //water that ended in a layer above Raven's target for it (percolation no column could take moved up)
+      *moved=0.0;
+      for (size_t j=0;j<n;j++){double m=0.0; for (size_t c=0;c<nc;c++){m+=w[c]*cols[c][j];} *moved+=std::max(m-target[j],0.0);}
+    }
     return ovf;
   }
 

@@ -300,6 +300,7 @@ private:/*----------------------------------------------------*/
   vector<double>         _szSyncOvf;     ///< per HRU: overflow when Raven's gains were shared among full columns this step [m3]
   bool                   _szCapUpd;      ///< the current update is the last before the interface freezes (boundary supply-limited)
   bool                   _szCapped;      ///< the boundary of the last update this step is supply-limited
+  double                 _szMovedV;      ///< water moved up between soil-zone layers when Raven's changes were shared this step [m3]
   vector<char>           _szRchByArea;   ///< per HRU: recharge leaves the bottom layer at a constant rate (PERC_CONSTANT): columns give it up by area
   vector<double>         _szxFw;         ///< per SZX entry: the recharge its column gave up this step [m3] (recharge shares)
   vector<double>         _szxHq,_szxQq;  ///< per SZX entry: head [m] and exchange [m3/d] of the last local solve this step (_szxHq -HUGE_VAL: none)
@@ -343,7 +344,7 @@ private:/*----------------------------------------------------*/
   void   SZRecharge     (const double &tstep,const bool write);///< _Qcol, _szRej, _szxRej from _szRchV and _linkF (write: RCH array too)
   void   SZLocalSolves  (const double &tstep,const bool steady);///< _szxLam, _szxQc, _szxCg per exchange column
   int    SZNCols        (const int k) const {return (int)_szxOfHRU[k].size()+1;}
-  int    SZFreezeAt     () const {return _maxiter-max(2,_maxiter/10);} ///< last outer iteration after which the interface may be updated (<1: predictor only)
+  int    SZFreezeAt     () const {return (_maxiter>=2)?max(1,_maxiter-max(2,_maxiter/10)):0;} ///< last outer iteration after which the interface may be updated (<1: predictor only)
   double SZSyncColumns  (const int k,const double *target,const double R=0.0,vector<double> *lossR=NULL); ///< columns of HRU k to its soil-zone water target[j] [mm] (R: recharge out of the bottom layer [mm], lossR: each column's part); returns the overflow [mm over the HRU]
   vector<int> SZColumnCells(const int k) const;               ///< cell of each column of HRU k (column number of the grid, 1-based; 0 = rest)
   int    SZHotColumns   (const int k,vector<vector<double> > &cols) const; ///< hotstart columns of HRU k: 1 found, 0 none, -1 not matching

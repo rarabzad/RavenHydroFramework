@@ -313,7 +313,9 @@ double CGroundwaterModel::SZSyncColumns(const int k,const double *target,const d
     if (SZHotColumns(k,hc)>0){cols=hc;}
     else {for (int c=0;c<nc;c++){cols[c]=tg;}}
   }
-  double ovf=gwsz::Distribute(_szLay[k],cols,w,tg,0,R,(k<(int)_szRchByArea.size()) && _szRchByArea[k],lossR);
+  double mv=0.0;
+  double ovf=gwsz::Distribute(_szLay[k],cols,w,tg,0,R,(k<(int)_szRchByArea.size()) && _szRchByArea[k],lossR,&mv);
+  _szMovedV+=mv/MM_PER_METER*_pModel->GetHydroUnit(k)->GetArea()*M2_PER_KM2;
   for (int c=0;c<nc;c++){for (int j=0;j<n;j++){_szColPhi[(o+c)*n+j]=cols[c][j];}}
   return ovf;
 }
@@ -514,18 +516,20 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   if (_szMaxIter==0){return true;}                                            //explicit: the predictor only
   //the last outer iterations (a tenth, at least 2) are left to MODFLOW on the boundary it has: an update just before
   //the limit would leave MODFLOW's final solve unconverged, and its residual would be water created or lost. When the
-  //interface freezes unconverged (this, or the update budget used up), the boundary it keeps is made supply-limited
-  //once, as in explicit mode, if the last update's was not
+  //interface freezes unconverged (this, or the update budget used up) while MODFLOW has not converged either, the
+  //boundary it keeps is made supply-limited once, as in explicit mode, if the last update's was not
   const int freezeAt=SZFreezeAt();
   bool frozen=(iter>freezeAt);
   if (!frozen && !(!mf6conv && (iter>nEarly))){if (mf6conv){_szExtra++;} frozen=(_szExtra>_szMaxIter);}
   if (frozen){
     if (_szIter==0){_szConv=false; return true;}                              //no update at all this step: not iterated
-    if (!_szConv && !_szCapped && (iter<_maxiter)){
+    //(only while MODFLOW has not converged on the boundary it has, and at least two solves follow: a converged step is
+    //never thrown away for it)
+    if (!_szConv && !_szCapped && !mf6conv && (iter<=_maxiter-2)){
       SZLinkFractions(true,mf6conv);
       if (!steady){SZRecharge(_szTstep,false);}
       _szCapUpd=true; SZLocalSolves(_szTstep,steady); _szCapUpd=false;
-      SZSetArrays(steady); _szCapped=true;
+      SZSetArrays(steady); _szCapped=true; _szIter++;
       return false;                                                           //MODFLOW solves again on the limited boundary
     }
     return true;

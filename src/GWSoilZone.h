@@ -110,11 +110,13 @@ namespace gwsz
   /// bottom) then gives up its known outflow R [mm over the HRU] (the recharge) the same way, each column's part in
   /// lossR [mm over the column]; other losses (evaporation) are taken alike on every column (limited to its water), other
   /// gains (rain) fall alike on every column; what a full layer cannot hold moves up in its column, and what the top
-  /// layer cannot hold overflows. Returns the overflow [mm over the HRU]: the totals then fall short of the gains by that much,
+  /// layer cannot hold overflows. moved (if given): the water that ended in a layer above Raven's target for it [mm over
+  /// the HRU] (percolation that no column could take, moved back up). Returns the overflow [mm over the HRU]: the
+  /// totals then fall short of the gains by that much,
   /// possibly moved between layers.
   double Distribute(const std::vector<sz_layer> &L,std::vector<std::vector<double> > &cols,const std::vector<double> &w,
                     const std::vector<double> &target,const int jR=-1,const double R=0.0,const bool byArea=false,
-                    std::vector<double> *lossR=0);
+                    std::vector<double> *lossR=0,double *moved=0);
 }
 
 #endif
