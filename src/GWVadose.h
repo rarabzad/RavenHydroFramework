@@ -52,6 +52,9 @@ namespace gwvz
   double PsiOf (const vz_mat &m,const double th);                       ///< pressure head of content (<=0 for th<=ths)
   double Kof   (const vz_mat &m,const double psi,double *dK_dpsi=0);   ///< conductivity of pressure head
   double ThEq  (const vz_mat &m,const double height);                  ///< hydrostatic content at a height above the water table
+  double ThRef (const vz_mat &m,const double height);                  ///< reference content (SetReference: ThEq, or ths - Sy)
+  ///< integral of Sy dz over [z0, zt] across the layers of S [m] (what MODFLOW stores for a water-table rise z0 -> zt; 0 for zt <= z0)
+  double SyRise(const vz_strat &S,const double z0,const double zt);
   void   SetAccuracy(const double dthmax);  ///< largest change of a content in one substep (default 0.02)
   ///< reference contents of the columns (what RelStorage, MoveBottom and Build count from): 0 the hydrostatic profile
   ///< (RICHARDS, LAG; default), 1 the residual content ths - Sy everywhere (KINEMATIC, whose no-flow state it is)
@@ -60,15 +63,17 @@ namespace gwvz
   double GetAccuracy();
 
   // -- column management --------------------------------------------------------------------------------
-  ///< builds the grid between ztop and zbot (N nodes at most, geometric from both ends), contents at the hydrostatic
-  ///< profile above the water table (psi = zbot - z), returns the column's water relative to the reference [m]
+  ///< builds the grid between ztop and zbot (N nodes at most, growing by 1.3 from both ends, at most 1.3^8 times the end
+  ///< thickness: from N = 19 on the extra nodes fill the middle), contents at the reference profile (the hydrostatic one
+  ///< above the water table, psi = zbot - z; ths - Sy with SetReference(1)), returns the water relative to the reference [m]
   double Build   (vz_column &c,const vz_strat &S,const double ztop,const double zbot,const int Nmax);
   ///< moves the bottom to the new water table: water below a rising one is returned (absorbed, relative to the
-  ///< reference contents) [m]; a falling one opens cells at the reference content ths-Sy (nothing to book).
+  ///< reference contents) [m]; a falling one opens cells at their reference content (nothing to book, except where a
+  ///< node would be drier than air-dry with the hydrostatic reference; with ths - Sy nothing at all).
   ///< The grid is rebuilt and the contents remapped conservatively.
   double MoveBottom(vz_column &c,const vz_strat &S,const double zbot,const int Nmax);
   double Storage  (const vz_column &c);                    ///< water in the column [m]
-  double RelStorage(const vz_column &c,const vz_strat &S); ///< water above the hydrostatic (equilibrium) profile [m]
+  double RelStorage(const vz_column &c,const vz_strat &S); ///< water above the reference profile [m]
 
   // -- one time step -------------------------------------------------------------------------------------
   ///< advances the column over dt with the top flux qtop [m/d] (downward positive; negative = upward, taken from the
@@ -78,13 +83,22 @@ namespace gwvz
   struct vz_step_info { int substeps,newton,fails; };
   double Step(vz_column &c,const vz_strat &S,const double dt,const double qtop,double &rejected,vz_step_info *info=0,const bool noUp=false);
   ///< (noUp: no upward flow through the bottom, for a top cell MODFLOW has dried)
+  ///< On an inactive column every method rejects qtop entirely (rejected = qtop dt) and returns 0.
 
   ///< the same contract (storage change = (qtop_applied - qbot) dt exactly, rejected as for Step) for the cheaper methods,
-  ///< on the same column (grid, contents, hydrostatic reference profile; MoveBottom and RelStorage apply unchanged). Water
-  ///< only moves down (qbot >= 0; an upward demand qtop < 0 is rejected); capillary rise is the water table's (steady).
-  ///<   StepKinematic: gravity-only kinematic wave (:SoilZoneVadose KINEMATIC), GWVadoseKW.cpp
+  ///< on the same column (grid, contents, reference profile; MoveBottom and RelStorage apply). Water only moves down
+  ///< (qbot >= 0; an upward demand qtop < 0 is rejected entirely, the column still drains); capillary rise is the water
+  ///< table's (steady).
+  ///<   StepKinematic: gravity-only kinematic wave (:SoilZoneVadose KINEMATIC; reference ths - Sy, SetReference(1)),
+  ///<                  GWVadoseKW.cpp: K(th) = Ks [(th/ths)^e - x0^e]/(1 - x0^e), e = 2b+3, x0 = (ths-Sy)/ths
   ///<   StepLag:       linear storage cascade (:SoilZoneVadose LAG; par its parameter, 0 = default), GWVadoseLag.cpp
   double StepKinematic(vz_column &c,const vz_strat &S,const double dt,const double qtop,double &rejected,vz_step_info *info=0);
+  ///< kinematic conductivity of content th [m/d] (0 at or below ths - Sy; Ks at ths) and its derivative
+  double KofKinematic (const vz_mat &m,const double th,double *dK=0);
+  ///< steady kinematic profile for a flux q [m/d] into the column's top (:SoilZoneVadoseInitialFlux): K(th) = f per node,
+  ///< f = min(q, smallest Ks of the column); the nodes above the deepest node of that smallest Ks are saturated when q
+  ///< exceeds it (the backed-up steady state; the top then rejects q - f). Returns f (the flux into the water table)
+  double InitSteadyKinematic(vz_column &c,const vz_strat &S,const double q);
   double StepLag      (vz_column &c,const vz_strat &S,const double dt,const double qtop,double &rejected,vz_step_info *info=0,const double par=0.0);
 
   ///< capillary rise into the soil zone [m/d] (upward positive): the steady upward flux (RiseBetween) from the column's

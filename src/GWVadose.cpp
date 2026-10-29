@@ -12,8 +12,8 @@
 #include <vector>
 
 static double DTHMAX=0.02;  //largest content change in one substep (time accuracy; SetAccuracy)
-static int    REFMODE=0;    //reference contents: 0 hydrostatic, 1 residual ths - Sy (SetReference; to be honoured by
-                            // Build, MoveBottom, RelStorage for KINEMATIC)
+static int    REFMODE=0;    //reference contents: 0 hydrostatic, 1 residual ths - Sy (SetReference; honoured by Build,
+                            // MoveBottom, RelStorage and ExcessIntegral through ThRef)
 static const double PSIMIN=1.0e5; //[m] the driest suction considered (about 1000 MPa, beyond air-dry)
 namespace gwvz
 {
@@ -57,6 +57,18 @@ namespace gwvz
     return K;
   }
   double ThEq(const vz_mat &m,const double height){return Theta(m,-std::max(height,0.0));}
+  //reference content of a node height [m] above the water table: the hydrostatic profile (REFMODE 0: RICHARDS, LAG) or
+  //the residual content ths - Sy (REFMODE 1: KINEMATIC, whose no-flow state it is; ths for Sy = 0)
+  double ThRef(const vz_mat &m,const double height){return (REFMODE==1)?std::max(m.ths-std::max(m.Sy,0.0),0.0):ThEq(m,height);}
+  double SyRise(const vz_strat &S,const double z0,const double zt)
+  {
+    double v=0.0; if (!(zt>z0)){return 0.0;}
+    for (size_t i=0;i<S.mat.size();i++){
+      const double lo=std::max(z0,S.zbot[i]),hi=std::min(zt,S.ztop[i]);
+      if (hi>lo){v+=(hi-lo)*S.mat[i].Sy;}
+    }
+    return v;
+  }
   void   SetAccuracy(const double dthmax){if (dthmax>0.0){DTHMAX=dthmax;}}
   void   SetReference(const int ref){REFMODE=ref;}
   int    GetReference(){return REFMODE;}
@@ -68,7 +80,9 @@ namespace gwvz
     const double L=c.ztop-c.zbot;
     int N=(int)std::ceil(L/0.05); N=std::max(3,std::min(N,std::max(Nmax,3)));
     std::vector<double> w(N);
-    const double r=1.3; int h=(N+1)/2;
+    //growth 1.3 from both ends, capped at 1.3^8: from N = 19 on the extra nodes fill the middle at
+    //equal thickness, so raising N refines the whole column; N <= 18 never reaches the cap (the grid is unchanged)
+    const double r=1.3; int h=std::min((N+1)/2,8);
     for (int k=0;k<N;k++){int j=std::min(k,N-1-k); w[k]=std::pow(r,(double)std::min(j,h));}
     double sw=0.0; for (int k=0;k<N;k++){sw+=w[k];}
     c.zc.assign(N,0.0); c.dz.assign(N,0.0); c.im.assign(N,0);
@@ -76,12 +90,12 @@ namespace gwvz
     for (int k=0;k<N;k++){c.dz[k]=L*w[k]/sw; c.zc[k]=z-0.5*c.dz[k]; z-=c.dz[k]; c.im[k]=std::max(S.Find(c.zc[k]),0);}
   }
   double Storage(const vz_column &c){double s=0.0; for (size_t i=0;i<c.th.size();i++){s+=c.th[i]*c.dz[i];} return s;}
-  //storage relative to the hydrostatic profile above the water table: the water table's own fluctuations are MODFLOW's
-  //(its specific yield); the column carries what is in excess of (or missing from) equilibrium: recharge in transit,
-  //and deficits left by evaporation and capillary rise
+  //storage relative to the reference profile (the hydrostatic profile above the water table, or ths - Sy with
+  //SetReference(1)): the water table's own fluctuations are MODFLOW's (its specific yield); the column carries what is
+  //in excess of (or missing from) the reference: recharge in transit, and deficits left by evaporation and capillary rise
   double RelStorage(const vz_column &c,const vz_strat &S)
   {
-    double s=0.0; for (size_t i=0;i<c.th.size();i++){s+=(c.th[i]-ThEq(S.mat[c.im[i]],c.zc[i]-c.zbot))*c.dz[i];} return s;
+    double s=0.0; for (size_t i=0;i<c.th.size();i++){s+=(c.th[i]-ThRef(S.mat[c.im[i]],c.zc[i]-c.zbot))*c.dz[i];} return s;
   }
   double Build(vz_column &c,const vz_strat &S,const double ztop,const double zbot,const int Nmax)
   {
@@ -89,17 +103,18 @@ namespace gwvz
     if (!c.active){c.zc.clear(); c.dz.clear(); c.th.clear(); c.psi.clear(); c.im.clear(); return 0.0;}
     MakeGrid(c,S,Nmax);
     const size_t N=c.zc.size(); c.th.assign(N,0.0); c.psi.assign(N,0.0);
-    for (size_t i=0;i<N;i++){c.psi[i]=zbot-c.zc[i]; c.th[i]=Theta(S.mat[c.im[i]],c.psi[i]);}
+    if (REFMODE==1){for (size_t i=0;i<N;i++){const vz_mat &m=S.mat[c.im[i]]; c.th[i]=ThRef(m,0.0); c.psi[i]=PsiOf(m,c.th[i]);}}
+    else {for (size_t i=0;i<N;i++){c.psi[i]=zbot-c.zc[i]; c.th[i]=Theta(S.mat[c.im[i]],c.psi[i]);}}
     return RelStorage(c,S);
   }
-  // integral of the excess over equilibrium (piecewise constant per node) over [a,b] (a<b); zero outside the column
+  // integral of the excess over the reference (piecewise constant per node) over [a,b] (a<b); zero outside the column
   // (below its bottom the ground was saturated: no excess)
   static double ExcessIntegral(const vz_column &c,const vz_strat &S,double a,double b)
   {
     double v=0.0,zt=c.ztop;
     for (size_t i=0;i<c.zc.size();i++){
       const double zb=zt-c.dz[i],lo=std::max(a,zb),hi=std::min(b,zt);
-      if (hi>lo){v+=(hi-lo)*(c.th[i]-ThEq(S.mat[c.im[i]],c.zc[i]-c.zbot));}
+      if (hi>lo){v+=(hi-lo)*(c.th[i]-ThRef(S.mat[c.im[i]],c.zc[i]-c.zbot));}
       zt=zb;
     }
     return v;
@@ -118,11 +133,11 @@ namespace gwvz
     c.zbot=zbot; MakeGrid(c,S,Nmax);
     const size_t N=c.zc.size(); c.th.assign(N,0.0); c.psi.assign(N,0.0);
     double zt=c.ztop;
-    for (size_t i=0;i<N;i++){ //the excess keeps its elevation (conservative remap); the equilibrium follows the new water table
-      const double zb=zt-c.dz[i]; const vz_mat &m=S.mat[c.im[i]];
-      const double eq=ThEq(m,c.zc[i]-zbot),ex=ExcessIntegral(o,S,zb,zt)/c.dz[i];
+    for (size_t i=0;i<N;i++){ //the excess keeps its elevation (conservative remap); the reference follows the new water table
+      const double zb=zt-c.dz[i]; const vz_mat &m=S.mat[c.im[i]];               //(ths - Sy with SetReference(1): new nodes open at it
+      const double eq=ThRef(m,c.zc[i]-zbot),ex=ExcessIntegral(o,S,zb,zt)/c.dz[i]; // and nothing is exchanged, no air-dry clip)
       double th=eq+ex;
-      const double thmax=m.ths,thmin=Theta(m,-PSIMIN);                           //(a node straddling materials may average beyond
+      const double thmax=m.ths,thmin=(REFMODE==1)?0.0:Theta(m,-PSIMIN);           //(a node straddling materials may average beyond
       if (th>thmax){absorbed+=(th-thmax)*c.dz[i]; th=thmax;}                      // its porosity: the rest drains to the water table;
       if (th<thmin){absorbed-=(thmin-th)*c.dz[i]; th=thmin;}                      // nor drier than air-dry: taken from it)
       c.th[i]=th; c.psi[i]=PsiOf(m,th);
@@ -199,7 +214,8 @@ namespace gwvz
   {
     rejected=0.0;
     if (info){info->substeps=0; info->newton=0; info->fails=0;}
-    if (!c.active || (dt<=0.0)){rejected=(c.active)?0.0:std::max(qtop,0.0)*dt; return c.active?0.0:std::max(qtop,0.0);}
+    if (!c.active){rejected=qtop*dt; return 0.0;}                               //(no column: all of qtop rejected, nothing passed on)
+    if (dt<=0.0){return 0.0;}
     const size_t N=c.zc.size();
     //fast path: no inflow and the profile hydrostatic (nothing moves)
     if (qtop==0.0){

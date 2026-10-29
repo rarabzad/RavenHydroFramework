@@ -42,11 +42,14 @@ void CGroundwaterModel::VZSetup()
         if (l>=(int)P.layers.size()){break;}
         const gw_aquifer_class &C=_aClasses[P.layers[l].iclass];
         m.ths=C.porosity; m.b=C.clapp_b; m.psia=C.psia; m.Ks=C.Kv; m.Sy=C.Sy; m.Ss=max(C.Ss,1e-7);
+        ExitGracefullyIf(!(m.ths>0.0),("CGroundwaterModel: :SoilZoneVadose "+VZName()+": aquifer class "+C.name+" has POROSITY 0 (the saturated content "
+                         "of the unsaturated columns); give every aquifer class the columns pass through a positive POROSITY").c_str(),BAD_DATA);
         if (!C.unsatGiven && !warned[P.layers[l].iclass]){warned[P.layers[l].iclass]=1; noUnsat+=(noUnsat==""?"":", ")+C.name;}
       }
-      { //Sy against the drainable porosity of the retention curve 1 m above the water table (soil_zone_columns_plan.md 1.5): a
-        //rising water table releases the column's water above equilibrium to MODFLOW, which stores it with Sy; with Sy
-        //much smaller each step's rise releases more than the last (a feedback that stops only at the soil-zone base)
+      if (_vzMode!=2){ //Sy against the drainable porosity of the retention curve 1 m above the water table (soil_zone_columns_plan.md
+        //1.5): a rising water table releases the column's water above equilibrium to MODFLOW, which stores it with Sy; with Sy
+        //much smaller each step's rise releases more than the last (a feedback that stops only at the soil-zone base).
+        //(KINEMATIC: its reference is ths - Sy, a rise releases at most Sy dh; the warning is meaningless)
         const double dp=m.ths-gwvz::Theta(m,-1.0);
         if ((m.Sy>2.0*dp) || (m.Sy<0.5*dp)){
           if (IsExternal()){extBadSy=true;}
@@ -194,7 +197,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
             }
             const double zn=(lo>col.ztop-0.01)?col.ztop:lo;                      //(a remainder thinner than 1 cm: the column goes)
             _vzAbsQ[e]=gwvz::MoveBottom(col,S,zn,_vzN)*a/tstep;
-            if (_vzSlowed++==0){WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": a rising water table met more water above equilibrium in an unsaturated "
+            if ((_vzSlowed++==0) && (_vzMode!=2)){WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": a rising water table met more water above equilibrium in an unsaturated "
                                              "column than MODFLOW stores with Sy; the column releases at most Sy dh per step (Sy below the drainable porosity?)",false);}
           }
           else if ((abT<0.0) && (-abT>capU)){                                    //(the bottom then follows more slowly; the column stays)
