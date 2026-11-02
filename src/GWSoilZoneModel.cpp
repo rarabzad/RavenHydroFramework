@@ -1178,9 +1178,9 @@ void CGroundwaterModel::SZApply(double **aPhinew,const double &tstep)
         else {for (int j=0;j<n;j++){const double t=f*max(phi[j],0.0); phi[j]-=t; taken+=t/MM_PER_METER*a;}}
         for (int j=0;j<n;j++){_szColPhi[(o+c)*n+j]=phi[j];}
       }
-      netV-=taken;
-      nuV=(f>=1.0)?max(nuV-taken,0.0):0.0;
-      netV+=nuV;                                                                 //(not taken from Raven's soil: it did not hold it)
+      netV+=nuV-taken;                                                           //(the soil lost the cut less what it did not hold, and what the
+                                                                                 // other columns gave)
+      nuV=(f>=1.0)?max(nuV-taken,0.0):0.0;                                       //(booked: what the whole HRU could not supply)
     }
     //Raven's soil-zone layers: area-weighted mean of the columns (the rest column did not change)
     double sw=0.0,W=0.0;
