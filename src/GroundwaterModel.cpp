@@ -67,7 +67,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
-  _vzMode=0; _vzPar=0.0; _vzQ0=0.0; _vzClsDev=0.0; _vzClasses=1; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _ibPtr=NULL; _mf6Newton=true; _farWarned=false; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
+  _vzMode=0; _vzPar=0.0; _vzQ0=0.0; _vzClsDev=0.0; _vzBackV=_vzBackWV=0.0; _vzClasses=1; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _ibPtr=NULL; _mf6Newton=true; _farWarned=false; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
@@ -100,7 +100,7 @@ void CGroundwaterModel::ResetState()
   _szCls.clear(); _szClsW.clear(); _szClsPhi.clear(); _szClsRes.clear(); _szClsGW.clear(); _szClsDone.clear();
   _szcLink.clear(); _szcCol.clear(); _szcCell.clear(); _szcRej.clear(); _szcFw.clear(); _szcQ.clear(); _szcCapL.clear(); _szcOfHRU.clear(); _linkSzc.clear(); _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0;
   _szxQprev.clear(); _szxLagL.clear(); _szxLagD.clear(); _szLagNet.clear(); _szxDebt.clear(); _szxRepay.clear(); _szDebtVol=_szRepayQ=0.0;
-  _vzcCol.clear(); _vzOff.clear(); _vzcA.clear(); _vzcZt.clear(); _vzcZbs.clear(); _vzcUse.clear(); _vzcF0.clear(); _vzcOut.clear(); _vzcRq.clear(); _vzAbsN.clear(); _vzQN.clear(); _vzClsDev=0.0;
+  _vzcCol.clear(); _vzOff.clear(); _vzcA.clear(); _vzcZt.clear(); _vzcZbs.clear(); _vzcUse.clear(); _vzcF0.clear(); _vzcOut.clear(); _vzcRq.clear(); _vzAbsN.clear(); _vzQN.clear(); _vzClsDev=0.0; _vzBackW.clear(); _vzPass.clear(); _vzRl.clear(); _vzBackV=_vzBackWV=0.0;
   _vzStrat.clear(); _vzUse.clear(); _vzQ.clear(); _vzAbsQ.clear(); _vzRejV.clear(); _vzFp.clear(); _vzInV.clear(); _vzCapV.clear(); _vzCapL.clear();
   _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0; _vzSlowed=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
@@ -2478,7 +2478,8 @@ void CGroundwaterModel::FinishBudgetLine()
     _BUDGET<<","<<_Qres_spec<<","<<_Qres<<","<<_resPendingVol<<","<<_resShortVol;
     if (IsExternal()){_BUDGET<<","<<_Qother;}
     if (SZPhysical()){_BUDGET<<","<<_Qsz_in<<","<<_Qsz_out<<","<<_szRejVol<<","<<_szOvfVol<<","<<_szAppliedVol<<","<<_szShortVol<<","<<_szIter<<","<<(_szConv?1:0)<<","<<_szResid<<","<<_szMovedV<<","<<_szWithheldV<<","<<_szWithheldG<<","<<_szWithheldS;}
-    if (SZPhysical() && (_vzMode>0)){_BUDGET<<","<<_vzInVol<<","<<_vzOutVol<<","<<_vzCapVol<<","<<_vzStoreVol;}
+    if (SZPhysical() && (_vzMode>0)){_BUDGET<<","<<_vzInVol-_vzBackV-_vzBackWV<<","<<_vzOutVol-_vzBackV<<","<<_vzCapVol<<","<<_vzStoreVol;} //(water handed back: rule (i)
+                                                                                 // reduces the columns' inflow and outflow, rule (ii) their inflow)
     if (SZPhysical() && SZCapOn()){_BUDGET<<","<<_szCapWT*_szTstep;}
     if (SZPhysical() && (_szTiming==1)){_BUDGET<<","<<_szDebtVol<<","<<_szRepayQ*_szTstep;}
     if (SZPhysical() && ((_szcLink.size()>0) || IsExternal() || !_chdNode.empty())){_BUDGET<<","<<_QszCHD_in<<","<<_QszCHD_out;}

@@ -492,7 +492,7 @@ void CGroundwaterModel::SZLinkFractions(const bool relax,const bool mf6conv)
 void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
 {
   std::fill(_Qcol.begin(),_Qcol.end(),0.0);
-  _szRchCHD=0.0;
+  _szRchCHD=0.0; _vzBackV=_vzBackWV=0.0;
   for (size_t i=0;i<_aqHRUs.size();i++)
   {
     int k=_aqHRUs[i]; double V=_szRchV[k],rej=0.0;
@@ -526,6 +526,11 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
       if (_colCHDTop[L.ic]){continue;}
       double share=(W>0.0)?((_linkSzx[li]>=0)?_szxFw[_linkSzx[li]]/W:0.0):L.area/(_szOn[k]?Aall:_hruRchArea[k]),F=_linkF[li];
       const int e=_linkSzx[li];
+      if ((_vzMode>0) && (e>=0) && (e<(int)_vzRl.size())){
+        _vzRl[e]=V/tstep*share;                                                  //(for SZRejRate)
+        if (_vzBackW[e]>0.0){rej+=_vzBackW[e]; _vzBackWV+=_vzBackW[e];}          //rule (ii): water of vanished columns beyond Sy dh, back to the soil zone
+        _Qcol[L.ic]+=_vzPass[e];                                                 //(a negative recharge share passed on to the cell)
+      }
       if ((_vzMode>0) && (e>=0) && (e<(int)_vzUse.size())){
         //water a risen water table took from the columns (> 0, the top cell's recharge); the new nodes of a fallen one (< 0:
         //out of a specified head below, which supplies it; out of a lower cell: SZW_RAVEN; else the top cell). With depth
@@ -560,13 +565,15 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
             for (int i=_vzOff[e];i<_vzOff[e+1];i++){if (!_vzcUse[i]){au+=_vzcA[i]; fu+=_vzcA[i]*VZClassF(e,i,_szxHc[e]);}}
             if (au>0.0){_Qcol[L.ic]+=V/tstep*share*(au-fu); rj+=V*share*fu;}
           }
-          rej+=rj; _szxRej[e]=rj;
+          const double bk=VZBackRate(e,_szxHc[e]);                               //rule (i): the columns' outputs on ground saturated since the
+          if (bk>0.0){_Qcol[L.ic]-=bk; rj+=bk*tstep; _vzBackV+=bk*tstep;}        // start of the step go back to the soil zone
+          rej+=rj; _szxRej[e]=rj+((_vzBackW[e]>0.0)?_vzBackW[e]:0.0);
           continue;
         }
       }
       _Qcol[L.ic]+=V/tstep*share*(1.0-F);
       rej+=V*share*F;
-      if (e>=0){_szxRej[e]=V*share*F;}
+      if (e>=0){_szxRej[e]=V*share*F+(((_vzMode>0) && (e<(int)_vzBackW.size()) && (_vzBackW[e]>0.0))?_vzBackW[e]:0.0);}
     }
     if (_szOn[k]){_szRej[k]=rej;}
   }

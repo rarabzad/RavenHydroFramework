@@ -419,6 +419,12 @@ private:/*----------------------------------------------------*/
   vector<double>         _vzcRq;         ///< per class column: rate of its outputs on the unsaturated share, _vzcOut/(1-F0_c)/dt [m3/d]
   vector<double>         _vzAbsN;        ///< per SZX entry: water the moving bottoms of its columns took from the source cell this step [m3/d] (>= 0)
   vector<double>         _vzQN;          ///< per SZX entry: upflow through the bottoms of its columns this step [m3/d] (>= 0)
+  vector<double>         _vzBackW;       ///< per SZX entry: water of its vanished columns beyond Sy dh, given back to the soil zone this step [m3] (rule (ii))
+  vector<double>         _vzPass;        ///< per SZX entry: negative recharge share of its columns passed on to the cell this step [m3/d] (never into a column)
+  vector<double>         _vzRl;          ///< per SZX entry: its recharge share this step, V share / dt [m3/d] (SZRecharge; for SZRejRate)
+  double                 _vzBackV,_vzBackWV; ///< this step, all entries: column outputs handed back on newly saturated ground (rule (i)) and _vzBackW [m3]
+  double VZBackRate     (const int e,const double h) const;    ///< rule (i): outputs of entry e's columns handed back to the soil zone at head h [m3/d]
+  double SZRejRate      (const int e,const double h) const;    ///< the head-dependent rejected recharge of entry e at head h [m3/d] (classes without a column and rule (i))
   double                 _vzClsDev;      ///< largest |sum_c a_c F_c - F| over the entries and a range of heads (check of the class fractions)
   double                 _vzQ0;          ///< :SoilZoneVadoseInitialFlux [mm/d]: steady start of the columns on a cold start (0: at rest)
   void   VZClassSetup   ();                                     ///< depth classes and class columns of every SZX entry (VZSetup)
