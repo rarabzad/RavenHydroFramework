@@ -151,7 +151,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":BasinStageHist"              )){code=16;}
     else if  (!strcmp(s[0],":BasinAreaHist"               )){code=17;}
 
-    if ((code>=50) && (code<=58) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
+    if ((code>=50) && (code<=59) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
       //groundwater state of a coupled run (e.g. its solution.rvc) in a run without :GroundwaterModel: not used
       WriteWarning("ParseInitialConditionsFile: "+string(s[0])+" ignored (the model has no :GroundwaterModel MODFLOW6)",Options.noisy);
       if (code>50){ //a block: skip to its own end line (:InitialGWHeads is a single line)

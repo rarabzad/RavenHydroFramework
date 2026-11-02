@@ -166,6 +166,8 @@ void CGroundwaterModel::VZStep(const double &tstep)
       const int e=_szxOfHRU[k][jj],li=_szxLink[e],c=_szxCol[e]; const gw_link &L=_aLinks[li];
       const double a=_szColA[c];
       _vzUse[e]=0; _vzQ[e]=0.0; _vzAbsQ[e]=0.0; _vzRejV[e]=0.0; _vzInV[e]=0.0; _vzCapV[e]=0.0; _vzUp[e]=0.0; _vzUpA[e]=0.0;
+      if (_vzUsed.size()!=_szxLink.size()){_vzUsed.assign(_szxLink.size(),0.0);}
+      _vzUsed[e]=0.0;
       for (int j=0;j<n;j++){_vzCapL[e*n+j]=0.0;}
       if (!(a>0.0) || _colCHDTop[L.ic]){continue;}                              //(a specified head this step: its recharge goes there)
       gwvz::vz_column &col=_vzCol[e]; const gwvz::vz_strat &S=_vzStrat[e];
@@ -235,8 +237,21 @@ void CGroundwaterModel::VZStep(const double &tstep)
       //inflow: the unsaturated share of the column's recharge (the saturated share is rejected as before, with this
       //saturated fraction for the whole step)
       const double share=VZLinkShare(k,li),F=_linkF[li];
-      const double P=_szRchV[k]*share*(1.0-F);                                  //[m3] over the step
+      const bool negP=(_szRchV[k]<0.0);                                          //(a negative recharge is not split by F: all of the share
+      const double P=negP?_szRchV[k]*share:_szRchV[k]*share*(1.0-F);            // goes to the cell through the column, below) [m3] over the step
       _vzFp[e]=F; _vzInV[e]=P;
+      if (_vzAbsQ[e]<0.0){_vzUsed[e]-=_vzAbsQ[e];}                              //(new nodes took water out of the source cell)
+      //a negative share (Raven's processes take water out of GROUNDWATER) is passed on to the cell, at most what the top cell can
+      //still give this step (counted in _vzUsed, so the capillary rise and the repayment do not draw the same water again); the
+      //rest is taken back out of the soil zone as a negative rejected recharge. It is never booked as a negative capillary
+      //rise
+      double passV=0.0;                                                          //[m3]
+      if (negP){
+        double capN=0.0;
+        if (_szxUpCHD[e] && (_szxUp[e]==TopNode(L.ic))){capN=1e300;}
+        else if (_szxUp[e]==TopNode(L.ic)){capN=max(SZUpCap(e,tstep)-_vzUsed[e],0.0);}
+        passV=max(P,-capN*tstep); _vzUsed[e]-=passV/tstep;
+      }
       //capillary rise into the soil zone (SZRiseLayers, as from the water table where there is no column): the steady
       //upward flux from the column's top node (its suction) into every layer below field capacity, on the unsaturated
       //share. Per step at most the larger of the top node's water down to the suction of the lowest receiving layer and
@@ -268,7 +283,8 @@ void CGroundwaterModel::VZStep(const double &tstep)
       }
       double rej=0.0; gwvz::vz_step_info inf;
       const bool noUp=(_szxUp[e]<0);                                            //(no cell holds any water table: no upward
-      double qb=VZColStep(col,S,tstep,P/(a*tstep)-R,rej,&inf,noUp);             // flow, which MODFLOW could not supply)
+      double qb=VZColStep(col,S,tstep,(negP?0.0:P/(a*tstep))-R,rej,&inf,noUp);  // flow, which MODFLOW could not supply)
+      double needLeft=0.0;                                                        //[m] upflow neither the cell nor the column's bottom could supply
       if (qb<0.0){ //upflow through the bottom: out of the cell holding the water table, scaled down as it nears drying and at
         //most half the water it holds above its bottom under the column per step (none without such a cell); the part
         //MODFLOW does not supply is taken back out of the column, bottom node first, down to air-dry
@@ -284,10 +300,19 @@ void CGroundwaterModel::VZStep(const double &tstep)
           const double take=min(need,max(col.th[ib]-gwvz::Theta(mb,-1e5),0.0)*col.dz[ib]);
           if (take>0.0){col.th[ib]-=take/col.dz[ib]; col.psi[ib]=gwvz::PsiOf(mb,col.th[ib]); need-=take; qb+=take/tstep;}
         }
+        needLeft=max(need,0.0);
+        _vzUsed[e]+=allow*a;
       }
       _vzSub+=inf.substeps; _vzNewton+=inf.newton;
       if (rej<0.0){_vzCapV[e]=max(_vzCapV[e]+rej*a,0.0); _vzCapVol+=rej*a; rej=0.0;} //(an upward demand the column could not supply)
-      _vzRejV[e]=rej*a; _vzQ[e]=qb*a; _vzUse[e]=1;
+      double rejX=0.0;                                                            //[m3]
+      if (needLeft>0.0){ //upflow still missing after air-dry: taken off what the column delivered at its top, its capillary rise
+        //first, the rest handed back to the soil zone as a negative rejected recharge (taken out by SZApply, possibly booked as
+        //not held), so that the cell never gives more than it can (a column drew 16.4 m3/d from a cell that could give 2.6e-9); the column's storage change is unchanged
+        double x=needLeft*a; const double c=min(x,_vzCapV[e]);
+        _vzCapV[e]-=c; _vzCapVol-=c; x-=c; rejX=-x; qb+=needLeft/tstep;
+      }
+      _vzRejV[e]=rej*a+rejX+(negP?P-passV:0.0); _vzQ[e]=qb*a+(negP?passV/tstep:0.0); _vzUse[e]=1;
       if ((qb<0.0) && (_szxUp[e]>=0) && (_szxUp[e]!=TopNode(L.ic)) && !_szxUpCHD[e]){_vzUp[e]=-qb*a; _vzUpQ+=_vzUp[e];} //(upflow from a lower
                                                                                  // cell: SZW_RAVEN; otherwise, also a remainder without a source cell, the top cell's recharge)
       _vzInVol+=P-_vzRejV[e]; _vzOutVol+=(_vzQ[e]+_vzAbsQ[e])*tstep;           //(inflow the column took; its rejection is in the rejected recharge)

@@ -27,6 +27,9 @@
 #include <iomanip>
 #include <algorithm>
 
+static const double SZ_WSREL=0.1; ///< wrong-sign exemption of the per-link boundary test: at most this share of the link's flow [-]
+static const double SZ_WSH  =1.0; ///< ... or at least this many head tolerances times the link's K
+
 //////////////////////////////////////////////////////////////////
 /// \brief soil-zone layers of every coupled HRU, thickness, and the checks of the plan (section 3)
 //
