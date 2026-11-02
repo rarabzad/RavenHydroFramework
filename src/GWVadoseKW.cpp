@@ -77,16 +77,18 @@ namespace gwvz
         hi=th0; lo=std::max(th0-g0/c,std::min(p.thr,th0));
       }
       //Newton from the upper bound (g convex and increasing below ths: monotone from above), bisection if it leaves the bracket
-      const double tol=1e-14*std::max(p.ths,1e-3);
+      const double tol=1e-12*std::max(p.ths,1e-3);                 //(the content to 1e-12: the balance is exact anyway)
       double x=hi;
       for (int it=0;it<100;it++){
         nit++;
         double dk; const double g=(x-th0)*c+K(p,x,&dk)-qin;
         if (g>0.0){hi=x;} else if (g<0.0){lo=x;} else {break;}
-        double xn=x-g/(c+dk);
+        const double dx=g/(c+dk);
+        if (std::fabs(dx)<=tol){x-=dx; break;}                 //(converged: the Newton correction itself is below the tolerance)
+        double xn=x-dx;
         if (!(xn>lo) || !(xn<hi)){xn=0.5*(lo+hi);}
-        const bool done=(std::fabs(xn-x)<=tol) || (hi-lo<=tol);
-        x=xn; if (done){break;}
+        if (hi-lo<=tol){x=xn; break;}
+        x=xn;
       }
       th=std::min(std::max(x,lo),std::min(hi,p.ths));
       return std::max(qin-(th-th0)*c,0.0);
@@ -104,25 +106,27 @@ namespace gwvz
     const double q=std::max(qtop,0.0);
     if (qtop<0.0){rejected=qtop*dt;}                                            //(an upward demand: the column moves water only down)
     const size_t N=c.th.size();
-    std::vector<kw_par> P(N);
+    std::vector<kw_par> M(S.mat.size()); for (size_t j=0;j<M.size();j++){M[j]=Par(S.mat[j]);}
+    std::vector<const kw_par*> P(N);
     bool still=(q==0.0);
-    for (size_t i=0;i<N;i++){P[i]=Par(S.mat[c.im[i]]); if (still && (K(P[i],c.th[i],0)>0.0)){still=false;}}
+    for (size_t i=0;i<N;i++){P[i]=&M[c.im[i]]; if (still && (c.th[i]>P[i]->thr)){still=false;}}
     if (still){return 0.0;}                                                     //(no inflow and nothing mobile: nothing moves)
     const double S0=Storage(c),DTH=GetAccuracy();
-    std::vector<double> th0;
+    std::vector<double> th0,thS=c.th;
     double t=0.0,h=dt,applied=0.0; int guard=0;
+    if ((q>0.0) && (c.dz[0]*DTH<q*h)){h=std::max(c.dz[0]*DTH/q,1e-6);}            //(first substep: the top node's change within the accuracy)
     while (t<dt*(1.0-1e-12)){
       h=std::min(h,dt-t);
       th0=c.th;
       int nit=0; double qin=q,rej=0.0,dthmax=0.0;
       for (size_t i=0;i<N;i++){
         double th,exc;
-        const double out=SolveNode(P[i],th0[i],c.dz[i],h,qin,th,exc,nit);
+        const double out=SolveNode(*P[i],th0[i],c.dz[i],h,qin,th,exc,nit);
         c.th[i]=th;
         if (exc>0.0){ //a saturated node: the excess backs up into the nodes above (their outflow was that much smaller)
           for (size_t j=i;(j-->0) && (exc>0.0);){
-            const double room=std::max(P[j].ths-c.th[j],0.0)*c.dz[j]/h,take=std::min(exc,room);
-            if (take>0.0){c.th[j]=std::min(c.th[j]+take*h/c.dz[j],std::max(P[j].ths,c.th[j])); exc-=take;}
+            const double room=std::max(P[j]->ths-c.th[j],0.0)*c.dz[j]/h,take=std::min(exc,room);
+            if (take>0.0){c.th[j]=std::min(c.th[j]+take*h/c.dz[j],std::max(P[j]->ths,c.th[j])); exc-=take;}
           }
           if (exc>0.0){rej+=exc;}                                               //(the top node cannot take it: rejected)
         }
@@ -136,7 +140,7 @@ namespace gwvz
       t+=h; if (info){info->substeps++;}
       if (dthmax<0.5*DTH){h*=1.5;}
     }
-    for (size_t i=0;i<N;i++){c.psi[i]=PsiOf(S.mat[c.im[i]],c.th[i]);}
+    for (size_t i=0;i<N;i++){if (c.th[i]!=thS[i]){c.psi[i]=(P[i]->ths>0.0)?PsiOf(S.mat[c.im[i]],c.th[i]):0.0;}} //(suction consistent)
     c.satTop=c.dryTop=false;
     //water into the water table: whatever the inflow did not leave in storage (exact by construction; >= 0 up to round-off)
     return std::max((applied-(Storage(c)-S0))/dt,0.0);
@@ -157,7 +161,7 @@ namespace gwvz
       else if (f<=0.0){th=p.thr;}
       else if (f>=p.Ks){th=p.ths;}
       else {th=std::min(p.ths*std::pow(p.x0e+f/p.A,1.0/p.e),p.ths);}           //(K(th) = f exactly)
-      c.th[i]=th; c.psi[i]=PsiOf(S.mat[c.im[i]],th);
+      c.th[i]=th; c.psi[i]=(p.ths>0.0)?PsiOf(S.mat[c.im[i]],th):0.0;
     }
     c.satTop=c.dryTop=false;
     return f;

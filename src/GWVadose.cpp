@@ -103,7 +103,7 @@ namespace gwvz
     if (!c.active){c.zc.clear(); c.dz.clear(); c.th.clear(); c.psi.clear(); c.im.clear(); return 0.0;}
     MakeGrid(c,S,Nmax);
     const size_t N=c.zc.size(); c.th.assign(N,0.0); c.psi.assign(N,0.0);
-    if (REFMODE==1){for (size_t i=0;i<N;i++){const vz_mat &m=S.mat[c.im[i]]; c.th[i]=ThRef(m,0.0); c.psi[i]=PsiOf(m,c.th[i]);}}
+    if (REFMODE==1){for (size_t i=0;i<N;i++){const vz_mat &m=S.mat[c.im[i]]; c.th[i]=ThRef(m,0.0); c.psi[i]=(m.ths>0.0)?PsiOf(m,c.th[i]):0.0;}}
     else {for (size_t i=0;i<N;i++){c.psi[i]=zbot-c.zc[i]; c.th[i]=Theta(S.mat[c.im[i]],c.psi[i]);}}
     return RelStorage(c,S);
   }
