@@ -477,6 +477,7 @@ private:/*----------------------------------------------------*/
   vector<double>         _szxRqc;        ///< per SZX entry: rate of the columns' outputs that follow the head (rule (i), R_q = out/(1-F0)) [m3/d]
   vector<double>         _szxF0;         ///< per SZX entry: saturated fraction the columns' inflow used this step (F0)
   vector<char>           _szxDrn;        ///< per SZX entry: MODFLOW has the exchange as the kink drain (SZD_RAVEN, water rising into the soil)
+  vector<char>           _szxKink;       ///< per SZX entry: the column has no free water at the start of the local solve (its exchange cannot reverse: kink drain)
   vector<double>         _szxNegCap;     ///< per SZX entry: what the top cell can still give to a negative recharge this step [m3/d]
   vector<double>         _vzUsed;        ///< per SZX entry: water the unsaturated columns took out of the source cell this step [m3/d]
   vector<char>           _szxDropped;    ///< per SZX entry: the connection test failed on the last update (its next update is counted)

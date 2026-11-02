@@ -114,7 +114,7 @@ void CGroundwaterModel::ResetState()
   _szCapN=0; _szCapExcess=0.0; _szDropN=_szDropPlain=0; _szDropSteps=0; _szDropThis=false; _szxDropped.clear(); _szEsum=0.0; _szWhy=0; _szWhyE=-1; _szWhyV=_szWhyFa=_szWhyFb=0.0;
   _szNegCutQ=_szNegUnheldV=0.0; _negCutVol=_negUnheldVol=0.0; _negUnheldN=0; _negWarned=false; _Qgross=1.0; _QabsOther=0.0; _rchLostQ=_rchLostVol=0.0; _rchLostN=0;
   _wetKeptIt=_wetKeptSteps=0; _farSlowN=0; _farWarned=false; _xPrevIt.clear(); _xStart.clear(); _keptCol.clear(); _stepEnd=""; _lastConverged=true;
-  _szxRs.clear(); _szxRq.clear(); _szxRqP.clear(); _szxRl.clear(); _szxRqc.clear(); _szxF0.clear(); _szxDrn.clear(); _szxNegCap.clear(); _vzUsed.clear(); _cellConv.clear(); _szResE=-1; _szExtra=0;
+  _szxRs.clear(); _szxRq.clear(); _szxRqP.clear(); _szxRl.clear(); _szxRqc.clear(); _szxF0.clear(); _szxDrn.clear(); _szxKink.clear(); _szxNegCap.clear(); _vzUsed.clear(); _cellConv.clear(); _szResE=-1; _szExtra=0;
 }
 void CGroundwaterModel::Reinitialize(const optStruct &Options)
 {
