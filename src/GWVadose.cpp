@@ -442,4 +442,38 @@ namespace gwvz
   {
     return RiseBetween(Ks,psia,b,d,0.0,psis);
   }
+  //////////////////////////////////////////////////////////////////
+  /// steady RICHARDS profile of column c for the downward flux q [m/d] (:SoilZoneVadoseInitialFlux), in the finite
+  ///  volumes of gwvz::Step: every face carries q, K_f (dpsi/dz + 1) = q with K_f the mean of the two nodes' conductivities
+  ///  (the water table's face: the bottom node and Ks, psi = 0 at the water table). Solved node by node from the bottom up
+  ///  (each face's flux increases with the upper node's pressure head where the gradient is downward): a node above a layer
+  ///  whose Ks is less than q builds up positive pressure (a saturated, perched zone), as the steady state requires. The
+  ///  discrete start is steady to the solver's tolerance. Returns the column's water above the reference [m].
+  //
+  double InitSteadyRichards(vz_column &c,const vz_strat &S,const double q)
+  {
+    if (!c.active || !(q>0.0)){return 0.0;}
+    const int N=(int)c.zc.size(); const double PMIN=-1e5;
+    //root of f(p) = Kf(p) ((p - pl)/Dz + 1) - q for the node's pressure head p over the one below (pl, conductivity Kl)
+    auto solve=[&](const vz_mat &m,const double pl,const double Kl,const double Dz)->double{
+      auto f=[&](const double p)->double{return 0.5*(Kof(m,p)+Kl)*((p-pl)/Dz+1.0)-q;};
+      double a=std::max(pl-Dz,PMIN),b=std::max(a,0.0)+1.0;                                   //(f(a) <= 0: no downward gradient)
+      if (f(a)>=0.0){return a;}
+      for (int it=0;(it<200) && (f(b)<0.0);it++){b=a+2.0*(b-a);}
+      for (int it=0;it<200;it++){                                                  //(bisection to round-off: f increases on [a,b])
+        const double mid=0.5*(a+b); if ((mid<=a) || (mid>=b)){break;}
+        if (f(mid)<0.0){a=mid;} else {b=mid;}
+      }
+      return 0.5*(a+b);
+    };
+    double pl=0.0,Kl=S.mat[c.im[N-1]].Ks,zl=c.zbot;                                //(the water table: psi = 0, its Ks)
+    for (int i=N-1;i>=0;i--){
+      const vz_mat &m=S.mat[c.im[i]];
+      const double p=solve(m,pl,Kl,c.zc[i]-zl);
+      c.psi[i]=p; c.th[i]=Theta(m,p);
+      pl=p; Kl=Kof(m,p); zl=c.zc[i];
+    }
+    c.satTop=(c.psi[0]>=-1e-9); c.dryTop=false;
+    return RelStorage(c,S);
+  }
 }

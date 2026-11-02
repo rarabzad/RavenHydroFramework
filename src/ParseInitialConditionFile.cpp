@@ -119,6 +119,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":GWSoilZoneColumns"           )){code=55; }
     else if  (!strcmp(s[0],":GWVadoseColumns"             )){code=57; }
     else if  (!strcmp(s[0],":GWSoilZoneLag"               )){code=58; }
+    else if  (!strcmp(s[0],":GWVadoseClassColumns"        )){code=59; }
     else if  (!strcmp(s[0],":EndHRUStateVariableTable"    )){code=-2; }
     else if  (!strcmp(s[0],":InitialConcentrationTable"   )){code=4; concname=s[1]; }
     else if  (!strcmp(s[0],":EndInitialConcentrationTable")){code=-2; }
@@ -151,7 +152,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":BasinStageHist"              )){code=16;}
     else if  (!strcmp(s[0],":BasinAreaHist"               )){code=17;}
 
-    if ((code>=50) && (code<=58) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
+    if ((code>=50) && (code<=59) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
       //groundwater state of a coupled run (e.g. its solution.rvc) in a run without :GroundwaterModel: not used
       WriteWarning("ParseInitialConditionsFile: "+string(s[0])+" ignored (the model has no :GroundwaterModel MODFLOW6)",Options.noisy);
       if (code>50){ //a block: skip to its own end line (:InitialGWHeads is a single line)
@@ -971,6 +972,20 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         if (Len>=4){
           vector<double> v; for (int i=2;i<Len;i++){v.push_back(s_to_d(s[i]));}
           pModel->GetGroundwaterModel()->SetHotstartVadose(s_to_ll(s[0]),s_to_i(s[1]),v);
+        }
+      }
+      break;
+    }
+    case(59):  //----------------------------------------------
+    {/*:GWVadoseClassColumns  {HRU ID, cell (grid column number), depth class, classes of the cell, water table [m], contents of the
+         nodes from the top} x n
+       :EndGWVadoseClassColumns  (unsaturated columns of the depth classes, :SoilZoneVadoseClasses K > 1, hotstart) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWVadoseClassColumns")){break;}
+        if (Len>=6){
+          vector<double> v; for (int i=3;i<Len;i++){v.push_back(s_to_d(s[i]));} //classes of the cell, water table, contents
+          pModel->GetGroundwaterModel()->SetHotstartVadoseClass(s_to_ll(s[0]),s_to_i(s[1]),s_to_i(s[2]),v);
         }
       }
       break;

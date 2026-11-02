@@ -104,6 +104,9 @@ namespace gwvz
   ///< the cascade's steady state under the flux q [m/d] (S_i = min(q k_i, Smax_i); returns the water above the reference [m])
   double LagTravelTime(const vz_mat &m,const double par);
   double InitSteadyLag(vz_column &c,const vz_strat &S,const double q,const double par=0.0);
+  ///< steady RICHARDS profile for a flux q [m/d] into the column's top (:SoilZoneVadoseInitialFlux; the finite volumes of
+  ///< Step node by node from the water table up; perched saturation above a layer with Ks < q); returns the water above the reference [m]
+  double InitSteadyRichards(vz_column &c,const vz_strat &S,const double q);
 
   ///< capillary rise into the soil zone [m/d] (upward positive): the steady upward flux (RiseBetween) from the column's
   ///< top node to a soil layer at suction psis [m] whose middle is dzs [m] above the column top, through the soil (its
