@@ -100,6 +100,10 @@ namespace gwvz
   ///< exceeds it (the backed-up steady state; the top then rejects q - f). Returns f (the flux into the water table)
   double InitSteadyKinematic(vz_column &c,const vz_strat &S,const double q);
   double StepLag      (vz_column &c,const vz_strat &S,const double dt,const double qtop,double &rejected,vz_step_info *info=0,const double par=0.0);
+  ///< LAG: travel time per metre t_m [d/m] of a material (par if > 0, else derived at q_r = 1 mm/d; GWVadoseLag.cpp), and
+  ///< the cascade's steady state under the flux q [m/d] (S_i = min(q k_i, Smax_i); returns the water above the reference [m])
+  double LagTravelTime(const vz_mat &m,const double par);
+  double InitSteadyLag(vz_column &c,const vz_strat &S,const double q,const double par=0.0);
 
   ///< capillary rise into the soil zone [m/d] (upward positive): the steady upward flux (RiseBetween) from the column's
   ///< top node to a soil layer at suction psis [m] whose middle is dzs [m] above the column top, through the soil (its
