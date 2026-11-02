@@ -103,6 +103,9 @@ namespace gwsz
   /// share of the recharge that is rejected (the contact weights of SubgridFlux reach 1 already at the base)
   double SatFraction(const double h,const std::vector<double> &zbs,const double ds);
 
+  /// dF/dh [1/m] of SatFraction (0 for ds<=0)
+  double SatFractionSlope(const double h,const std::vector<double> &zbs,const double ds);
+
   /// brings the columns of one HRU (cols[c][j]: water of layer j in column c [mm], weights w[c], the column areas over
   /// the HRU's) to the HRU totals target[j] = sum_c w[c] cols[c][j]. The percolation between the layers is
   /// reconstructed from the bottom up and applied from the top down within each column (each layer gives up its share

@@ -468,6 +468,53 @@ private:/*----------------------------------------------------*/
   void   SZApply        (double **aPhinew,const double &tstep);///< final exchange, rejection and overflow to Raven
   double SZTrialShortfall(const double &tstep) const;          ///< shortfall [m3] the booked exchange would leave (SZApply without changing anything)
   void   SZWriteStep    (const double &t,const string &dstr);
+  //-- soil zone: the head-dependent rejection term, the kink drain, the
+  //   per-link convergence tests, negative recharge, drained columns, divergence and the MODFLOW side
+  vector<double>         _szxRs;         ///< per SZX entry: slope s of the rejection's linear term s (hc - h) MODFLOW solves with [m2/d]
+  vector<double>         _szxRq;         ///< per SZX entry: head-dependent rejected recharge of the link at its connection head [m3/d] (SZRejRate(hc))
+  vector<double>         _szxRqP;        ///< per SZX entry: its slope dR/dh at the connection head [m2/d]
+  vector<double>         _szxRl;         ///< per SZX entry: recharge rate of the link whose rejection follows F(h) (no column: R_l) [m3/d]
+  vector<double>         _szxRqc;        ///< per SZX entry: rate of the columns' outputs that follow the head (rule (i), R_q = out/(1-F0)) [m3/d]
+  vector<double>         _szxF0;         ///< per SZX entry: saturated fraction the columns' inflow used this step (F0)
+  vector<char>           _szxDrn;        ///< per SZX entry: MODFLOW has the exchange as the kink drain (SZD_RAVEN, water rising into the soil)
+  vector<double>         _szxNegCap;     ///< per SZX entry: what the top cell can still give to a negative recharge this step [m3/d]
+  vector<double>         _vzUsed;        ///< per SZX entry: water the unsaturated columns took out of the source cell this step [m3/d]
+  vector<char>           _szxDropped;    ///< per SZX entry: the connection test failed on the last update (its next update is counted)
+  vector<char>           _cellConv;      ///< per user node: convertible cell (ICELLTYPE != 0; generated: layer type; existing: NPF memory)
+  vector<double>         _xPrevIt;       ///< MODFLOW's iterate before the solve of the last outer iteration the limit allows (model units)
+  vector<double>         _xStart;        ///< heads at the start of the step, taken only from converged steps (far-head test; model units)
+  vector<int>            _keptCol;       ///< per grid column: times KeepColumnsWet set the column in this step
+  long                   _szCapN;        ///< supply-limited link updates (last update before the freeze) in the run
+  double                 _szCapExcess;   ///< largest take of such a boundary beyond the column's free water [m3/d] (reported, must be 0)
+  long                   _szDropN,_szDropPlain; ///< link updates the connection test failed (bracket dropped) in the run, and of them those whose next update in the step was the plain one
+  int                    _szDropSteps;   ///< steps with such a drop
+  bool                   _szDropThis;    ///< a drop in the current step
+  double                 _szEsum;        ///< summed |E| of the non-drain links of the last per-link boundary test [m3/d]
+  int                    _szWhy;         ///< test that left the last update unconverged with soil levels and total exchange within the tolerances: 0 none, 1 soil-zone shortfall, 2 connection head
+  int                    _szWhyE;        ///< SZX entry of that test's largest failure (-1: none)
+  double                 _szWhyV,_szWhyFa,_szWhyFb; ///< shortfall [m3], or connection head less MODFLOW's head [m] and the saturated fractions at both
+  double                 _szNegCutQ;     ///< negative recharge cut by the top cells' limit this step [m3/d]
+  double                 _szNegUnheldV;  ///< of that cut, what the HRUs' soil zones did not hold this step [m3]
+  double                 _negCutVol,_negUnheldVol; ///< run totals of the two [m3]
+  int                    _negUnheldN;    ///< warnings about negative recharge not held
+  bool                   _negWarned;     ///< warned about unlimited negative recharge (HRUs without a soil zone)
+  double                 _Qgross;        ///< gross flow through the aquifer this step: every entry's inflow and outflow apart [m3/d] (floor 1)
+  double                 _QabsOther;     ///< the existing model's other packages: every entry's |q| [m3/d]
+  double                 _rchLostQ,_rchLostVol; ///< recharge MODFLOW did not apply (existing model without NEWTON) this step [m3/d] and in the run [m3] (signed)
+  int                    _rchLostN;      ///< warnings about it
+  long                   _wetKeptIt,_wetKeptSteps; ///< outer iterations and steps in which KeepColumnsWet set a drained column
+  int                    _farSlowN;      ///< warnings about far heads on unconverged steps
+  string                 _stepEnd;       ///< end of the current step (date, and time for sub-daily steps), for the per-step warnings
+  string                 _summaryFile;   ///< GWModelSummary.txt (run totals appended at the end; "" once written)
+  void   SZNegCaps      (const double &tstep);                 ///< _szxNegCap: what each exchange link's top cell can still give this step
+  double SZRejRate      (const int e,const double &h,double *slope=NULL) const; ///< head-dependent rejected recharge of SZX entry e at head h [m3/d]
+  bool   SZRejFollows   (const int e) const;                   ///< SZX entry e has a head-dependent rejection
+  bool   SZDivergedIterate() const;                            ///< an iterate no interface update may be made from (not finite, or far outside at a link)
+  double SZSolvedShortfall(const double &tstep,const vector<double> &rej,int *emax=NULL) const; ///< (emax: the SZX entry of the largest one) shortfall [m3] the boundary MODFLOW just solved with (and the rejected recharge rej [m3] it goes with) would leave in the columns at its current heads
+  int    KeepColumnsWet (const int it);                        ///< before a solve (NEWTON): drained columns set 1 mm above their bottoms; returns the number set
+  double FarMargin      (double &zmin,double &zmax) const;     ///< divergence margin max(10 x relief, 1 km) [m] and the model's elevation range
+  static double FarDistance(const double x,const double zmin,const double zmax); ///< how far elevation x lies outside [zmin, zmax] [m]
+  void   AppendRunTotals();                                    ///< run totals at the end of GWModelSummary.txt
 
   //-- engine -----------------------------------------------------
   CMF6Engine _mf6;
