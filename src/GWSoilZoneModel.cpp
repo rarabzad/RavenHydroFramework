@@ -665,7 +665,8 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
           if (bk>0.0){_Qcol[L.ic]-=bk; rj+=bk*tstep; _vzBackV+=bk*tstep;}        // start of the step go back to the soil zone
           rej+=rj; _szxRej[e]=rj+((_vzBackW[e]>0.0)?_vzBackW[e]:0.0);
           //the head-dependent part (SZRejRate, class by class): the share of classes without a column, and rule (i)
-          if (!neg){_szxRl[e]=V/tstep*share;}
+          bool unused=false; for (int i=_vzOff[e];i<_vzOff[e+1];i++){if (!_vzcUse[i]){unused=true;}}
+          if (!neg && unused){_szxRl[e]=V/tstep*share;}                          //(only classes without a column follow with R_l)
           double rq=0.0; for (int i=_vzOff[e];i<_vzOff[e+1];i++){if (_vzcUse[i]){rq+=_vzcRq[i]; _szxF0[e]=_vzcF0[i];}}
           if (!((_szMaxIter==0) || (SZFreezeAt()<1))){_szxRqc[e]=rq;}            //(explicit coupling: nothing follows the head)
           if (SZRejFollows(e)){double sl=0.0; _szxRq[e]=SZRejRate(e,_szxHc[e],&sl); _szxRqP[e]=sl;}
