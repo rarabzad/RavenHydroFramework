@@ -763,7 +763,6 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
       if (_szCapUpd){ //(reported: the largest take at zlow beyond the free water, line and term together; 0 up to round-off)
         const double take=(q>=0.0)?q+((Cg>1e-6*cell.C)?Cg*max(h-zlow,0.0):0.0)+ts:ts; //(a slope at its floor is given as a rate, SZSetArrays)
         _szCapN++; _szCapExcess=max(_szCapExcess,take-avail);
-        if (getenv("RAVEN_SZDBG") && (take-avail>1e-6)){fprintf(stderr,"CAP e %d q %.6g Cg %.6g cap %.6g avail %.6g ts %.6g h %.6f zlow %.6f C %.4g one %d\n",(int)e,q,Cg,cap,avail,ts,h,zlow,cell.C,(int)_szxOne[e]);}
       }
     }
     _szxRs[e]=s;
@@ -1073,11 +1072,6 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
         }
       }
     }
-  }
-  if (getenv("RAVEN_SZDBG") && (_stepCount>=atoi(getenv("RAVEN_SZDBG")))){ //(temporary diagnostics)
-    const int e=_szResE; fprintf(stderr,"DBG step %d it %d conv %d mf6 %d resid %.3g E %d dQ %.3g tol %.3g Esum %.3g why %d",_stepCount,iter,(int)conv,(int)mf6conv,_szResid,e,_szDQ,_szDQtol,_szEsum,_szWhy);
-    if (e>=0){const double hm=_X[_reduced[TopNode(_aLinks[_szxLink[e]].ic)]]*_hf; fprintf(stderr," h %.6f hc0 %.6f hc %.6f Qc %.5g q0 %.5g Cg %.4g drn %d rs %.4g F %.4f lam %.5f lam0 %.5f",hm,hc0[e],_szxHc[e],_szxQc[e],q0[e],_szxCg[e],(int)_szxDrn[e],_szxRs[e],_linkF[_szxLink[e]],_szxLam[e],lam0[e]);}
-    fprintf(stderr,"\n");
   }
   prevQ=Q; _szIter++; _szConv=conv; (void)iter;
   if (conv || last){ //keep what MODFLOW solved with (the update changed it by less than the tolerances, or no solve follows:
