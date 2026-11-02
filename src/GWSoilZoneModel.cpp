@@ -527,14 +527,39 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
       double share=(W>0.0)?((_linkSzx[li]>=0)?_szxFw[_linkSzx[li]]/W:0.0):L.area/(_szOn[k]?Aall:_hruRchArea[k]),F=_linkF[li];
       const int e=_linkSzx[li];
       if ((_vzMode>0) && (e>=0) && (e<(int)_vzUse.size())){
-        if ((_vzAbsQ[e]<0.0) && (e<(int)_szxUpCHD.size()) && _szxUpCHD[e]){_szRchCHD+=_vzAbsQ[e];} //water a risen water table took from the column; the
-        else if (!(_vzUpA[e]>0.0)){_Qcol[L.ic]+=_vzAbsQ[e];}                     // new nodes of a fallen one (out of a specified head below; out of a
-                                                                                 // lower cell: SZW_RAVEN)
-        if (_vzUse[e]){ //the unsaturated column carried the unsaturated share this step: its bottom flux recharges the
-                        //aquifer, and the saturated share is rejected with the saturated fraction its inflow used
+        //water a risen water table took from the columns (> 0, the top cell's recharge); the new nodes of a fallen one (< 0:
+        //out of a specified head below, which supplies it; out of a lower cell: SZW_RAVEN; else the top cell). With depth
+        //classes the link's columns may do both in one step: the takes (_vzAbsN) are booked by their source, the rest is the
+        //top cell's
+        const bool chdUp=(e<(int)_szxUpCHD.size()) && _szxUpCHD[e];
+        if (_vzOff[e+1]-_vzOff[e]<=1){
+          if ((_vzAbsQ[e]<0.0) && chdUp){_szRchCHD+=_vzAbsQ[e];}
+          else if (!(_vzUpA[e]>0.0)){_Qcol[L.ic]+=_vzAbsQ[e];}
+        }
+        else {
+          const double take=_vzAbsN[e],give=_vzAbsQ[e]+take;                      //[m3/d] taken and released
+          if (chdUp){_szRchCHD-=take; _Qcol[L.ic]+=give;}
+          else if (_vzUpA[e]>0.0){_Qcol[L.ic]+=give;}
+          else {_Qcol[L.ic]+=_vzAbsQ[e];}
+        }
+        if (_vzUse[e]){ //the unsaturated columns carried the unsaturated share this step: their bottom flux recharges the
+                        //aquifer, and the saturated share is rejected with the saturated fraction their inflow used
           double rj=V*share*_vzFp[e]+_vzRejV[e];
-          if ((_vzQ[e]<0.0) && (e<(int)_szxUpCHD.size()) && _szxUpCHD[e]){_szRchCHD+=_vzQ[e];} //(upflow out of a specified head below: supplied by it,
-          else {_Qcol[L.ic]+=(_vzUp[e]>0.0)?0.0:_vzQ[e];}                          // MODFLOW does not see it; from a lower cell: SZW_RAVEN)
+          if (_vzOff[e+1]-_vzOff[e]<=1){
+            if ((_vzQ[e]<0.0) && chdUp){_szRchCHD+=_vzQ[e];}                        //(upflow out of a specified head below: supplied by it,
+            else {_Qcol[L.ic]+=(_vzUp[e]>0.0)?0.0:_vzQ[e];}                         // MODFLOW does not see it; from a lower cell: SZW_RAVEN)
+          }
+          else {
+            const double up=_vzQN[e],down=_vzQ[e]+up;                             //[m3/d] upflow and downflow of the link's columns
+            if (chdUp){_szRchCHD-=up; _Qcol[L.ic]+=down;}
+            else if (_vzUp[e]>0.0){_Qcol[L.ic]+=down;}
+            else {_Qcol[L.ic]+=_vzQ[e];}
+            //depth classes without a column this step: their unsaturated share reaches the water table in the step and
+            //their saturated share is rejected, with their own fraction at the connection head (as a link without columns)
+            double au=0.0,fu=0.0;
+            for (int i=_vzOff[e];i<_vzOff[e+1];i++){if (!_vzcUse[i]){au+=_vzcA[i]; fu+=_vzcA[i]*VZClassF(e,i,_szxHc[e]);}}
+            if (au>0.0){_Qcol[L.ic]+=V/tstep*share*(au-fu); rj+=V*share*fu;}
+          }
           rej+=rj; _szxRej[e]=rj;
           continue;
         }

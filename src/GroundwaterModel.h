@@ -400,13 +400,30 @@ private:/*----------------------------------------------------*/
   double SZCellSy       (const int ic) const;                   ///< specific yield of a column's top active cell [-]
   double SZNodeSy       (const int n) const;                    ///< specific yield of a cell (user node) [-]
   void   SZUpNodes      ();                                     ///< _szxUp from the heads of the last step
-  const gwvz::vz_mat *VZGapMat(const int e) const;              ///< aquifer material just below the soil-zone base of SZX entry e (:SoilZoneVadose), else NULL
+  const gwvz::vz_mat *VZGapMat(const int e,const double zb=-HUGE_VAL) const; ///< aquifer material just below the soil-zone base of SZX entry e (or below zb), else NULL
   double SZRiseLayers   (const int k,const int c,const double zb,const double zs,const double s1,const double a,const double Ae,
-                         const double Sy,const double tstep,double *QL,double *psisLow,const gwvz::vz_mat *gap=NULL) const; ///< capillary rise into the soil-zone layers [m3/d]
+                         const double Sy,const double tstep,double *QL,double *psisLow,const gwvz::vz_mat *gap=NULL,const double *taken=NULL) const; ///< capillary rise into the soil-zone layers [m3/d]
+                                                                ///<  (taken: what other depth classes give each layer this step [m3/d])
   double SZSyncClasses  (const int k,const double *target,const double R,vector<double> &lossR); ///< sync class by class
   bool                   _szClsWarned;   ///< warned that classes need ORDERED_SERIES
   string                 _szExtClass;    ///< :SoilZoneAquiferClass (existing models: retention of the cells for the unsaturated columns)
-  vector<gwvz::vz_column> _vzCol;        ///< per SZX entry: unsaturated column
+  vector<gwvz::vz_column> _vzcCol;       ///< unsaturated columns, one per depth class of every SZX entry e: _vzOff[e].._vzOff[e+1]-1
+                                         ///<  (:SoilZoneVadoseClasses K; with K = 1 one column per entry, at its mean base)
+  vector<int>            _vzOff;         ///< per SZX entry (and one past the last): its first class column in _vzcCol
+  vector<double>         _vzcA;          ///< per class column: its share of the entry's area (n_c/N of the DEM samples) [-]
+  vector<double>         _vzcZt;         ///< per class column: its top (the soil-zone base of its class) [m]
+  vector<vector<double> > _vzcZbs;       ///< per class column: soil-zone bases of its DEM samples, ascending [m] (K > 1)
+  vector<char>           _vzcUse;        ///< per class column: it carried its share of this step's recharge
+  vector<double>         _vzcF0;         ///< per class column: saturated fraction its inflow used this step [-]
+  vector<double>         _vzcOut;        ///< per class column: its outputs to the aquifer this step [m3] (bottom flux and release)
+  vector<double>         _vzcRq;         ///< per class column: rate of its outputs on the unsaturated share, _vzcOut/(1-F0_c)/dt [m3/d]
+  vector<double>         _vzAbsN;        ///< per SZX entry: water the moving bottoms of its columns took from the source cell this step [m3/d] (>= 0)
+  vector<double>         _vzQN;          ///< per SZX entry: upflow through the bottoms of its columns this step [m3/d] (>= 0)
+  double                 _vzClsDev;      ///< largest |sum_c a_c F_c - F| over the entries and a range of heads (check of the class fractions)
+  double                 _vzQ0;          ///< :SoilZoneVadoseInitialFlux [mm/d]: steady start of the columns on a cold start (0: at rest)
+  void   VZClassSetup   ();                                     ///< depth classes and class columns of every SZX entry (VZSetup)
+  double VZClassF       (const int e,const int i,const double h) const; ///< saturated fraction of class column i of entry e at head h [-]
+  double VZSteadyRichards(gwvz::vz_column &c,const gwvz::vz_strat &S,const double q) const; ///< steady RICHARDS profile for the flux q [m/d]
   vector<gwvz::vz_strat>  _vzStrat;      ///< per SZX entry: materials by elevation
   vector<char>           _vzUse;         ///< per SZX entry: the column carried this step's recharge
   vector<double>         _vzQ;           ///< per SZX entry: recharge to the aquifer from the column this step [m3/d] (bottom flux)
@@ -443,6 +460,7 @@ private:/*----------------------------------------------------*/
   double                 _vzInVol,_vzOutVol,_vzCapVol,_vzStoreVol,_vzStore0; ///< step totals [m3] and storage above the reference [m3]
   long long              _vzSub,_vzNewton; ///< substeps and Newton iterations of the columns (summary)
   map<long long,map<int,vector<double> > > _hotVz; ///< from .rvc :GWVadoseColumns: by HRU ID and cell: zbot, contents
+  map<long long,map<int,map<int,vector<double> > > > _hotVzc; ///< from .rvc :GWVadoseClassColumns: by HRU ID, cell and class: classes of the cell, zbot, contents
   void   VZSetup        ();                                    ///< materials of every exchange column (after SZBuildEntries)
   void   VZInit         ();                                    ///< columns from the initial heads or the hotstart
   void   VZStep         (const double &tstep);                 ///< the columns over the step (predictor heads), capillary rise
@@ -587,12 +605,14 @@ public:/*-------------------------------------------------------*/
   void   SetSoilZoneOutput    (const string &group){_szOutGroup=group;}
   void   SetSoilZoneVadose    (const int mode,const double acc,const int n,const double par=0.0){_vzMode=mode; if (acc>0){_vzAcc=acc;} if (n>0){_vzN=n;} _vzPar=par;}
   void   SetSoilZoneVadoseClasses(const int K){_vzClasses=K;}
+  void   SetSoilZoneVadoseInitialFlux(const double q){_vzQ0=q;}
   void   SetSoilZoneCapillaryRise(const int on){_szCapRise=on;}
   void   SetSoilZoneTiming    (const int t){_szTiming=t;}
   void   SetSoilZoneClasses   (const int k){_szClasses=k;}
   void   SetSoilZoneAquiferClass(const string &c){_szExtClass=c;}
   void   SetHotstartSoilZoneLag(const long long hru,const int cell,const double q,const double debt){_hotLag[hru][cell]=q; _hotDebt[hru][cell]=debt;}
   void   SetHotstartVadose    (const long long hru,const int cell,const vector<double> &v){if (cell<=0){return;} _hotVz[hru][cell]=v;}
+  void   SetHotstartVadoseClass(const long long hru,const int cell,const int cls,const vector<double> &v){if ((cell<=0) || (cls<=0)){return;} _hotVzc[hru][cell][cls]=v;}
   bool   UsesPhysicalSoilZone () const {return _szMode==1;}
   void   NoteSoilClassWithoutKsat(const void *soil,const string &tag){_szNoKsat[soil]=tag;}
   void   SetHotstartHeads     (const int nlay,const int nrow,const int ncol,const vector<double> &h)

@@ -228,7 +228,7 @@ void CGroundwaterModel::SZRepayRates(const double &tstep)
     if ((e>=_szxUp.size()) || (_szxUp[e]<0) || (_szxUpF[e]<1.0) || _szxUpCHD[e]){continue;}                         //(no cell holds the water table clear of its bottom: later;
     double used=(e<_szxCapQ.size())?_szxCapQ[e]:0.0;                           //(what the source cell has given this step: the rise, and the
     if (_szxUp[e]!=TopNode(ic)){used+=_vzUp[e]+_vzUpA[e];}                      // column's upflow and uptake, through SZW_RAVEN or, out of the
-    else if ((_vzMode>0) && (e<_vzUse.size())){used+=max(-_vzAbsQ[e],0.0)+(_vzUse[e]?max(-_vzQ[e],0.0):0.0);} // top cell, its recharge)
+    else if ((_vzMode>0) && (e<_vzUse.size())){used+=_vzAbsN[e]+(_vzUse[e]?_vzQN[e]:0.0);} // top cell, its recharge; sums over the depth classes)
     const double left=SZUpCap(e,tstep)-used;                                     //(what it can still give)
     _szxRepay[e]=max(min(_szxDebt[e]/tstep,left),0.0); _szRepayQ+=_szxRepay[e];                    // from a lower cell when the top one has dried, SZW_RAVEN)
   }

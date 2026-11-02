@@ -281,6 +281,12 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
       if (Len<2){GWImproperFormat(s,Options);}
       else {int K=s_to_i(s[1]); ExitGracefullyIf((K<1) || (K>10),":SoilZoneVadoseClasses: classes must be 1 to 10",BAD_DATA); pGW->SetSoilZoneVadoseClasses(K); szOpts+=" :SoilZoneVadoseClasses";}
     }
+    else if (!strcmp(s[0],":SoilZoneVadoseInitialFlux"))
+    {/*:SoilZoneVadoseInitialFlux q  [mm/d] (default 0: the columns start at rest, at their reference profile): on a cold start
+       every unsaturated column starts at its steady profile for the downward flux q (not on a groundwater hotstart) */
+      if (Len<2){GWImproperFormat(s,Options);}
+      else {double q=s_to_d(s[1]); ExitGracefullyIf(!(q>=0.0),":SoilZoneVadoseInitialFlux: the flux may not be negative",BAD_DATA); pGW->SetSoilZoneVadoseInitialFlux(q); szOpts+=" :SoilZoneVadoseInitialFlux";}
+    }
     else if (!strcmp(s[0],":SoilZoneCapillaryRise"))
     {/*:SoilZoneCapillaryRise ON | OFF  (default ON with an unsaturated column, :SoilZoneVadose other than NONE; else OFF) */
       if ((Len<2) || (strcmp(s[1],"ON") && strcmp(s[1],"OFF"))){GWImproperFormat(s,Options);}
