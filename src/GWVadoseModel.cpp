@@ -11,6 +11,7 @@
 #include "Model.h"
 
 static const double VZ_LMIN=0.05;   //[m] shortest unsaturated column (one node of the finest grid)
+#include "GWUtil.h"
 using gwutil::ToStr;
 
 //////////////////////////////////////////////////////////////////
