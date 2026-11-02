@@ -106,22 +106,6 @@ double CGroundwaterModel::VZLinkShare(const int k,const int li) const
 }
 
 //////////////////////////////////////////////////////////////////
-/// \brief integral of Sy dz over [z0, zt] across the materials of S [m] (what MODFLOW stores for a water-table rise from z0 to
-///  zt; not the Sy at the old bottom only). (gwvz::SyRise of the final column library; kept here
-///  until the library provides it)
-//
-static double VZSyRise(const gwvz::vz_strat &S,const double z0,const double zt)
-{
-  if (!(zt>z0)){return 0.0;}
-  double v=0.0;
-  for (size_t i=0;i<S.mat.size();i++){
-    const double lo=max(z0,S.zbot[i]),hi=min(zt,S.ztop[i]);
-    if (hi>lo){v+=S.mat[i].Sy*(hi-lo);}
-  }
-  return v;
-}
-
-//////////////////////////////////////////////////////////////////
 /// \brief depth classes of a link (:SoilZoneVadoseClasses K): its DEM samples' soil-zone bases z (ascending) grouped into at
 ///  most K contiguous classes with the least spread (Fisher's optimal partition: the smallest sum over the classes of the
 ///  squared deviations from the class mean, by dynamic programming over the sorted bases). Equal bases (within 1e-9 m) are
@@ -385,7 +369,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
           //in the next steps (with consistent parameters eps <= Sy and this does not apply)
           const double zt=(zb-h<=Lmin)?zb:max(h,zlow);                           //(not below the aquifer's bottom: a dry column's head can be)
           if (zt>col.zbot+1e-9){ //a rising water table (to the base: the column goes)
-            const double z0=col.zbot,capS=VZSyRise(S,z0,zt);                     //[m] Sy dh across the layers the rise crosses
+            const double z0=col.zbot,capS=gwvz::SyRise(S,z0,zt);                     //[m] Sy dh across the layers the rise crosses
             gwvz::vz_column t=col; const double abT=gwvz::MoveBottom(t,S,zt,_vzN);
             const double capU=_szxUpCHD[e]?1e300:(SZUpCap(e,tstep)-used)*tstep/Ac; //[m] a deficit below it (a column dried by evaporation or
             if ((zt<zb) && (abT>capS*(1.0+1e-9))){                               // capillary rise) is filled out of the source cell, at most what
