@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <vector>
+#include <fstream>
 /*----------------------------------------------------------------
   Raven Library Source Code
   Copyright (c) 2026 Rezgar Arabzadeh -- Raven-MODFLOW 6 groundwater coupling
@@ -34,12 +35,50 @@ namespace
 {
   /// Scoped change of working directory: MODFLOW 6 resolves all of its file names
   /// relative to the directory holding mfsim.nam, while Raven uses its own run directory
+  //-- exit handler: MODFLOW stops the whole program (a Fortran STOP, exit code 2) on an input error it finds while Raven calls
+  //   it; the handler, registered once, reports MODFLOW's error report as Raven's error (only while a MODFLOW call is in
+  //   progress), from the run folder, and lets the exit go on
+  const char *g_call=NULL;          ///< the MODFLOW call in progress (NULL: none)
+  char        g_runDir[4096]={0};   ///< Raven's folder before the call
+  string      g_mf6Dir;             ///< MODFLOW's folder (mfsim.lst)
+  bool        g_registered=false;
+  void MF6ExitHandler()
+  {
+    if (g_call==NULL){return;}
+    const string call(g_call); g_call=NULL;
+    string rep="",line; bool on=false;
+    ifstream L((g_mf6Dir+"/mfsim.lst").c_str());
+    while (getline(L,line)){
+      if (line.find("ERROR REPORT")!=string::npos){on=true; continue;}
+      if (!on){continue;}
+      size_t a=line.find_first_not_of(" \t\r"); if (a==string::npos){continue;}
+      size_t b=line.find_last_not_of(" \t\r"); line=line.substr(a,b-a+1);
+      if ((line.find("UNIT NUMBER")!=string::npos) || (line.find("STOP")==0)){break;}
+      rep+=(rep.empty()?"":" ")+line;
+      if (rep.size()>1500){break;}
+    }
+    if (rep.empty()){rep="see "+g_mf6Dir+"/mfsim.lst";}
+    if (g_runDir[0]!='\0'){if (GW_CHDIR(g_runDir)!=0){}}
+    const string msg="CGroundwaterModel: MODFLOW 6 stopped the run during "+call+": "+rep;
+    ExitGracefully(msg.c_str(),BAD_DATA_WARN);                                 //(writes the error; no exit from within exit)
+    cerr<<endl<<"============== Exiting Gracefully ==========================="<<endl<<"Exiting Gracefully: "<<msg<<endl
+        <<"Error Type: Runtime Error"<<endl<<"============================================================="<<endl;
+  }
+  struct CallGuard //marks a MODFLOW call in progress
+  {
+    CallGuard(const char *name,const string &dir){
+      if (!g_registered){g_registered=true; atexit(MF6ExitHandler);}
+      g_call=name; g_mf6Dir=dir;
+    }
+    ~CallGuard(){g_call=NULL;}
+  };
   class CDGuard
   {
     char _old[4096]; bool _ok;
   public:
     CDGuard(const string &dir){
       _ok=(GW_GETCWD(_old,sizeof(_old))!=NULL);
+      if (_ok){strncpy(g_runDir,_old,sizeof(g_runDir)-1);}
       if (!dir.empty()){ if (GW_CHDIR(dir.c_str())!=0){_ok=false;} }
     }
     ~CDGuard(){ if (_ok){ if (GW_CHDIR(_old)!=0){} } }
@@ -243,6 +282,7 @@ bool CMF6Engine::Initialize(const string &workdir)
   _workdir=workdir;
   CDGuard g(_workdir);
   if (!g.ok()){_lasterr="cannot enter MODFLOW 6 folder "+_workdir; return false;}
+  CallGuard cg("initialize",_workdir);
   if (!Check(_initialize("mfsim.nam"),"initialize")){return false;}
   _initialized=true;
   return true;
@@ -251,6 +291,7 @@ bool CMF6Engine::PrepareTimeStep(double dt)
 {
   CDGuard g(_workdir);
   if (!g.ok()){_lasterr="cannot enter MODFLOW 6 folder "+_workdir; return false;}
+  CallGuard cg("prepare_time_step",_workdir);
   return Check(_prepare_time_step(&dt),"prepare_time_step");
 }
 /// Newton loop: the step ends when MODFLOW has converged (OUTER_DVCLOSE) and, with afterIter, the coupling iteration
@@ -260,9 +301,11 @@ bool CMF6Engine::PrepareTimeStep(double dt)
 /// tolerance is restored afterwards.
 bool CMF6Engine::SolveTimeStep(int maxiter,bool &converged,int &niter,
                                double *dvclose,double relaxedTol,int relaxedAfter,bool *relaxed,
-                               const std::function<bool(int,bool)> &afterIter)
+                               const std::function<bool(int,bool)> &afterIter,
+                               const std::function<void(int)> &beforeSolve)
 {
   CDGuard g(_workdir);
+  CallGuard cg("solve",_workdir);
   if (!g.ok()){_lasterr="cannot enter MODFLOW 6 folder "+_workdir; return false;}
   int sol=1,conv=0,nhard=0; bool isrelaxed=false;
   converged=false; niter=0; if (relaxed!=NULL){*relaxed=false;}
@@ -271,6 +314,7 @@ bool CMF6Engine::SolveTimeStep(int maxiter,bool &converged,int &niter,
   if (!Check(_prepare_solve(&sol),"prepare_solve")){return false;}
   for (niter=1;niter<=maxiter;niter++){
     if (tiered && !isrelaxed && (nhard==relaxedAfter)){*dvclose=relaxedTol; isrelaxed=true;}
+    if (beforeSolve){beforeSolve(niter);}                                       //(may change MODFLOW's iterate: KeepColumnsWet)
     if (!Check(_solve(&sol,&conv),"solve")){if (tiered){*dvclose=target;} return false;}
     if (conv!=1){nhard++;}
     bool cpl=true;
@@ -286,6 +330,7 @@ bool CMF6Engine::FinalizeTimeStep()
 {
   CDGuard g(_workdir);
   if (!g.ok()){_lasterr="cannot enter MODFLOW 6 folder "+_workdir; return false;}
+  CallGuard cg("finalize_time_step",_workdir);
   return Check(_finalize_time_step(),"finalize_time_step");
 }
 void CMF6Engine::Finalize()

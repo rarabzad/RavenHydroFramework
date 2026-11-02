@@ -485,11 +485,10 @@ void CGroundwaterModel::ExtProbe()
       if ((b=="OPTIONS") && (W0=="NEWTON")){nw=true; for (size_t j=1;j<w.size();j++){if (Upper(w[j])=="UNDER_RELAXATION"){nu=true;}}}
     }
     _mf6Newton=nw;
-    if (SZPhysical() && !nw){
-      WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL with an existing model that does not use NEWTON: a top cell that dries leaves "
-        "MODFLOW's solve (head HDRY), and the soil zone over it then neither exchanges with the aquifer nor draws capillary rise until "
-        "the cell rewets; add NEWTON to the model's OPTIONS where the top cells can dry",false);
-    }
+    //without NEWTON a top cell that dries leaves MODFLOW's solve (HDRY), and the recharge, the soil-zone exchange and the
+    //columns over it lose their cell (rough-terrain suite: such runs stopped or misbehaved): required
+    ExitGracefullyIf(SZPhysical() && !nw,("CGroundwaterModel: :SoilZone PHYSICAL needs an existing model that uses the Newton-Raphson formulation: add NEWTON to "
+      "the OPTIONS of "+_mf6dir+"/"+_extNamFile+" (MODFLOW 6 then also needs LINEAR_ACCELERATION BICGSTAB in its IMS file)").c_str(),BAD_DATA);
     if (uo && nu){
       WriteWarning("CGroundwaterModel: the model uses NEWTON UNDER_RELAXATION with MODFLOW "+_mf6Version+"; with versions before 6.8 "
         "a drying cell can make every later step fail to converge. Use MODFLOW 6.8 or newer, or remove UNDER_RELAXATION from the NEWTON option",false);
@@ -537,16 +536,30 @@ void CGroundwaterModel::ExtProbe()
     }
   }
   _userOf.assign(nodes,-1); for (int n=0;n<nuser;n++){if (_reduced[n]>=0){_userOf[_reduced[n]]=n;}}
+  { //convertible cells (ICELLTYPE != 0; MODFLOW maps -1 to 1, or to 0 with THICKSTRT) from MODFLOW's memory, under its fixed
+    //name NPF whatever the name file calls the package: drained columns (KeepColumnsWet)
+    _cellConv.assign(nuser,1);
+    string ai=_mf6.GetVarAddress(M,"NPF","ICELLTYPE"); int *ict=_mf6.HasVar(ai)?_mf6.GetIntPtr(ai):NULL;
+    if (ict==NULL){WriteWarning("CGroundwaterModel: cannot read the existing model's ICELLTYPE (NPF): every cell is taken as convertible for the drained-column safeguard",false);}
+    else {for (int n=0;n<nuser;n++){int r=_reduced[n]; if (r>=0){_cellConv[n]=(ict[r]!=0)?1:0;}}}
+  }
   if (SZPhysical()){ //:SoilZone PHYSICAL: the conductance of each link and the unsaturated columns use the model's own
                      //vertical conductivity (K33, else K) and specific yield (m/d, -)
-    string npf="NPF"; for (size_t i=0;i<_extPkgs.size();i++){if (Upper(_extPkgs[i].ftype)=="NPF6"){npf=_extPkgs[i].pname;}}
+    const string npf="NPF";                                                    //(MODFLOW's name for it whatever the name file says)
     string ak=_mf6.GetVarAddress(M,npf,"K33"); if (!_mf6.HasVar(ak)){ak=_mf6.GetVarAddress(M,npf,"K11");}
     double *kk=_mf6.HasVar(ak)?_mf6.GetDoublePtr(ak):NULL;
-    string as=_mf6.GetVarAddress(M,_stoName,"SY"); double *sy=_mf6.HasVar(as)?_mf6.GetDoublePtr(as):NULL;
+    string as=_mf6.GetVarAddress(M,"STO","SY"); double *sy=(!_extNoSto && _mf6.HasVar(as))?_mf6.GetDoublePtr(as):NULL;
     ExitGracefullyIf(kk==NULL,"CGroundwaterModel: :SoilZone PHYSICAL with an existing model: cannot read the model's hydraulic conductivity (NPF K33/K)",RUNTIME_ERR);
-    if (sy==NULL){WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: the existing model has no specific yield (no STO package or SY); 0.2 is assumed for the soil-zone checks",false);}
+    if (sy==NULL){WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: the existing model has no specific yield (no STO package or SY); 0.2 is assumed for the soil-zone checks, the release limits and the unsaturated columns",false);}
     _extKv.assign(nuser,0.0); _extSy.assign(nuser,0.2);
-    for (int n=0;n<nuser;n++){int r=_reduced[n]; if (r<0){continue;} _extKv[n]=kk[r]*_hf*_extTf; if (sy!=NULL){_extSy[n]=sy[r];}}
+    int nlow=0,nact=0;
+    for (int n=0;n<nuser;n++){int r=_reduced[n]; if (r<0){continue;} _extKv[n]=kk[r]*_hf*_extTf; if (sy!=NULL){_extSy[n]=sy[r]; nact++; if (!(sy[r]>=0.01)){nlow++;}}}
+    if (nlow>0){ //(SY is the model's data, kept: e.g. ICONVERT 0 cells, whose SY MODFLOW does not use, often hold 0; all of them 0
+                 // included, decided so that such models' outputs stay unchanged)
+      WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: the existing model's specific yield (STO SY) is below 0.01 in "+to_string(nlow)+" of its "+
+                   to_string(nact)+" active cells (cells with ICONVERT 0 often hold SY 0, which MODFLOW does not use): 0.01 is used there for the soil-zone"
+                   " release limits and the unsaturated columns; give SY in the model's STO package if the water table there has a larger specific yield",false);
+    }
   }
   string dv="SLN_1/DVCLOSE"; if (_mf6.HasVar(dv)){double *d=_mf6.GetDoublePtr(dv); if (d!=NULL){_extDvclose=*d*_hf;}}
   if (_extCRS.IsSet()){ExtCellsFromMemory();}
@@ -867,7 +880,7 @@ void CGroundwaterModel::ExtWritePackages(const optStruct &Options)
 //
 void CGroundwaterModel::ExtStreamFlows()
 {
-  _Qriv_in=_Qriv_out=0.0; _Qother=0.0;
+  _Qriv_in=_Qriv_out=0.0; _Qother=0.0; _QabsOther=0.0; //(_QabsOther: inflows and outflows of every entry apart, for the gross flow)
   if (_streamPkg!=""){
     string P=Upper(_streamPkg);
     int *nb=_mf6.GetIntPtr(_mf6.GetVarAddress(_mname,P,"NBOUND"));
@@ -906,13 +919,13 @@ void CGroundwaterModel::ExtStreamFlows()
     int *nb=_mf6.GetIntPtr(_mf6.GetVarAddress(_mname,_extOther[j],"NBOUND"));
     double *sv=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,_extOther[j],"SIMVALS"));
     if ((nb==NULL) || (sv==NULL)){continue;}
-    for (int i=0;i<*nb;i++){_Qother+=sv[i]*_qf;}
+    for (int i=0;i<*nb;i++){_Qother+=sv[i]*_qf; _QabsOther+=fabs(sv[i]*_qf);}
     //a package that sends water to the model's mover (MVR) reports that part separately (the list file's "-TO-MVR" term):
     //it also leaves the aquifer
     //(only when the package's mover is on: otherwise the array is not sized to the package)
     string im=_mf6.GetVarAddress(_mname,_extOther[j],"IMOVER"),mv=_mf6.GetVarAddress(_mname,_extOther[j],"SIMTOMVR");
     int *pim=_mf6.HasVar(im)?_mf6.GetIntPtr(im):NULL;
-    if ((pim!=NULL) && (*pim!=0) && _mf6.HasVar(mv) && (_mf6.GetVarSize(mv)>=*nb)){double *sm=_mf6.GetDoublePtr(mv); if (sm!=NULL){for (int i=0;i<*nb;i++){_Qother+=sm[i]*_qf;}}}
+    if ((pim!=NULL) && (*pim!=0) && _mf6.HasVar(mv) && (_mf6.GetVarSize(mv)>=*nb)){double *sm=_mf6.GetDoublePtr(mv); if (sm!=NULL){for (int i=0;i<*nb;i++){_Qother+=sm[i]*_qf; _QabsOther+=fabs(sm[i]*_qf);}}}
   }
 }
 

@@ -78,7 +78,8 @@ namespace gwsz
     double want=-dV;
     double got=Drain(L,phi,want);
     double rest=want-got;
-    for (size_t j=0;(j<L.size()) && (rest>0.0);j++){ //only round-off should reach here: take it below field capacity
+    for (size_t j=0;(j<L.size()) && (rest>0.0);j++){ //water below field capacity: the booked flows (the exchange MODFLOW took, a
+                                                       //negative rejected recharge handed back to the soil zone) take it too
       double r=std::min(std::max(phi[j],0.0),rest);
       phi[j]-=r; rest-=r;
     }
@@ -233,6 +234,13 @@ namespace gwsz
       if (ds<=0.0){s+=(h>zbs[i])?1.0:0.0;}
       else {s+=SmoothStep((h-zbs[i])/ds);}
     }
+    return s/(double)zbs.size();
+  }
+  double SatFractionSlope(const double h,const std::vector<double> &zbs,const double ds)
+  {
+    if (zbs.empty() || (ds<=0.0)){return 0.0;}
+    double s=0.0;
+    for (size_t i=0;i<zbs.size();i++){const double x=(h-zbs[i])/ds; if ((x>0.0) && (x<1.0)){s+=6.0*x*(1.0-x)/ds;}}
     return s/(double)zbs.size();
   }
   //takes a loss dd>0 [mm over the HRU] from layer j: by area (each column alike, limited to its water) or from free water

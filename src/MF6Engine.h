@@ -65,7 +65,10 @@ public:
   /// without afterIter the loop is the plain MODFLOW loop.
   bool   SolveTimeStep   (int maxiter,bool &converged,int &niter,
                           double *dvclose=NULL,double relaxedTol=0.0,int relaxedAfter=0,bool *relaxed=NULL,
-                          const std::function<bool(int,bool)> &afterIter=std::function<bool(int,bool)>());
+                          const std::function<bool(int,bool)> &afterIter=std::function<bool(int,bool)>(),
+                          const std::function<void(int)> &beforeSolve=std::function<void(int)>()); ///< beforeSolve(it): before every solve
+                          ///< (it may change MODFLOW's iterate; KeepColumnsWet). A MODFLOW STOP inside a call is reported by an exit
+                          ///< handler ("MODFLOW 6 stopped the run during <call>: <mfsim.lst error report>")
   bool   FinalizeTimeStep();
   void   Finalize        ();
 

@@ -202,22 +202,15 @@ double CGroundwaterModel::VZBackRate(const int e,const double h) const
 {
   if ((_vzMode<=0) || (e<0) || (e+1>=(int)_vzOff.size())){return 0.0;}
   double r=0.0;
+  const bool expl=(_szMaxIter==0) || (SZFreezeAt()<1);
   for (int i=_vzOff[e];i<_vzOff[e+1];i++){
-    if (!_vzcUse[i] || !(_vzcRq[i]>0.0)){continue;}
-    const double F=VZClassF(e,i,h),F0=_vzcF0[i];                                //(one class: the link's F at h; at the connection head = _linkF)
+    if (!_vzcUse[i]){continue;}
+    const double F0=_vzcF0[i];
+    if (F0>=1.0-1e-12){r+=max(_vzcOut[i],0.0)/_szTstep; continue;}             //(all saturated at the start: all of it, also in explicit coupling)
+    if (expl || !(_vzcRq[i]>0.0)){continue;}                                     //(explicit coupling: no head to follow)
+    const double F=VZClassF(e,i,h);                                              //(one class: the link's F at h; at the connection head = _linkF)
     r+=_vzcRq[i]*min(max(F-F0,0.0),1.0-F0);
   }
-  return r;
-}
-/// \brief the head-dependent rejected recharge of SZX entry e at head h [m3/d]: depth classes without a column reject their
-///  share with their own fraction (R_l a_c F_c(h)), and rule (i) (VZBackRate); a link without columns rejects R_l F(h)
-double CGroundwaterModel::SZRejRate(const int e,const double h) const
-{
-  if ((_vzMode<=0) || (e+1>=(int)_vzOff.size()) || (e>=(int)_vzUse.size()) || !_vzUse[e]){
-    return ((e<(int)_vzRl.size())?_vzRl[e]:0.0)*gwsz::SatFraction(h,_szxCell[e].zbs,_szxCell[e].ds);
-  }
-  double r=VZBackRate(e,h);
-  for (int i=_vzOff[e];i<_vzOff[e+1];i++){if (!_vzcUse[i]){r+=_vzRl[e]*_vzcA[i]*VZClassF(e,i,h);}}
   return r;
 }
 
@@ -345,6 +338,8 @@ void CGroundwaterModel::VZStep(const double &tstep)
       const int nK=_vzOff[e+1]-_vzOff[e];
       _vzUse[e]=0; _vzQ[e]=0.0; _vzAbsQ[e]=0.0; _vzRejV[e]=0.0; _vzInV[e]=0.0; _vzCapV[e]=0.0; _vzUp[e]=0.0; _vzUpA[e]=0.0; _vzFp[e]=0.0;
       _vzAbsN[e]=0.0; _vzQN[e]=0.0; _vzBackW[e]=0.0; _vzPass[e]=0.0;
+      if (_vzUsed.size()!=_szxLink.size()){_vzUsed.assign(_szxLink.size(),0.0);}
+      _vzUsed[e]=0.0;
       for (int j=0;j<n;j++){_vzCapL[e*n+j]=0.0; capLV[j]=0.0; capQL[j]=0.0;}
       for (int ii=_vzOff[e];ii<_vzOff[e+1];ii++){_vzcUse[ii]=0; _vzcF0[ii]=0.0; _vzcOut[ii]=0.0; _vzcRq[ii]=0.0;}
       if (!(a>0.0) || _colCHDTop[L.ic]){continue;}                              //(a specified head this step: its recharge goes there)
@@ -369,7 +364,10 @@ void CGroundwaterModel::VZStep(const double &tstep)
           //in the next steps (with consistent parameters eps <= Sy and this does not apply)
           const double zt=(zb-h<=Lmin)?zb:max(h,zlow);                           //(not below the aquifer's bottom: a dry column's head can be)
           if (zt>col.zbot+1e-9){ //a rising water table (to the base: the column goes)
-            const double z0=col.zbot,capS=gwvz::SyRise(S,z0,zt);                     //[m] Sy dh across the layers the rise crosses
+            const double z0=col.zbot;
+            const int tn=TopNode(L.ic); const double ztc=CellTop(tn/_ncpl,L.ic);
+            const double capS=min(gwvz::SyRise(S,z0,zt),gwvz::SyRise(S,h,min(zb,ztc))); //[m] Sy dh across the layers the rise crosses, and the
+                                                                                 // room the top cell has left above the water table
             gwvz::vz_column t=col; const double abT=gwvz::MoveBottom(t,S,zt,_vzN);
             const double capU=_szxUpCHD[e]?1e300:(SZUpCap(e,tstep)-used)*tstep/Ac; //[m] a deficit below it (a column dried by evaporation or
             if ((zt<zb) && (abT>capS*(1.0+1e-9))){                               // capillary rise) is filled out of the source cell, at most what
@@ -428,10 +426,18 @@ void CGroundwaterModel::VZStep(const double &tstep)
         //inflow: the unsaturated share of the class's recharge (the saturated share is rejected as before, with this
         //saturated fraction for the whole step)
         const double F=(nK==1)?_linkF[li]:VZClassF(e,ii,_szxHc[e]);
-        double P=_szRchV[k]*share*ac*(1.0-F);                                    //[m3] over the step
-        if (P<0.0){ //a negative recharge (a process taking water out of GROUNDWATER) never goes through the column (it would take
-          //water out of the column's top, booked as negative capillary rise): passed on to the cell, out of its source's water
-          _vzPass[e]+=P/tstep; used-=P/tstep; P=0.0;                             //
+        const bool negP=(_szRchV[k]<0.0);                                        //(a negative recharge is not split by F)
+        double P=negP?_szRchV[k]*share*ac:_szRchV[k]*share*ac*(1.0-F);           //[m3] over the step
+        if (negP){ //a negative recharge (a process taking water out of GROUNDWATER) never goes through the column (it would take
+          //water out of the column's top, booked as negative capillary rise): passed on to the cell, out of its source's water,
+          //at most what the top cell can still give this step (counted in used/_vzUsed, so the capillary rise and the repayment
+          //do not draw the same water again); the rest is taken back out of the soil zone as a negative rejected recharge
+          //(and e1.1)
+          double capN=0.0;
+          if (_szxUpCHD[e] && (_szxUp[e]==TopNode(L.ic))){capN=1e300;}
+          else if (_szxUp[e]==TopNode(L.ic)){capN=max(SZUpCap(e,tstep)-used,0.0);}
+          const double passV=max(P,-capN*tstep);                                 //[m3]
+          _vzPass[e]+=passV/tstep; used-=passV/tstep; _vzRejV[e]+=P-passV; P=0.0;
         }
         _vzcF0[ii]=F; _vzcUse[ii]=1; _vzFp[e]+=ac*F; _vzInV[e]+=P;
         //capillary rise into the soil zone (SZRiseLayers, as from the water table where there is no column): the steady
@@ -466,7 +472,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
           if (rose && (nK>1)){for (int j=0;j<n;j++){QL[j]=QL[j]/Qc;}}             //(layer fractions of this class's rise)
           (void)Qc;
         }
-        double rej=0.0; gwvz::vz_step_info inf;
+        double rej=0.0,rejX=0.0; gwvz::vz_step_info inf;                         //(rejX [m3]: the negative rejected recharge)
         const bool noUp=(_szxUp[e]<0);                                          //(no cell holds any water table: no upward
         double qb=VZColStep(col,S,tstep,P/(Ac*tstep)-R,rej,&inf,noUp);          // flow, which MODFLOW could not supply)
         if (qb<0.0){ //upflow through the bottom: out of the cell holding the water table, scaled down as it nears drying and at
@@ -490,6 +496,15 @@ void CGroundwaterModel::VZStep(const double &tstep)
             const double t2=min(need,cv/Ac);
             if (t2>0.0){cv-=t2*Ac; _vzCapVol-=t2*Ac; need-=t2; qb+=t2/tstep;}
           }
+          if ((need>0.0) && !noUp && !_szxUpCHD[e] && (_szxUp[e]==TopNode(L.ic))){ //then the top cell as far as it can still give
+            //(its limit less what the link's columns took, this upflow's allowance included; topLeft)
+            const double topLeft=max(SZUpCap(e,tstep)-used-allow*Ac,0.0)*tstep/Ac; //[m]
+            need-=min(need,topLeft);                                             //(stays in qb: upflow out of the top cell)
+          }
+          if (need>0.0){ //the rest handed back to the soil zone as a negative rejected recharge (taken out by SZApply, possibly
+            //booked as not held), so that the cell never gives more than it can
+            rejX=need*Ac; _vzRejV[e]-=rejX; qb+=need/tstep; need=0.0;
+          }
         }
         _vzSub+=inf.substeps; _vzNewton+=inf.newton;
         if (nK==1){
@@ -507,9 +522,10 @@ void CGroundwaterModel::VZStep(const double &tstep)
         }                                                                        // otherwise, also a remainder without a source cell, the top cell's recharge)
         _vzcOut[ii]=(qV+absQ)*tstep;
         _vzcRq[ii]=(F<1.0)?max(qV+absQ,0.0)/(1.0-F):0.0;                         //[m3/d] the outputs per unit unsaturated share (rule (i))
-        _vzInVol+=P-rej*Ac; _vzOutVol+=(qV+absQ)*tstep;                         //(inflow the column took; its rejection is in the rejected recharge)
+        _vzInVol+=P-rej*Ac+rejX; _vzOutVol+=(qV+absQ)*tstep;                         //(inflow the column took; its rejection is in the rejected recharge)
       }
       if ((nK>1) && (capV>0.0)){_vzCapV[e]=capV; for (int j=0;j<n;j++){_vzCapL[e*n+j]=capLV[j]/capV;}}
+      _vzUsed[e]=used;                                                           //(what the link's columns took from the source cell: SZNegCaps)
     }
     for (size_t q=0;q<pend.size();q++){_vzOutVol+=pend[q];}
   }
