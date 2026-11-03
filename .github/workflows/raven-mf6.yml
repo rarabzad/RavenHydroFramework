@@ -2,8 +2,8 @@ name: Raven with MODFLOW 6
 
 # Builds Raven together with the MODFLOW 6 library (cmake/RavenMF6.cmake, -DRAVEN_MF6=SOURCE: MODFLOW 6.8.1 from its
 # pinned release tag with MODFLOW's meson build), installs it, packs it with CPack, and checks that the installed folder
-# still runs after it is moved: Raven starts and the library beside it loads, with its Fortran runtime, and reports
-# MODFLOW 6.8.1. Linux and macOS use the Ninja generator; Windows uses the default Visual Studio generator, whose own
+# still runs after it is moved: Raven runs a tiny coupled model with the library beside it (MODFLOW 6.8.1), and the
+# Fortran runtime that library loads is the copy installed beside it (cmake/raven_mf6_install_check.py). Linux and macOS use the Ninja generator; Windows uses the default Visual Studio generator, whose own
 # Fortran check ignores FC, so meson gets gfortran from FC (set by setup-fortran) through RavenMF6.cmake.
 
 on:
@@ -14,12 +14,14 @@ on:
       - 'CMakeLists.txt'
       - 'cmake/RavenMF6*.cmake'
       - 'src/MF6Engine.*'
+      - 'cmake/raven_mf6_install_check.py'
       - '.github/workflows/raven-mf6.yml'
   pull_request:
     paths:
       - 'CMakeLists.txt'
       - 'cmake/RavenMF6*.cmake'
       - 'src/MF6Engine.*'
+      - 'cmake/raven_mf6_install_check.py'
       - '.github/workflows/raven-mf6.yml'
   workflow_dispatch:
 
@@ -84,17 +86,10 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then exe="$bin/Raven"; lib="$bin/libmf6.dylib";
           else exe="$bin/Raven"; lib="$bin/libmf6.so"; fi
           "$exe" -v
-          python - "$lib" <<'EOF'
-          import ctypes, os, sys
-          if hasattr(os, 'add_dll_directory'):
-              os.add_dll_directory(os.path.dirname(sys.argv[1]))
-          lib = ctypes.CDLL(sys.argv[1])
-          buf = ctypes.create_string_buffer(512)
-          lib.get_version(buf)
-          v = buf.value.decode().strip()
-          print('libmf6 loads from the moved install; get_version:', v)
-          sys.exit(0 if v.startswith('6.8.1') else 1)
-          EOF
+          # Raven itself loads the library on a tiny coupled model (RAVEN_MF6_LIB unset), and the Fortran runtime it
+          # loads must be the copy beside it (Linux: ldd; macOS: DYLD_PRINT_LIBRARIES; Windows: the PATH folders that hold
+          # the compiler's libgfortran are hidden from the run);
+          python cmake/raven_mf6_install_check.py "$bin" 6.8.1
 
       - name: Upload package
         uses: actions/upload-artifact@v4

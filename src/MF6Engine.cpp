@@ -162,8 +162,15 @@ bool CMF6Engine::Load(const string &libpath)
 {
   _lasterr="";
 #ifdef _WIN32
-  _lib=(void*)LoadLibraryA(libpath.c_str());
-  if (_lib==NULL){_lasterr="cannot load MODFLOW 6 library "+libpath;return false;}
+  //a library given with a folder: its own folder is searched first for the DLLs it needs (a gfortran-built libmf6.dll with
+  //libgfortran-5.dll etc. beside it), as for an application; LOAD_WITH_ALTERED_SEARCH_PATH needs an absolute path
+  if (libpath.find_first_of("\\/:")!=string::npos){
+    char full[4096]; DWORD n=GetFullPathNameA(libpath.c_str(),(DWORD)sizeof(full),full,NULL);
+    _lib=(void*)LoadLibraryExA(((n>0) && (n<sizeof(full)))?full:libpath.c_str(),NULL,LOAD_WITH_ALTERED_SEARCH_PATH);
+  }
+  else {_lib=(void*)LoadLibraryA(libpath.c_str());} //(a bare name: the standard search)
+  if (_lib==NULL){_lasterr="cannot load MODFLOW 6 library "+libpath+" (Windows error "+to_string((unsigned long)::GetLastError())+
+                           "; 126: the library or a DLL it needs was not found)";return false;}
 #else
   _lib=dlopen(libpath.c_str(),RTLD_NOW|RTLD_LOCAL);
   if (_lib==NULL){_lasterr="cannot load MODFLOW 6 library "+libpath+": "+string(dlerror());return false;}

@@ -40,7 +40,7 @@ static void ReadAttributeTable(CParser *p,const char *endtag,vector<string> &att
     if (!strcmp(s[0],endtag)){break;}
     if (!strcmp(s[0],":Units")){continue;}
     if (!strcmp(s[0],":Attributes")){attrs.clear(); for (int i=1;i<Len;i++){attrs.push_back(s[i]);} continue;}
-    ExitGracefullyIf(Len!=(int)attrs.size()+1,(string("ParseGWFile: wrong number of values in ")+endtag+" table").c_str(),BAD_DATA);
+    ExitGracefullyIf(Len!=(int)attrs.size()+1,(string("ParseGWFile: wrong number of values in a row of the :")+(endtag+4)+" table (one ID and one value per :Attributes entry)").c_str(),BAD_DATA);
     vector<string> r; for (int i=0;i<Len;i++){r.push_back(s[i]);} rows.push_back(r);
   }
 }
@@ -84,7 +84,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
 
   ifstream RVG;
   RVG.open(Options.rvg_filename.c_str());
-  if (RVG.fail()){cout<<"ERROR opening *.rvg file: "<<Options.rvg_filename<<endl; return false;}
+  if (RVG.fail()){ExitGracefully(("Cannot find or read .rvg file "+Options.rvg_filename).c_str(),BAD_DATA); return false;}
   CParser *p=new CParser(RVG,Options.rvg_filename,line);
 
   if (Options.noisy){
@@ -358,7 +358,9 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
         for (int i=3;i+1<Len;i+=2){
           if      (!strcmp(s[i],"HEAD"       )){B.head=s_to_d(s[i+1]); hasHead=true;}
           else if (!strcmp(s[i],"CONDUCTANCE")){B.cond=s_to_d(s[i+1]);}
-          else if (!strcmp(s[i],"LAYERS"     )){B.allLayers=strcmp(s[i+1],"TOP")!=0;}
+          else if (!strcmp(s[i],"LAYERS"     )){
+            ExitGracefullyIf(strcmp(s[i+1],"TOP") && strcmp(s[i+1],"ALL"),("ParseGWFile: boundary "+B.name+": LAYERS must be ALL or TOP, not "+string(s[i+1])).c_str(),BAD_DATA);
+            B.allLayers=strcmp(s[i+1],"TOP")!=0;}
           else {WriteWarning("ParseGWFile: unknown boundary keyword "+string(s[i]),Options.noisy);}
         }
         ExitGracefullyIf(!hasHead,("ParseGWFile: boundary "+B.name+" needs a HEAD value").c_str(),BAD_DATA);
@@ -426,5 +428,6 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
   if ((szOpts!="") && !pGW->UsesPhysicalSoilZone()){
     WriteWarning("ParseGWFile:"+szOpts+" ignored: these apply only with :SoilZone PHYSICAL",Options.noisy);
   }
+  else if (szOpts!=""){pGW->WarnIgnoredSoilZoneOptions(szOpts,Options.noisy);}
   return true;
 }

@@ -574,6 +574,7 @@ private:/*----------------------------------------------------*/
   void ComputeStressFlows();
   vector<int> SelectColumns(const string &file) const;
   bool   _gridTypeGiven;
+  string _extOnly;        ///< commands given that apply only to existing models (:MF6Model, :MF6StartDate, :KeepPackages, :SeepageToRaven; checked with a generated model)
   string _genOnly;        ///< commands given that apply only to generated models (checked with an existing model)  ///< :GridType or :GridFile was written in the .rvg (existing models set the grid type internally)
   vector<double> _nodeTop; ///< [m] top of every active cell, from MODFLOW (existing models, where cells above may be inactive)
   double CellTop(const int l,const int ic) const {
@@ -635,14 +636,14 @@ public:/*-------------------------------------------------------*/
   void   ClearHotstartData    (); ///< before an ensemble member's .rvc is read: forget the previous member's values
   void   SetGridType          (const int t)            {_gridType=t; _gridTypeGiven=true;}
   void   SetMF6Simulation     (const string &f)        {_extSim=f;}
-  void   SetMF6Model          (const string &m)        {_extModel=m;}
+  void   SetMF6Model          (const string &m)        {_extModel=m; _extOnly+=" :MF6Model";}
   void   SetMF6GridFile       (const string &f,const string &id) {_extGridFile=f; _extGridID=id;}
-  void   SetMF6StartDate      (const string &d)        {_extStart=d;}
+  void   SetMF6StartDate      (const string &d)        {_extStart=d; _extOnly+=" :MF6StartDate";}
   bool   SetMF6CRS            (const string &spec,string &err) {return _extCRS.Parse(spec,err);}
   void   AddTakeOver          (const string &p)        {string u=p; for (size_t i=0;i<u.size();i++){u[i]=(char)toupper((unsigned char)u[i]);} _takeOver.push_back(u);}
-  void   AddKeepPackage       (const string &p)        {string u=p; for (size_t i=0;i<u.size();i++){u[i]=(char)toupper((unsigned char)u[i]);} _keepPkgs.push_back(u);}
+  void   AddKeepPackage       (const string &p)        {string u=p; for (size_t i=0;i<u.size();i++){u[i]=(char)toupper((unsigned char)u[i]);} _keepPkgs.push_back(u); if (_extOnly.find(" :KeepPackages")==string::npos){_extOnly+=" :KeepPackages";}}
   void   SetStreamPackage     (const string &p,const string &map,const string &aux) {_streamPkg=p; _streamMap=map; _streamAux=aux;}
-  void   SetExtSeepage        (const bool on)          {_extSeepage=on;}
+  void   SetExtSeepage        (const bool on)          {_extSeepage=on; _extOnly+=" :SeepageToRaven";}
   void   AddOverlapWeight     (const long long hru,const int cell,const double w) {gw_ow o; o.hru=hru; o.cell=cell; o.w=w; _owTable.push_back(o);}
   bool   IsExternal           () const                 {return _extSim!="";}
   double MF6CellArea          (const int ic) const     {return IsExternal()?_extArea[ic]:_grid.area[ic];} ///< [m2] as MODFLOW measures it
@@ -668,6 +669,7 @@ public:/*-------------------------------------------------------*/
   void   SetHotstartVadose    (const long long hru,const int cell,const vector<double> &v){if (cell<=0){return;} _hotVz[hru][cell]=v;}
   void   SetHotstartVadoseClass(const long long hru,const int cell,const int cls,const vector<double> &v){if ((cell<=0) || (cls<=0)){return;} _hotVzc[hru][cell][cls]=v;}
   bool   UsesPhysicalSoilZone () const {return _szMode==1;}
+  void   WarnIgnoredSoilZoneOptions(const string &given,const bool noisy) const;
   void   NoteSoilClassWithoutKsat(const void *soil,const string &tag){_szNoKsat[soil]=tag;}
   void   SetHotstartHeads     (const int nlay,const int nrow,const int ncol,const vector<double> &h)
                               {_hotDims[0]=nlay;_hotDims[1]=nrow;_hotDims[2]=ncol;_hotHeads=h;}

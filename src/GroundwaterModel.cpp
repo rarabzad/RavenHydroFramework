@@ -421,8 +421,9 @@ bool CGroundwaterModel::SetProfileParameter(const string &profile,const string &
   else if (param=="SOIL_ZONE_DEPTH"      ){p.soil_zone_depth=value;}
   else if (param=="EXTINCTION_DEPTH"     ){p.extinction_depth=value;}
   else if (param=="SEEPAGE_SMOOTHING_DEPTH"){p.seep_smooth_depth=value;} //checked at start-up (may not be negative)
-  else {
-    WriteWarning("CGroundwaterModel: unrecognized aquifer profile parameter "+param+" (ignored)",false);
+  else { //(as for :AquiferClasses: a misspelt parameter would silently keep its default)
+    ExitGracefully(("CGroundwaterModel: unknown aquifer profile parameter "+param+" in :AquiferProfileParameters (INITIAL_HEAD_DEPTH, DEFAULT_BEDROCK_DEPTH, "
+      "RIVERBED_K, RIVERBED_THICKNESS, SEEPAGE_LEAKANCE, RECHARGE_DELAY, SOIL_ZONE_DEPTH, EXTINCTION_DEPTH, SEEPAGE_SMOOTHING_DEPTH)").c_str(),BAD_DATA);
   }
   return true;
 }
@@ -713,6 +714,8 @@ void CGroundwaterModel::ValidateInputs() const
     }
     ExitGracefullyIf((_extGridFile!="") || _extCRS.IsSet() || (_owTable.size()>0) || (_takeOver.size()>0) || (_streamPkg!=""),
       "CGroundwaterModel: :MF6CRS, :MF6GridFile, :OverlapWeights, :RavenTakesOver and :StreamPackage need :MF6Simulation",BAD_DATA);
+    ExitGracefullyIf(_extOnly!="",("CGroundwaterModel:"+_extOnly+" apply only to an existing model (:MF6Simulation); Raven builds this model, "
+      "with its seepage drain and without MODFLOW packages of its own: remove them").c_str(),BAD_DATA);
   }
   if (!IsExternal()){ //(an existing model's grid type is set internally when its cells are linked)
     ExitGracefullyIf((_gridType==GWGRID_FILE) && (_gridFile==""),"CGroundwaterModel: :GridType FILE needs :GridFile",BAD_DATA);
@@ -735,6 +738,33 @@ void CGroundwaterModel::ValidateInputs() const
   ExitGracefullyIf(_headSaveFreq<1,"CGroundwaterModel: :HeadSaveFrequency must be at least 1",BAD_DATA);
   ExitGracefullyIf(_steadyInit && !(_ssRecharge>=0),"CGroundwaterModel: :GWInitialization STEADY_STATE recharge may not be negative",BAD_DATA);
   for (size_t x=0;x<_aSWX.size();x++){ExitGracefullyIf(!(_aSWX[x].leakance>0),("CGroundwaterModel: :SurfaceWaterExchange "+_aSWX[x].group+": LEAKANCE must be positive").c_str(),BAD_DATA);}
+  //a time series of the .rvt file that names no well or boundary would be dropped silently (a typo would change the forcing)
+  for (map<long long,CTimeSeries*>::const_iterator it=_wellTS.begin();it!=_wellTS.end();it++){
+    bool used=false; string ids;
+    for (size_t w=0;w<_aWells.size();w++){if (_aWells[w].id==it->first){used=true;} ids+=((w>0)?", ":"")+to_string(_aWells[w].id);}
+    ExitGracefullyIf(!used,("CGroundwaterModel: :WellFlowRate "+to_string(it->first)+" in the .rvt file names no well of :Wells in the .rvg file ("+
+      ((_aWells.size()>0)?("well IDs: "+ids):string("no wells"))+")").c_str(),BAD_DATA);
+  }
+  for (map<string,CTimeSeries*>::const_iterator it=_headTS.begin();it!=_headTS.end();it++){
+    bool used=false; string names;
+    for (size_t b=0;b<_aBounds.size();b++){if (_aBounds[b].name==it->first){used=true;} names+=((b>0)?", ":"")+_aBounds[b].name;}
+    ExitGracefullyIf(!used,("CGroundwaterModel: :BoundaryHead "+it->first+" in the .rvt file names no :GeneralHeadBoundary or :SpecifiedHeadBoundary of the .rvg file ("+
+      ((_aBounds.size()>0)?("boundaries: "+names):string("no boundaries"))+")").c_str(),BAD_DATA);
+  }
+}
+//////////////////////////////////////////////////////////////////
+/// \brief warns once, after the .rvg file is read, for soil-zone options given where they do nothing (given: the options
+///  written, as " :Name ..."); :SoilZone PHYSICAL is on
+//
+void CGroundwaterModel::WarnIgnoredSoilZoneOptions(const string &given,const bool noisy) const
+{
+  string vz="";
+  if ((_vzMode==0) && (given.find(" :SoilZoneVadoseClasses")!=string::npos)){vz+=" :SoilZoneVadoseClasses";}
+  if ((_vzMode==0) && (given.find(" :SoilZoneVadoseInitialFlux")!=string::npos)){vz+=" :SoilZoneVadoseInitialFlux";}
+  if (vz!=""){WriteWarning("ParseGWFile:"+vz+" ignored: these apply only to unsaturated columns (:SoilZoneVadose RICHARDS, KINEMATIC or LAG); :SoilZoneVadose is NONE",noisy);}
+  if (!IsExternal() && (given.find(" :SoilZoneAquiferClass")!=string::npos)){
+    WriteWarning("ParseGWFile: :SoilZoneAquiferClass ignored: it applies only to an existing model (:MF6Simulation); the unsaturated columns of a model Raven builds use the aquifer classes of its profiles",noisy);
+  }
 }
 void CGroundwaterModel::CheckProcesses()
 {

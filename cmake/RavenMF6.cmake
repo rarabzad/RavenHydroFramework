@@ -14,9 +14,18 @@
 #
 # Default (RAVEN_MF6 empty, re-chosen at every configure; the cache keeps only a value you give): an offline option names
 # its mode (RAVEN_MF6_PATH -> PATH, RAVEN_MF6_ZIP -> PREBUILT, RAVEN_MF6_SOURCE_DIR/SOURCE_URL -> SOURCE); otherwise SOURCE
-# when the source tools are found, else PREBUILT when MODFLOW releases a library for this platform, else OFF with a
-# warning (-DRAVEN_MF6=OFF silences it). A default that cannot be completed (download failed) falls back to OFF with a
-# warning; an explicit (or inferred) mode that cannot be completed stops.
+# when the source tools are found AND the MODFLOW 6 git repository answers now (git ls-remote of the release tag, 60 s;
+# not needed when an earlier configure's clone is already at the pinned commit), else PREBUILT when MODFLOW releases a
+# library for this platform, else OFF with a warning (-DRAVEN_MF6=OFF silences it). Every download of the default is
+# thus made or tested at configure time: a default that cannot be completed (no network: repository not reachable,
+# release zip not downloadable) falls back (SOURCE -> PREBUILT -> OFF) with a warning, and the build itself needs no
+# network beyond the clone the configure just reached. An explicit (or inferred) mode that cannot be completed stops
+# (an explicit SOURCE clones at build time and stops there when the clone fails).
+#
+# MODFLOW version: a library older than MF6_MIN_VERSION of src/MF6Engine.h (6.5.0; Raven stops every coupled run with
+# it) is rejected at configure time when its version is known (RAVEN_MF6_VERSION for a clone or download, the meson.build
+# of a zip or source folder, the name of a source archive); another version than the tested one gives a warning. A
+# PATH library's version is known only at run time (Raven's own guard).
 #
 # Files: RavenMF6Verify.cmake (git clone + pinned-commit check, build time), RavenMF6Copy.cmake (copies the library and
 # writes libmf6_version.txt next to Raven, build time), RavenMF6Bundle.cmake (install time: the Fortran runtime the
@@ -77,7 +86,8 @@ macro(_rmf6_report_ignored mode)
 endmacro()
 
 # A plain -DRAVEN_MF6=OFF leaves the build exactly as without this module: no cache entries, targets, RPATH or install
-# rules are added (the compile and link commands are those of Raven before the MODFLOW 6 build integration).
+# rules are added (the compile and link commands are those of Raven before the MODFLOW 6 build integration; the default
+# CMAKE_BUILD_TYPE Release of CMakeLists.txt, for single-configuration generators, applies to every mode).
 if(_rmf6_given STREQUAL "OFF")
   _rmf6_report_ignored(OFF)
   message(STATUS "RAVEN_MF6=OFF: Raven is built without the MODFLOW 6 library (a coupled model then needs one at run time:"
@@ -142,7 +152,18 @@ endif()
 # ---------------------------------------------------------------------------------------------------------------------
 # stop (explicit mode) or fall back to OFF with a warning (default)
 macro(_rmf6_giveup)
-  string(CONCAT _rmf6_msg ${ARGV})               # the message may come in several quoted pieces
+  # the message may come in up to four quoted pieces, joined piece by piece: a ';' inside the text is kept (string(CONCAT
+  # ${ARGV}) split the text at every ';' and dropped it)
+  set(_rmf6_msg "${ARGV0}")
+  if(${ARGC} GREATER 1)
+    string(APPEND _rmf6_msg "${ARGV1}")
+  endif()
+  if(${ARGC} GREATER 2)
+    string(APPEND _rmf6_msg "${ARGV2}")
+  endif()
+  if(${ARGC} GREATER 3)
+    string(APPEND _rmf6_msg "${ARGV3}")
+  endif()
   if(_rmf6_explicit)
     message(FATAL_ERROR "RAVEN_MF6: ${_rmf6_msg}\nChoose another way to get the library (-DRAVEN_MF6=SOURCE, PREBUILT or PATH "
                         "with -DRAVEN_MF6_PATH=/path/to/${RAVEN_MF6_LIBNAME}), or build Raven without it: -DRAVEN_MF6=OFF")
@@ -327,6 +348,40 @@ function(_rmf6_source_tools ok why)
   set(${why} "${_w}" PARENT_SCOPE)
 endfunction()
 
+# the default SOURCE clones at build time: is the repository reachable now? (ok: TRUE/FALSE; why: the reason). An earlier
+# clone already at the pinned commit needs no network (RavenMF6Verify.cmake keeps it).
+function(_rmf6_git_reachable ok why)
+  set(_dir "${_rmf6_work}/source/src/mf6_source")
+  set(_pin "${RAVEN_MF6_PINNED_COMMIT_${RAVEN_MF6_VERSION}}")
+  if(_pin AND EXISTS "${_dir}/.git")
+    execute_process(COMMAND "${_rmf6_git}" -C "${_dir}" rev-parse HEAD OUTPUT_VARIABLE _h RESULT_VARIABLE _r
+                    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET TIMEOUT 60)
+    if(_r EQUAL 0 AND _h STREQUAL _pin)
+      set(${ok} TRUE PARENT_SCOPE)
+      set(${why} "the clone of an earlier configure is at the pinned commit" PARENT_SCOPE)
+      return()
+    endif()
+  endif()
+  execute_process(COMMAND "${CMAKE_COMMAND}" -E env GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=
+                          "${_rmf6_git}" ls-remote --exit-code "${RAVEN_MF6_GIT_URL}" "refs/tags/${RAVEN_MF6_VERSION}"
+                  OUTPUT_QUIET ERROR_VARIABLE _e RESULT_VARIABLE _r TIMEOUT 60)
+  if(_r EQUAL 0)
+    set(${ok} TRUE PARENT_SCOPE)
+    set(${why} "" PARENT_SCOPE)
+  else()
+    string(STRIP "${_e}" _e)
+    string(REGEX REPLACE "[\r\n]+" " " _e "${_e}")
+    string(SUBSTRING "${_e}" 0 200 _e)
+    if(_r EQUAL 2)
+      set(_e "no tag ${RAVEN_MF6_VERSION}")
+    elseif(NOT _r MATCHES "^[0-9]+$")
+      set(_e "${_r}${_e}")                           # (TIMEOUT: "Process terminated due to timeout")
+    endif()
+    set(${ok} FALSE PARENT_SCOPE)
+    set(${why} "the MODFLOW 6 git repository ${RAVEN_MF6_GIT_URL} cannot be reached for tag ${RAVEN_MF6_VERSION} (${_e})" PARENT_SCOPE)
+  endif()
+endfunction()
+
 # ---------------------------------------------------------------------------------------------------------------------
 # 3. the default
 # ---------------------------------------------------------------------------------------------------------------------
@@ -334,8 +389,18 @@ _rmf6_release_suffix("${RAVEN_MF6_VERSION}" _rmf6_suffix _rmf6_nozip_why)
 if(NOT RAVEN_MF6_MODE)
   _rmf6_source_tools(_rmf6_tools_ok _rmf6_tools_why)
   if(_rmf6_tools_ok)
+    _rmf6_git_reachable(_rmf6_git_ok _rmf6_git_why)
+    if(NOT _rmf6_git_ok)                           # offline: fall back now, not at build time
+      set(_rmf6_tools_ok FALSE)
+      set(_rmf6_tools_why "${_rmf6_git_why}")
+      message(WARNING "RAVEN_MF6: the default cannot build MODFLOW 6 from source: ${_rmf6_git_why}. "
+                      "Falling back to the release library (PREBUILT) where there is one, else to OFF. Offline: "
+                      "-DRAVEN_MF6_ZIP=/path/to/mf${RAVEN_MF6_VERSION}_<platform>.zip or -DRAVEN_MF6_SOURCE_DIR=...")
+    endif()
+  endif()
+  if(_rmf6_tools_ok)
     set(RAVEN_MF6_MODE SOURCE)
-    set(_rmf6_how "SOURCE (default: Fortran compiler, meson, ninja and git found)")
+    set(_rmf6_how "SOURCE (default: Fortran compiler, meson, ninja and git found, ${RAVEN_MF6_GIT_URL} reachable)")
   elseif(_rmf6_suffix)
     set(RAVEN_MF6_MODE PREBUILT)
     set(_rmf6_how "PREBUILT (default; not SOURCE: ${_rmf6_tools_why})")
@@ -346,6 +411,38 @@ if(NOT RAVEN_MF6_MODE)
 endif()
 _rmf6_report_ignored(${RAVEN_MF6_MODE})
 message(STATUS "RAVEN_MF6: ${_rmf6_how}")
+
+# the version floor of Raven's run-time guard (MF6_MIN_VERSION in src/MF6Engine.h; one place for both)
+set(RAVEN_MF6_MIN_VERSION "")
+if(EXISTS "${_RMF6_DIR}/../src/MF6Engine.h")
+  file(STRINGS "${_RMF6_DIR}/../src/MF6Engine.h" _mv REGEX "^#define[ \t]+MF6_MIN_VERSION[ \t]+\"")
+  if(_mv MATCHES "\"([0-9.]+)\"")
+    set(RAVEN_MF6_MIN_VERSION "${CMAKE_MATCH_1}")
+  endif()
+endif()
+if(NOT RAVEN_MF6_MIN_VERSION)
+  set(RAVEN_MF6_MIN_VERSION 6.5.0)
+endif()
+# a library older than the floor: every coupled run would stop at Raven's guard, so the configure stops (any mode)
+macro(_rmf6_check_version v what)
+  if(NOT "${v}" STREQUAL "" AND "${v}" VERSION_LESS RAVEN_MF6_MIN_VERSION)
+    message(FATAL_ERROR "RAVEN_MF6: ${what} is MODFLOW ${v}, older than ${RAVEN_MF6_MIN_VERSION}, the oldest version Raven's "
+                        "coupling accepts (every coupled run would stop with it). Use MODFLOW ${RAVEN_MF6_TESTED_VERSION} "
+                        "(-DRAVEN_MF6_VERSION=${RAVEN_MF6_TESTED_VERSION}, the default) or another release >= ${RAVEN_MF6_MIN_VERSION}.")
+  elseif(NOT "${v}" STREQUAL "" AND NOT "${v}" VERSION_EQUAL RAVEN_MF6_TESTED_VERSION)
+    message(WARNING "RAVEN_MF6: ${what} is MODFLOW ${v}; Raven's coupling was tested with ${RAVEN_MF6_TESTED_VERSION}")
+  endif()
+endmacro()
+if((RAVEN_MF6_MODE STREQUAL "SOURCE" AND "${RAVEN_MF6_SOURCE_DIR}" STREQUAL "" AND "${RAVEN_MF6_SOURCE_URL}" STREQUAL "") OR
+   (RAVEN_MF6_MODE STREQUAL "PREBUILT" AND "${RAVEN_MF6_ZIP}" STREQUAL ""))
+  if(NOT RAVEN_MF6_VERSION STREQUAL RAVEN_MF6_TESTED_VERSION)
+    if(NOT RAVEN_MF6_VERSION MATCHES "^[0-9]+(\\.[0-9]+)*$")
+      message(FATAL_ERROR "RAVEN_MF6_VERSION=${RAVEN_MF6_VERSION} is not a MODFLOW release number (X.Y.Z)")
+    endif()
+    _rmf6_check_version("${RAVEN_MF6_VERSION}" "RAVEN_MF6_VERSION")
+  endif()
+  set(_rmf6_version_checked TRUE)                  # (the library is this version: not checked or warned again)
+endif()
 
 set(RAVEN_MF6_LIB_FILE "")
 set(RAVEN_MF6_LIB_VERSION "")
@@ -381,8 +478,9 @@ if(RAVEN_MF6_MODE STREQUAL "PREBUILT")
   set(_stamp "${_rmf6_work}/prebuilt.stamp")
   string(TOLOWER "${RAVEN_MF6_ZIP_SHA256}" _usersha)
   string(STRIP "${_usersha}" _usersha)
-  if(_usersha AND NOT _usersha MATCHES "^[0-9a-f]+$")
-    message(FATAL_ERROR "RAVEN_MF6_ZIP_SHA256=${RAVEN_MF6_ZIP_SHA256} is not a SHA256 (64 hexadecimal digits)")
+  string(LENGTH "${_usersha}" _ushalen)
+  if(_usersha AND (NOT _usersha MATCHES "^[0-9a-f]+$" OR NOT _ushalen EQUAL 64))
+    message(FATAL_ERROR "RAVEN_MF6_ZIP_SHA256=${RAVEN_MF6_ZIP_SHA256} is not a SHA256 (64 hexadecimal digits; this has ${_ushalen} characters)")
   endif()
   set(_zip "")
   if(NOT "${RAVEN_MF6_ZIP}" STREQUAL "")
@@ -630,6 +728,10 @@ if(RAVEN_MF6_MODE STREQUAL "SOURCE")
     set(_vshow "MODFLOW version from the source's meson.build when built")
   endif()
   message(STATUS "RAVEN_MF6: SOURCE ${_vshow}, ${_rmf6_desc}; meson ${_rmf6_meson}, ninja ${_rmf6_ninja}")
+endif()
+
+if(NOT _rmf6_version_checked AND NOT RAVEN_MF6_MODE STREQUAL "PATH")
+  _rmf6_check_version("${RAVEN_MF6_LIB_VERSION}" "the library (${_rmf6_desc})")
 endif()
 
 # ---------------------------------------------------------------------------------------------------------------------

@@ -1175,10 +1175,10 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
   CConstituentModel *pConstit;
   for (int c = 0; c < pModel->GetTransportModel()->GetNumConstituents(); c++) {
     pConstit=pModel->GetTransportModel()->GetConstituentModel(c);
-    pConstit->UpdateInitialConditions(Options);
-    if (pConstit->GetType()==AGE_TRACER){
-      ((CAgeTracer*)(pConstit))->SetInitialTimeOffset(time_diff);
+    if (pConstit->GetType()==AGE_TRACER){ //the offset first: UpdateInitialConditions shifts the entry times by it
+      ((CAgeTracer*)(pConstit))->SetInitialTimeOffset(time_diff); //(base Raven set it after, so it never reached the masses)
     }
+    pConstit->UpdateInitialConditions(Options);
   }
 
   // check quality of initial state variables
