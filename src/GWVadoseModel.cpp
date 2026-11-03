@@ -237,7 +237,7 @@ double CGroundwaterModel::VZStorage() const
 //
 void CGroundwaterModel::VZInit()
 {
-  int nHot=0,nBad=0,nSteady=0,nRest=0;
+  int nHot=0,nBad=0,nSteady=0,nRest=0,nBack=0;
   const bool cls=(_vzClasses>1);
   const bool gwHot=!_hotHeads.empty() || !_hotSzCols.empty() || !_hotVz.empty() || !_hotVzc.empty();
   const double q0=_vzQ0/MM_PER_METER;                                            //[m/d]
@@ -245,6 +245,7 @@ void CGroundwaterModel::VZInit()
     const gw_link &L=_aLinks[_szxLink[e]]; const int ic=L.ic;
     double h=_X[_reduced[TopNode(ic)]]*_hf; const double Lmin=VZ_LMIN;
     if (!(std::fabs(_X[_reduced[TopNode(ic)]])<1e29)){h=WaterTable(ic);}       //(HDRY is in the model's units: a dry top cell without NEWTON, the water table below it)
+    const double hF=h;                                                           //(the initial head: the saturated fractions of the first step)
     const gwvz::vz_strat &S=_vzStrat[e];
     double zlow=-1e300; for (int l=_nlay-1;l>=0;l--){const int nd=UserNode(l,ic); if (_idomain[nd]>0){zlow=_botm[nd]; break;}}
     h=max(h,zlow);                                                               //(columns not below the aquifer's bottom)
@@ -265,6 +266,16 @@ void CGroundwaterModel::VZInit()
       map<long long,map<int,vector<double> > >::const_iterator it=_hotVz.find(id);
       if ((it!=_hotVz.end()) && (it->second.find(ic+1)!=it->second.end())){other=true;}
     }
+    //with depth classes a class column inactive at the end of the run that wrote the file has no line (the writer skips
+    //it; the water table fell below its base in the last step, and the column forms here, at rest, as it would have in
+    //the continuous run's next step); a missing line is a mismatch only when the link's lines were written with another
+    //number of classes
+    bool vcOther=false;
+    if (vc!=NULL){
+      for (map<int,vector<double> >::const_iterator ct=vc->begin();ct!=vc->end();ct++){
+        if ((ct->second.size()<3) || ((int)std::floor(ct->second[0]+0.5)!=nK)){vcOther=true;}
+      }
+    }
     for (int i=_vzOff[e];i<_vzOff[e+1];i++){
       gwvz::vz_column &c=_vzcCol[i]; const double zb=_vzcZt[i];
       c=gwvz::vz_column(); c.ztop=zb; c.zbot=h;
@@ -273,7 +284,7 @@ void CGroundwaterModel::VZInit()
       else if (vc!=NULL){
         map<int,vector<double> >::const_iterator ct=vc->find(i-_vzOff[e]+1);
         if ((ct!=vc->end()) && (ct->second.size()>=3) && ((int)std::floor(ct->second[0]+0.5)==nK)){v.assign(ct->second.begin()+1,ct->second.end()); have=true;}
-        else if (!vc->empty()){bad=true;}                                        //(written with another number of classes for this cell)
+        else if ((ct!=vc->end()) || vcOther){bad=true;}                         //(written with another number of classes for this cell)
       }
       if (have){
         gwvz::Build(c,S,zb,v[0],_vzN);                                            //zbot, then the contents top down
@@ -293,10 +304,17 @@ void CGroundwaterModel::VZInit()
         if (c.active && (q0>0.0)){
           if (gwHot){nRest++;}
           else {
-            if (_vzMode==2){gwvz::InitSteadyKinematic(c,S,q0);}               //(steady starts of the column library)
-            else if (_vzMode==3){gwvz::InitSteadyLag(c,S,q0,_vzPar);}
-            else {gwvz::InitSteadyRichards(c,S,q0);}
-            nSteady++;
+            //the flux the column receives: the unsaturated share of q, (1 - F) q, F the saturated fraction of its class (one
+            //class: the link's) at the initial head, as VZStep gives it in the first step
+            const double qc=q0*(1.0-min(max(VZClassF((int)e,i,hF),0.0),1.0));   //[m/d]
+            if (qc>0.0){
+              double fw=qc;
+              if (_vzMode==2){fw=gwvz::InitSteadyKinematic(c,S,qc);}          //(steady starts of the column library)
+              else if (_vzMode==3){gwvz::InitSteadyLag(c,S,qc,_vzPar);}
+              else {gwvz::InitSteadyRichards(c,S,qc,&fw);}
+              if (fw<qc*(1.0-1e-9)){nBack++;}                                    //(more than the column can carry: backed up, its top rejects the rest)
+              nSteady++;
+            }
           }
         }
       }
@@ -306,7 +324,10 @@ void CGroundwaterModel::VZInit()
   if (nHot>0){WriteAdvisory("CGroundwaterModel: "+to_string(nHot)+" unsaturated columns read from the hotstart file",false);}
   if (nBad>0){WriteWarning("CGroundwaterModel: "+to_string(nBad)+" unsaturated columns of the hotstart file do not match the columns (another :SoilZoneVadose node count, or "
                            "another :SoilZoneVadoseClasses?); they start at rest (their reference profile)",false);}
-  if (nSteady>0){WriteAdvisory("CGroundwaterModel: "+to_string(nSteady)+" unsaturated columns start at their steady profile for :SoilZoneVadoseInitialFlux "+ToStr(_vzQ0)+" mm/d",false);}
+  if (nSteady>0){WriteAdvisory("CGroundwaterModel: "+to_string(nSteady)+" unsaturated columns start at their steady profile for :SoilZoneVadoseInitialFlux "+ToStr(_vzQ0)+" mm/d "
+                               "(the unsaturated share (1 - F) of it each column receives)",false);}
+  if (nBack>0){WriteWarning("CGroundwaterModel: "+to_string(nBack)+" unsaturated columns cannot carry the flux of :SoilZoneVadoseInitialFlux "+ToStr(_vzQ0)+" mm/d (their layers "
+                            "pass less with a saturated top); they start at their backed-up steady profile for the flux they can pass, and their tops reject the rest",false);}
   if (nRest>0){WriteWarning("CGroundwaterModel: :SoilZoneVadoseInitialFlux ignored: the run starts from a groundwater hotstart; "+to_string(nRest)+
                             " unsaturated columns the hotstart file does not hold start at rest (their reference profile)",false);}
 }

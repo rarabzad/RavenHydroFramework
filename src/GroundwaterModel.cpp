@@ -71,7 +71,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
   _vzMode=0; _vzPar=0.0; _vzQ0=0.0; _vzClsDev=0.0; _vzBackV=_vzBackWV=0.0; _vzClasses=1; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _ibPtr=NULL; _mf6Newton=true; _farWarned=false; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0; _ncWithheldVol=0.0; _ncWithheldN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
   _szCapN=0; _szCapExcess=0.0; _szDropN=_szDropPlain=0; _szDropSteps=0; _szDropThis=false; _szxDropped.clear(); _szEsum=0.0; _szWhy=0; _szWhyE=-1; _szWhyV=_szWhyFa=_szWhyFb=0.0;
   _szNegCutQ=_szNegUnheldV=0.0; _negCutVol=_negUnheldVol=0.0; _negUnheldN=0; _negWarned=false; _Qgross=1.0; _QabsOther=0.0; _rchLostQ=_rchLostVol=0.0; _rchLostN=0;
@@ -110,7 +110,7 @@ void CGroundwaterModel::ResetState()
   _vzStrat.clear(); _vzUse.clear(); _vzQ.clear(); _vzAbsQ.clear(); _vzRejV.clear(); _vzFp.clear(); _vzInV.clear(); _vzCapV.clear(); _vzCapL.clear();
   _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0; _vzSlowed=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
-  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0;
+  _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0; _ncWithheldVol=0.0; _ncWithheldN=0;
   //(every soil-zone, column and stop-rule member and run total: ensemble members start as the first did)
   _szCapN=0; _szCapExcess=0.0; _szDropN=_szDropPlain=0; _szDropSteps=0; _szDropThis=false; _szxDropped.clear(); _szEsum=0.0; _szWhy=0; _szWhyE=-1; _szWhyV=_szWhyFa=_szWhyFb=0.0;
   _szNegCutQ=_szNegUnheldV=0.0; _negCutVol=_negUnheldVol=0.0; _negUnheldN=0; _negWarned=false; _Qgross=1.0; _QabsOther=0.0; _rchLostQ=_rchLostVol=0.0; _rchLostN=0;
@@ -2302,21 +2302,30 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       }
     }
   }
-  if (!_lastConverged && !SZPhysical()){ //all discharge returned to Raven (seepage + river gains) limited to this step's inflow
-                        //(with :SoilZone PHYSICAL the guard above takes MODFLOW's residual out instead: this cap, which
-                        //leaves out the storage release, also removed real discharge)
-    double cap=max(_Qrch+_Qriv_in+_Qswx_in+max(_Qres,0.0)+max(_Qwel,0.0)+max(_Qghb,0.0)+max(_Qchd,0.0)
-                   +(IsExternal()?max(_Qother,0.0):0.0)+_Qsz_in,0.0); //all inflows this step (with an existing model, its own packages too)
-    double gains=0.0; for (size_t p=0;p<_sbGain.size();p++){gains+=max(_sbGain[p],0.0);}
-    for (size_t e=0;e<_swxQ.size();e++){gains+=max(-_swxQ[e],0.0);} //discharge into surface stores
-    if (_Qseep_tot+gains>cap){
-      double f=(_Qseep_tot+gains>0)?cap/(_Qseep_tot+gains):0.0;
-      for (int ic=0;ic<_ncpl;ic++){_Qseep[ic]*=f;}
+  if (!_lastConverged && !SZPhysical() && (_Qerr<0.0)){
+    //-- without :SoilZone PHYSICAL, on a step MODFLOW did not converge (CONTINUE-like): every flow MODFLOW
+    //   booked is given to Raven, except its negative residual (more outflow booked than its inflows and storage release
+    //   supply), which is withheld from all discharge to Raven (seepage, gains of enabled subbasins, surface-store gains) in
+    //   proportion, as the PHYSICAL guard above does; what that discharge cannot cover stays in the aquifer (MODFLOW's balance
+    //   error). The withheld volume is a run total in GWModelSummary.txt; per step it is the GWBudget row's residual, recharge
+    //   + storage release + other inflows - discharge - MF6 balance error. (the earlier cap at the step's
+    //   inflow left out the storage release that MODFLOW had drained, and lost that discharge unbooked.)
+    const double R=-_Qerr;                                                       //[m3/d]
+    double gR=0.0,gS=0.0;
+    for (size_t p=0;p<_sbGain.size();p++){if (_pModel->GetSubBasin((int)p)->IsEnabled()){gR+=max(_sbGain[p],0.0);}}
+    for (size_t e=0;e<_swxQ.size();e++){gS+=max(-_swxQ[e],0.0);}               //(discharge into surface stores)
+    const double D=_Qseep_tot+gR+gS;
+    if (D>0.0){
+      const double f=max(1.0-R/D,0.0);
+      for (int ic=0;ic<_ncpl;ic++){_Qseep[ic]*=f;} _Qseep_tot*=f;
       for (size_t p=0;p<_sbGain.size();p++){if (_sbGain[p]>0){_sbGain[p]*=f;}}
       for (size_t e=0;e<_swxQ.size();e++){if (_swxQ[e]<0){_swxQ[e]*=f;}}
-      WriteWarning("CGroundwaterModel: in the step ending "+_stepEnd+" (MODFLOW unconverged): discharge returned to Raven limited from "+
-                   ToStr(_Qseep_tot+gains)+" to "+ToStr(cap)+" m3/d",false);
-      _Qseep_tot*=f;
+      const double w=(1.0-f)*D*tstep;                                            //[m3]
+      _ncWithheldVol+=w; _ncWithheldN++;
+      if ((w>1e-6) && (++_szGuardN<=10)){
+        WriteWarning("CGroundwaterModel: in the step ending "+_stepEnd+" (MODFLOW unconverged): "+ToStr(w)+" m3 of discharge to Raven withheld for "
+                     "MODFLOW's negative residual ("+ToStr(_Qerr)+" m3/d, booked as its balance error)"+(_szGuardN==10?" (further such warnings suppressed)":""),false);
+      }
     }
   }
   //-- surface-store exchange applied to Raven stores (after the guard)
@@ -2894,6 +2903,7 @@ void CGroundwaterModel::AppendRunTotals()
   if (_szxLink.size()>0){S<<"  drained columns       : kept 1 mm above their bottoms in MODFLOW's iterates in "<<_wetKeptIt<<" outer iterations of "<<_wetKeptSteps<<" steps"<<endl;}
   if ((_szxLink.size()>0) && (_szMaxIter>0) && (SZFreezeAt()>=1)){S<<"  supply-limited updates: "<<_szCapN<<" link updates; largest take at the lowest head beyond the column's free water "<<_szCapExcess<<" m3/d (exchange line and rejection term)"<<endl;}
   if ((_szxLink.size()>0) && (_szMaxIter>0)){S<<"  connection-test drops : "<<_szDropN<<" link updates on "<<_szDropSteps<<" steps (connection head further than d_s from MODFLOW's head: bracket and last residual dropped); next update plain on "<<_szDropPlain<<", the rest on the step's last update"<<endl;}
+  if (_ncWithheldN>0){S<<"  discharge withheld    : "<<_ncWithheldVol<<" m3 on "<<_ncWithheldN<<" unconverged steps (MODFLOW's negative residual, withheld from the discharge to Raven in proportion: seepage, river and surface-store gains; it stays in the aquifer, booked as MF6 balance error in GWBudget.csv)"<<endl;}
   if (_negCutVol>0.0){S<<"  negative recharge cut : "<<_negCutVol<<" m3 the top cells could not supply, taken back out of the soil zone (negative rejected recharge in GWBudget.csv)"<<endl;}
   if (_negUnheldVol>0.0){S<<"  negative recharge not held: "<<_negUnheldVol<<" m3 of that cut the soil zone did not hold when it was taken back (the HRU's soil zone held less, at the end of the step, than the cut: a process after the import moved it on before the coupled exchange): no store supplied it ('negative recharge the soil zone did not hold' in GWBudget.csv)"<<endl;}
   if (IsExternal() && !_mf6Newton){S<<"  recharge not applied  : "<<_rchLostVol<<" m3 (columns whose cells were all dry or whose highest active cell is a specified head, a model without NEWTON; GWBudget.csv; net: a negative recharge there, taken out of GROUNDWATER without MODFLOW supplying it, counts negative)"<<endl;}

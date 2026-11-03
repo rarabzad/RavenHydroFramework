@@ -243,7 +243,7 @@ double CGroundwaterModel::SZChdExchange(const int k,const int c,const gwsz::sz_c
   const int n=_szNLayers; const double a=_szColA[c];
   if (!(a>0.0)){return 0.0;}
   vector<double> phi(_szColPhi.begin()+c*n,_szColPhi.begin()+(c+1)*n);
-  gwsz::Fill(_szLay[k],phi,rejV/a*MM_PER_METER);
+  {double shR=0.0; gwsz::Apply(_szLay[k],phi,rejV/a*MM_PER_METER,shR);}         //(a negative rejected recharge taken back out, as SZApply)
   if (D>0.0){gwsz::Fill(_szLay[k],phi,D);} else if (D<0.0){double sh=0.0; gwsz::Apply(_szLay[k],phi,D,sh);} //(a lagged source not taken back, mm)
   double dV=0.0,ovf=0.0,lamp=0.0;
   gwsz::LocalSolve(_szLay[k],phi,cell,h,h,a,tstep,dV,ovf,lamp);

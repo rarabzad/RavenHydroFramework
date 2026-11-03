@@ -310,6 +310,8 @@ private:/*----------------------------------------------------*/
   double                 _szWithheldG;   ///< the same, from river gains [m3]
   double                 _szWithheldS;   ///< the same, from surface-store gains [m3]
   int                    _szGuardN;      ///< warnings written by that guard
+  double                 _ncWithheldVol; ///< without :SoilZone PHYSICAL: discharge to Raven withheld on unconverged steps for MODFLOW's negative residual, run total [m3]
+  int                    _ncWithheldN;   ///< steps on which it was withheld
   vector<char>           _szRchByArea;   ///< per HRU: recharge leaves the bottom layer at a constant rate (PERC_CONSTANT): columns give it up by area
   vector<double>         _szxFw;         ///< per SZX entry: the recharge its column gave up this step [m3] (recharge shares)
   vector<double>         _szxHq,_szxQq;  ///< per SZX entry: head [m] and exchange [m3/d] of the last local solve this step (_szxHq -HUGE_VAL: none)

@@ -105,8 +105,10 @@ namespace gwvz
   double LagTravelTime(const vz_mat &m,const double par);
   double InitSteadyLag(vz_column &c,const vz_strat &S,const double q,const double par=0.0);
   ///< steady RICHARDS profile for a flux q [m/d] into the column's top (:SoilZoneVadoseInitialFlux; the finite volumes of
-  ///< Step node by node from the water table up; perched saturation above a layer with Ks < q); returns the water above the reference [m]
-  double InitSteadyRichards(vz_column &c,const vz_strat &S,const double q);
+  ///< Step node by node from the water table up; perched saturation above a layer with Ks < q; beyond what the column can
+  ///< pass with psi = 0 at its top, the backed-up steady state for the largest flux f it passes, top saturated, rejecting
+  ///< q - f); returns the water above the reference [m], *fw the flux into the water table [m/d] (q, or f when backed up)
+  double InitSteadyRichards(vz_column &c,const vz_strat &S,const double q,double *fw=0);
 
   ///< capillary rise into the soil zone [m/d] (upward positive): the steady upward flux (RiseBetween) from the column's
   ///< top node to a soil layer at suction psis [m] whose middle is dzs [m] above the column top, through the soil (its

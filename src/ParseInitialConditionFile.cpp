@@ -945,6 +945,10 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
        :EndGWHeads   (written by Raven into solution.rvc for hotstart) */
       if (Len<4){ExitGracefully(("improper format of groundwater command "+string(s[0])).c_str(),BAD_DATA); break;}
       int nl=s_to_i(s[1]),nr=s_to_i(s[2]),nc=s_to_i(s[3]);
+      if ((nl<=0) || (nr<=0) || (nc<=0) || ((double)nl*(double)nr*(double)nc>1e9)){ //(a damaged file: no reserve of a negative or huge size)
+        ExitGracefully(("ParseInitialConditionsFile: :GWHeads "+string(s[1])+" "+string(s[2])+" "+string(s[3])+": the layer, row and column counts must be positive "
+                        "(and their product at most 1e9); is the .rvc file damaged?").c_str(),BAD_DATA); break;
+      }
       vector<double> h; h.reserve((size_t)nl*nr*nc);
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
@@ -1112,9 +1116,13 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       //:StartTime [yyyy-mm-dd] [00:00:00]
       //needed for initialization of ages
       if (Len<3){break;}
+      //the offset of this run's start (tt_end: the end of the run that wrote the file, when it is continued) from the start
+      //of the run that wrote the file, in days: the ages' entry times are shifted by it (CAgeTracer::SetInitialTimeOffset).
+      //(tt_end was never set: an uninitialised read)
       time_struct tt_start,tt_end;
       tt_start =DateStringToTimeStruct(s[1],s[2],Options.calendar);
-      time_diff=TimeDifference(tt_end.julian_day,tt_end.year,tt_start.julian_day,tt_start.year,Options.calendar);
+      JulianConvert(0.0,Options.julian_start_day,Options.julian_start_year,Options.calendar,tt_end);
+      time_diff=TimeDifference(tt_start.julian_day,tt_start.year,tt_end.julian_day,tt_end.year,Options.calendar);
       break;
     }
     default://------------------------------------------------

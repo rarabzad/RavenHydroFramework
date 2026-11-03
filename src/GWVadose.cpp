@@ -447,16 +447,22 @@ namespace gwvz
   ///  volumes of gwvz::Step: every face carries q, K_f (dpsi/dz + 1) = q with K_f the mean of the two nodes' conductivities
   ///  (the water table's face: the bottom node and Ks, psi = 0 at the water table). Solved node by node from the bottom up
   ///  (each face's flux increases with the upper node's pressure head where the gradient is downward): a node above a layer
-  ///  whose Ks is less than q builds up positive pressure (a saturated, perched zone), as the steady state requires. The
-  ///  discrete start is steady to the solver's tolerance. Returns the column's water above the reference [m].
+  ///  whose Ks is less than q builds up positive pressure (a saturated, perched zone), as the steady state requires. When q
+  ///  exceeds what the column can pass with psi = 0 at its top (the profile for q then has positive pressure at the top
+  ///  node and a top face that cannot carry q: Step would saturate the top and reject part of q), the column starts at
+  ///  the backed-up steady state instead: the largest flux f < q whose profile's top face, at psi = 0 (Step's saturated
+  ///  top), carries f (bisection on f), with the top saturated; the top then rejects q - f, as InitSteadyKinematic does
+  ///. The discrete start is steady to the solver's tolerance in both cases. Returns the column's water
+  ///  above the reference [m]; *fw (optional) the flux into the water table [m/d] (q, or f when backed up)
   //
-  double InitSteadyRichards(vz_column &c,const vz_strat &S,const double q)
+  double InitSteadyRichards(vz_column &c,const vz_strat &S,const double q,double *fw)
   {
+    if (fw){*fw=0.0;}
     if (!c.active || !(q>0.0)){return 0.0;}
     const int N=(int)c.zc.size(); const double PMIN=-1e5;
-    //root of f(p) = Kf(p) ((p - pl)/Dz + 1) - q for the node's pressure head p over the one below (pl, conductivity Kl)
-    auto solve=[&](const vz_mat &m,const double pl,const double Kl,const double Dz)->double{
-      auto f=[&](const double p)->double{return 0.5*(Kof(m,p)+Kl)*((p-pl)/Dz+1.0)-q;};
+    //root of f(p) = Kf(p) ((p - pl)/Dz + 1) - qq for the node's pressure head p over the one below (pl, conductivity Kl)
+    auto solve=[&](const vz_mat &m,const double pl,const double Kl,const double Dz,const double qq)->double{
+      auto f=[&](const double p)->double{return 0.5*(Kof(m,p)+Kl)*((p-pl)/Dz+1.0)-qq;};
       double a=std::max(pl-Dz,PMIN),b=std::max(a,0.0)+1.0;                                   //(f(a) <= 0: no downward gradient)
       if (f(a)>=0.0){return a;}
       for (int it=0;(it<200) && (f(b)<0.0);it++){b=a+2.0*(b-a);}
@@ -466,14 +472,33 @@ namespace gwvz
       }
       return 0.5*(a+b);
     };
-    double pl=0.0,Kl=S.mat[c.im[N-1]].Ks,zl=c.zbot;                                //(the water table: psi = 0, its Ks)
-    for (int i=N-1;i>=0;i--){
-      const vz_mat &m=S.mat[c.im[i]];
-      const double p=solve(m,pl,Kl,c.zc[i]-zl);
-      c.psi[i]=p; c.th[i]=Theta(m,p);
-      pl=p; Kl=Kof(m,p); zl=c.zc[i];
+    auto profile=[&](const double qq){
+      double pl=0.0,Kl=S.mat[c.im[N-1]].Ks,zl=c.zbot;                              //(the water table: psi = 0, its Ks)
+      for (int i=N-1;i>=0;i--){
+        const vz_mat &m=S.mat[c.im[i]];
+        const double p=solve(m,pl,Kl,c.zc[i]-zl,qq);
+        c.psi[i]=p; c.th[i]=Theta(m,p);
+        pl=p; Kl=Kof(m,p); zl=c.zc[i];
+      }
+    };
+    auto topFlux=[&]()->double{                                                    //(Step's top face with psi = 0 at the column's top)
+      const vz_mat &m=S.mat[c.im[0]];
+      return 0.5*(Kof(m,c.psi[0])+m.Ks)*((0.0-c.psi[0])/(0.5*c.dz[0])+1.0);
+    };
+    profile(q);
+    double f=q; bool backed=false;
+    if ((c.psi[0]>0.0) && (topFlux()<q)){                                          //(beyond the column's capacity: backed up)
+      double lo=0.0,hi=q;                                                          //(topFlux - f: > 0 at lo, < 0 at hi)
+      for (int it=0;it<200;it++){
+        const double mid=0.5*(lo+hi); if ((mid<=lo) || (mid>=hi)){break;}
+        profile(mid);
+        if (topFlux()>mid){lo=mid;} else {hi=mid;}
+        if (hi-lo<=1e-15*q){break;}
+      }
+      f=0.5*(lo+hi); profile(f); backed=true;
     }
-    c.satTop=(c.psi[0]>=-1e-9); c.dryTop=false;
+    c.satTop=backed || (c.psi[0]>=-1e-9); c.dryTop=false;
+    if (fw){*fw=f;}
     return RelStorage(c,S);
   }
 }

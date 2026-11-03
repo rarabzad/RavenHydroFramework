@@ -717,7 +717,8 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     double lam=0.0,lamp=0.0;
     if (!steady){
       phi.assign(_szColPhi.begin()+c*n,_szColPhi.begin()+(c+1)*n);
-      gwsz::Fill(_szLay[k],phi,_szxRej[e]/a*MM_PER_METER);                       //rejected recharge back to the column
+      {double shR=0.0; gwsz::Apply(_szLay[k],phi,_szxRej[e]/a*MM_PER_METER,shR);} //rejected recharge back to the column (negative: the cut
+                                                                                 // taken back out, as SZApply does; Fill ignored it)
       if ((e<_szxLagD.size()) && (_szxLagD[e]!=0.0)){                            //LAGGED: the part of the source not taken back
         if (_szxLagD[e]>0.0){gwsz::Fill(_szLay[k],phi,_szxLagD[e]);} else {double sh=0.0; gwsz::Apply(_szLay[k],phi,_szxLagD[e],sh);}
       }
