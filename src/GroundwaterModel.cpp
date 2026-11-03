@@ -2828,10 +2828,10 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
           }
           if (tmax>0.0){S<<"travel time "<<tmin<<" to "<<tmax<<" d/m"<<((_vzPar>0.0)?" (given)":" (derived at 1 mm/d)");}
           if (cmax>0.0){S<<", columns "<<cmin<<" to "<<cmax<<" d at the start";}
-          S<<"; ";
+          S<<" (no Newton iterations: the substeps of the run are in the run totals)"; //(the counts are 0 at the start)
         }
-        else {S<<"accuracy "<<_vzAcc<<"; ";}
-        S<<_vzSub<<" substeps and "<<_vzNewton<<" Newton iterations in all"
+        else {S<<"accuracy "<<_vzAcc<<"; "<<_vzSub<<" substeps and "<<_vzNewton<<" Newton iterations in all";}
+        S
                                               <<endl;
         if (_vzQ0>0.0){S<<"  initial flux          : "<<_vzQ0<<" mm/d (steady start of the columns on a cold start)"<<endl;}
         if (_vzClasses>1){S<<"  depth classes         : up to "<<_vzClasses<<" per soil-zone link (least-spread grouping of its DEM samples), "<<_vzcCol.size()<<" class columns on "<<_szxC.size()
