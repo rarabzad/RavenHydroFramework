@@ -459,6 +459,10 @@ void CGroundwaterModel::SZLinkFractions(const bool relax,const bool mf6conv)
   for (size_t e=0;e<_szxLink.size();e++){
     const gw_link &L=_aLinks[_szxLink[e]];
     double h=_X[_reduced[TopNode(L.ic)]]*_hf;                                    //[m]
+    if ((e<_szxDropped.size()) && _szxDropped[e]){                               //(the update after a failed connection test: plain?
+      if (!relax || !mf6conv || (_szxHr[e]==-HUGE_VAL)){_szDropPlain++;}        // GWModelSummary.txt, run totals)
+      _szxDropped[e]=0;
+    }
     if (!relax || !mf6conv){_szxHc[e]=h; _szxHr[e]=-HUGE_VAL; _szxBk[e]=0;} //heads MODFLOW has not converged on are no residuals of hc
     else {
       double hc=_szxHc[e],r=h-hc,hn=h;
