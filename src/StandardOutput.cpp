@@ -17,6 +17,7 @@
 #include "Model.h"
 #include "StateVariables.h"
 #include "ResidualErrorModel.h"
+#include "AgeTracers.h"
 
 #if defined(_WIN32)
 #include <direct.h>
@@ -1404,7 +1405,11 @@ void CModel::WriteMajorOutput(const time_struct &tt, string solfile, bool final)
                   Options->noisy);
   }
   time_struct tts;
-  JulianConvert(0,Options->julian_start_day,Options->julian_start_year,Options->calendar,tts);
+  double tdatum=0.0; //the datum of the age tracers' entry times: the start of the first run of a hotstart chain (0: this run's start)
+  for (int c=0;c<_pTransModel->GetNumConstituents();c++){
+    if (_pTransModel->GetConstituentModel(c)->GetType()==AGE_TRACER){tdatum=-((CAgeTracer*)(_pTransModel->GetConstituentModel(c)))->GetTimeOffset();}
+  }
+  JulianConvert(tdatum,Options->julian_start_day,Options->julian_start_year,Options->calendar,tts);
   RVC<<":StartTime "<<tts.date_string<<" "<<DecDaysToHours(tts.julian_day)<<endl;
   RVC<<":TimeStamp "<<tt.date_string <<" "<<DecDaysToHours(tt.julian_day) <<endl;
   RVC<<":TimeStep "<<Options->timestep<<endl;

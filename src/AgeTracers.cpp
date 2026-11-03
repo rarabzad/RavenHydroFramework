@@ -66,49 +66,17 @@ void CAgeTracer::UpdateInitialConditions(const optStruct& Options)
     }
   }
 
-  //convert mass (representing entry time relative to previous model start time) to new t==0 time datum:
-  int i,iStor;
-
-  double V,MassAge;
-  for (int k=0;k<_pModel->GetNumHRUs();k++){
-    pHRU=_pModel->GetHydroUnit(k);
-
-    for (int ii=0; ii<_pTransModel->GetNumWaterCompartments();ii++){
-      iStor=_pTransModel->GetStorWaterIndex(ii);
-      V=pHRU->GetStateVarValue(iStor);
-
-      i=_pTransModel->GetStorIndex(_constit_index,ii);
-
-      MassAge=pHRU->GetStateVarValue(i)-V*_t_diff;
-      pHRU->SetStateVarValue(i,MassAge);
-    }
-  }
-
-  double Vres;
-  for(int p=0;p<nSB;p++)
-  {
-    pBasin=_pModel->GetSubBasin(p);
-    if ((pBasin->GetReservoir()!=NULL) && (_aMres[p]==0.0))//if not initialized from .rvc
-    {
-      V=pBasin->GetReservoir()->GetStorage();
-      _aMres     [p]-=V*_t_diff;
-
-      V=pBasin->GetReservoir()->GetOldStorage();
-      _aMres_last[p]-=V*_t_diff;
-
-      Vres=_pModel->GetHydroUnit(pBasin->GetReservoir()->GetHRUIndex())->GetArea()*M2_PER_KM2*pBasin->GetReservoir()->GetLakebedThickness();
-      _aMsed     [p]-=Vres*_t_diff;
-      _aMsed_last[p]-=Vres*_t_diff;
-
-      _aMout_res      [p]-=_t_diff*pBasin->GetReservoir()->GetOutflowRate()   *SEC_PER_DAY;
-      _aMout_res_last [p]-=_t_diff*pBasin->GetReservoir()->GetOldOutflowRate()*SEC_PER_DAY;
-    }
-  }
+  //the masses (volume x entry time) of a hotstart keep the datum of the run that wrote the file: the age clock is shifted
+  //instead (SetInitialTimeOffset, SetModelTime; precipitation enters at the shifted time, CmvAdvection). Shifting the
+  //masses to this run's start made them negative (entry times before the start), which the advection's emptying limit
+  //(|rate| <= mass/dt) and CmvLatAdvection's negative-mass stop do not allow, and left the channel and reservoir masses
+  //on the old datum
 }
 void   CAgeTracer::SetModelTime(const double &t){
-  _model_time=t;
+  _model_time=t+_t_diff;          //(t: this run's model time)
 }
 void   CAgeTracer::SetInitialTimeOffset(const double &tdiff){
+  _model_time+=tdiff-_t_diff;     //(read before the first step: ages at the start are reported on the file's datum too)
   _t_diff=tdiff;
 }
 

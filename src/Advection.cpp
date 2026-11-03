@@ -10,6 +10,7 @@
 #include "Model.h"
 #include "StateVariables.h"
 #include "EnergyTransport.h"
+#include "AgeTracers.h"
 
 //////////////////////////////////////////////////////////////////
 /// \brief Implentation of the Advection constructor
@@ -213,7 +214,7 @@ void   CmvAdvection::GetRatesOfChange(const double      *state_vars,
         Cs=pTransModel->GetEnthalpyModel()->GetDirichletEnthalpy(pHRU,Cs);
       }
       else if (isAgeTracer){
-        Cs=tt.model_time+0.5*Options.timestep; //mean age over timestep
+        Cs=tt.model_time+0.5*Options.timestep+((CAgeTracer*)(pConstit))->GetTimeOffset(); //mean age over timestep (entry time on the datum of a hotstart's masses)
         //Cs=tt.model_time+Options.timestep; //end of time step
       }
       else{
