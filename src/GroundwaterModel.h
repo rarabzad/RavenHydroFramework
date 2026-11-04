@@ -233,6 +233,7 @@ private:/*----------------------------------------------------*/
   double                 _swxAppliedVol;     ///< [m3] net water added to Raven stores by the exchange this step
   string                 _cacheFile; bool _cacheHit; double _geomSeconds;
   bool                   _writeNC; int _ncid,_ncTime,_ncHead,_ncRec;
+  bool                   _writeCBC;      ///< :WriteGWBudgetFile: MODFLOW budget file gwf.cbc, specific discharge, saturation and gwf.porosity
   void                   OpenNetCDF(const optStruct &Options);
   void                   WriteNetCDF(const double &t);
   vector<char>           _colCHDTop; ///< per column: top active cell is a specified-head (CHD) cell
@@ -257,6 +258,9 @@ private:/*----------------------------------------------------*/
   void   ExtRewriteTDIS   (const optStruct &Options);
   void   ExtEditNameFile  (const bool addRaven);
   void   ExtEditMover     ();
+  vector<string> ExtReadOpenClose(const string &name) const;
+  void   ExtShiftTimeSeries(const string &name);
+  int    _extTSShifted;    ///< time-series files shifted to Raven's later start
   void   ExtRenumberPeriods();
   void   ExtWriteSimFile   ();
   void   ExtUpdateCHDTop   ();
@@ -626,6 +630,7 @@ public:/*-------------------------------------------------------*/
   void   AddSurfaceWaterExchange(const string &sv,const string &group,const double &leak){gw_swx s; s.sv=sv; s.group=group; s.leakance=leak; s.iSV=s.kk=-1; _aSWX.push_back(s);}
   void   SetLinkageCache      (const string &f){_cacheFile=f;}
   void   SetWriteNetCDFHeads  (const bool b){_writeNC=b;}
+  void   SetWriteBudgetFile   (){_writeCBC=true; _genOnly+=" :WriteGWBudgetFile";}
   void   SetReservoirExchange (const bool b){_resExchange=b;}
   void   SetHotstartRechargeStore(const long long hru,const double &v){_hotRchStore[hru]=v;}
   void   SetHotstartReservoirSeepage(const long long sbid,const double &v){_hotResSeep[sbid]=v;}

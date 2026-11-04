@@ -51,7 +51,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _connectByElevation=false; _disType=0; _meshFidelity=1.0;
   _mname="GWF"; _hf=1.0; _qf=1.0; _rf=1.0;
   _extGridID="CELL_ID"; _streamMap="AUX"; _streamAux="SUBBASIN"; _extSeepage=true; _extTf=_extLf=1.0; _extDvclose=-1.0; _extAreaCheck=0.0;
-  _Qother=0.0; _extAux=-1; _extNaux=0; _extOffset=0.0; _extDrop=0; _extNModels=0; _extMoverDropped=0; _extSteady=false; _extNoSto=false; _mf6Version=""; _stoName="STO"; _disName="DIS";
+  _Qother=0.0; _extAux=-1; _extNaux=0; _extOffset=0.0; _extDrop=0; _extNModels=0; _extMoverDropped=0; _extTSShifted=0; _extSteady=false; _extNoSto=false; _mf6Version=""; _stoName="STO"; _disName="DIS";
   _iGW=_iReturnSV=DOESNT_EXIST;
   _maxiter=500;
   _X=_rchBound=_rchHcof=_rchRhs=_drnHcof=_drnRhs=_strgss=_strgsy=NULL;
@@ -64,7 +64,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _rchStoreTot=0.0; _QrchCHD=0.0; _rivBedDepth=-1.0;
   _swxHead=_swxCond=_swxRbot=_swxHcof=_swxRhs=NULL; _swxNcol=0; _Qswx_in=_Qswx_out=_swxAppliedVol=0.0;
   _resExchange=false; _resQ=_resHcof=_resRhs=NULL; _resNcol=0; _Qres_spec=_Qres=_resPendingVol=_resShortVol=0.0;
-  _cacheHit=false; _geomSeconds=0.0; _writeNC=false; _ncid=-1; _ncTime=_ncHead=-1; _ncRec=0; _nstp=0; _stepCount=0; _jday0=0; _jyear0=0; _calendar=0; _tsDur=_tsDt=0.0;
+  _cacheHit=false; _geomSeconds=0.0; _writeNC=false; _writeCBC=false; _ncid=-1; _ncTime=_ncHead=-1; _ncRec=0; _nstp=0; _stepCount=0; _jday0=0; _jyear0=0; _calendar=0; _tsDur=_tsDt=0.0;
   _Qriv_in=_Qriv_out=_riverAppliedVol=_riverDeficitVol=0.0; _budgetLineOpen=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
@@ -783,7 +783,6 @@ void CGroundwaterModel::ValidateInputs() const
     ExitGracefullyIf(_gridTypeGiven || (_gridAngle!=0.0) || (_refKind.size()>0) || (_qtMaxLevel>=0) || (_flowCorr!="AUTO") || _connectByElevation,
       (string(msg)+"the grid options (:GridType, :GridRotation, :GridRefinement, :QuadtreeMaxLevel, :FlowCorrection, :LayerConnection)").c_str(),BAD_DATA);
     ExitGracefullyIf((_aWells.size()>0) || (_aBounds.size()>0),(string(msg)+":Wells and head boundaries (keep the model's packages)").c_str(),BAD_DATA);
-    ExitGracefullyIf((_aSWX.size()>0) || _resExchange,(string(msg)+":SurfaceWaterExchange and :ReservoirExchange (not yet available with an existing model)").c_str(),BAD_DATA);
     ExitGracefullyIf(_steadyInit,(string(msg)+":GWInitialization (the model's own stress periods decide)").c_str(),BAD_DATA);
     string gen=_genOnly; size_t pl;
     if (SZPhysical()){while ((pl=gen.find(" :LandSurface"))!=string::npos){gen.erase(pl,13);}} //(with the soil zone: its relief within the cells)
@@ -795,7 +794,6 @@ void CGroundwaterModel::ValidateInputs() const
     ExitGracefullyIf((_aObsWells.size()>0) && (_owTable.size()>0),"CGroundwaterModel: monitoring wells need :MF6CRS or :MF6GridFile (to locate them)",BAD_DATA);
     bool layersGiven=false;
     for (size_t i=0;i<_aProfiles.size();i++){
-      ExitGracefullyIf(_aProfiles[i].extinction_depth>0,"CGroundwaterModel: water-table ET (EXTINCTION_DEPTH) is not yet available with an existing model",BAD_DATA);
       if (_aProfiles[i].layers.size()>0){layersGiven=true;}
     }
     if (layersGiven){WriteWarning("CGroundwaterModel: with :MF6Simulation the layers of the aquifer profiles are ignored (the model's own layers are used); a profile can be given as: name, 0",false);}
@@ -1552,7 +1550,7 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
   //Newton without its UNDER_RELAXATION option: that option resets heads that fall below a cell bottom, and in MODFLOW 6.6
   //the Newton change of such a cell then repeats unchanged every iteration, so the step never converges (a drying aquitard of
   //the Liard model failed on most days with 6.6.3); without it 6.6.3 and 6.8.1 converge in the same few iterations
-  F<<"BEGIN OPTIONS\n  NEWTON\nEND OPTIONS\n\nBEGIN PACKAGES\n";
+  F<<"BEGIN OPTIONS\n  NEWTON\n"<<(_writeCBC?"  SAVE_FLOWS   # :WriteGWBudgetFile: every package's flows to gwf.cbc\n":"")<<"END OPTIONS\n\nBEGIN PACKAGES\n";
   F<<"  "<<((_disType==0)?"DIS6   gwf.dis ":(_disType==1)?"DISV6  gwf.disv":"DISU6  gwf.disu")<<"  DIS\n  NPF6  gwf.npf  NPF\n  STO6  gwf.sto  STO\n  IC6   gwf.ic   IC\n";
   F<<"  RCH6  gwf.rch  RCH_RAVEN\n  DRN6  gwf.drn  DRN_RAVEN\n";
   if (_rivNode.size()>0){F<<"  RIV6  gwf.riv  RIV_RAVEN\n";}
@@ -1679,20 +1677,21 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
   int aC=(_disType==0)?_ncol:10,aL=(_disType==2)?1:_nlay; //array layout
   //-- cell properties from each column's profile layer
   vector<int> icelltype(_nlay*_ncpl,1),iconvert(_nlay*_ncpl,1);
-  vector<double> K(_nlay*_ncpl,1.0),K33(_nlay*_ncpl,1.0),Ss(_nlay*_ncpl,1e-5),Sy(_nlay*_ncpl,0.1);
+  vector<double> K(_nlay*_ncpl,1.0),K33(_nlay*_ncpl,1.0),Ss(_nlay*_ncpl,1e-5),Sy(_nlay*_ncpl,0.1),Por(_nlay*_ncpl,0.3);
   for (int ic=0;ic<_ncpl;ic++){
     int ip=_colProfile[ic]; if (ip==DOESNT_EXIST){continue;}
     const gw_profile &P=_aProfiles[ip];
     for (int l=0;l<(int)P.layers.size();l++){
       int n=UserNode(l,ic);
       const gw_aquifer_class &C=_aClasses[P.layers[l].iclass];
-      K[n]=C.Kh; K33[n]=C.Kv; Ss[n]=C.Ss; Sy[n]=C.Sy;
+      K[n]=C.Kh; K33[n]=C.Kv; Ss[n]=C.Ss; Sy[n]=C.Sy; Por[n]=C.porosity;
       bool conf=(P.layers[l].type==GWL_CONFINED_AQUIFER);
       icelltype[n]=conf?0:1; iconvert[n]=conf?0:1;
     }
   }
   F.open((d+"gwf.npf").c_str());
-  F<<"BEGIN OPTIONS\n  SAVE_FLOWS\n"<<(UseXT3D()?((_flowCorr=="XT3D")?"  XT3D\n":"  XT3D RHS\n"):"")<<((_disType==2)?"  SAVE_SPECIFIC_DISCHARGE\n":"")<<"END OPTIONS\n\nBEGIN GRIDDATA\n";
+  F<<"BEGIN OPTIONS\n  SAVE_FLOWS\n"<<(UseXT3D()?((_flowCorr=="XT3D")?"  XT3D\n":"  XT3D RHS\n"):"")<<(((_disType==2) || _writeCBC)?"  SAVE_SPECIFIC_DISCHARGE\n":"")
+   <<(_writeCBC?"  SAVE_SATURATION\n":"")<<"END OPTIONS\n\nBEGIN GRIDDATA\n"; //(:WriteGWBudgetFile: specific discharge and saturation for particle tracking)
   WriteArray(F,"ICELLTYPE",icelltype,aC,aL,"1"); WriteArray(F,"K",K,aC,aL); WriteArray(F,"K33",K33,aC,aL);
   F<<"END GRIDDATA\n"; F.close();
 
@@ -1703,6 +1702,11 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
   else            {F<<"END GRIDDATA\n\nBEGIN PERIOD 1\n  TRANSIENT\nEND PERIOD\n";}
   F.close();
 
+  if (_writeCBC){ //:WriteGWBudgetFile: cell porosity for offline particle tracking (the GRIDDATA of a PRT MIP6 file)
+    F.open((d+"gwf.porosity").c_str());
+    F<<"# porosity of every cell (POROSITY of the aquifer classes) for particle tracking: usable as the MIP6 file of a PRT model\nBEGIN GRIDDATA\n";
+    WriteArray(F,"POROSITY",Por,aC,aL); F<<"END GRIDDATA\n"; F.close();
+  }
   F.open((d+"gwf.ic").c_str());
   F<<"BEGIN GRIDDATA\n"; WriteArray(F,"STRT",_strt,aC,aL,"1.0",SZPhysical()?17:10); F<<"END GRIDDATA\n"; F.close(); //(full precision with the soil zone, as its hotstart)
 
@@ -1813,7 +1817,11 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
     }
   }
   F.open((d+"gwf.oc").c_str());
-  F<<"BEGIN OPTIONS\n  HEAD FILEOUT gwf.hds\nEND OPTIONS\n\nBEGIN PERIOD 1\n  SAVE HEAD FREQUENCY "<<max(1,_headSaveFreq)<<"\n  PRINT BUDGET LAST\nEND PERIOD\n"; F.close();
+  if (_writeCBC){ //:WriteGWBudgetFile: cell-by-cell flows at the same steps as the heads
+    F<<"BEGIN OPTIONS\n  BUDGET FILEOUT gwf.cbc\n  HEAD FILEOUT gwf.hds\nEND OPTIONS\n\nBEGIN PERIOD 1\n  SAVE HEAD FREQUENCY "<<max(1,_headSaveFreq)<<"\n  SAVE BUDGET FREQUENCY "<<max(1,_headSaveFreq)<<"\n  PRINT BUDGET LAST\nEND PERIOD\n";
+  }
+  else {F<<"BEGIN OPTIONS\n  HEAD FILEOUT gwf.hds\nEND OPTIONS\n\nBEGIN PERIOD 1\n  SAVE HEAD FREQUENCY "<<max(1,_headSaveFreq)<<"\n  PRINT BUDGET LAST\nEND PERIOD\n";}
+  F.close();
 }
 
 //////////////////////////////////////////////////////////////////
@@ -2088,7 +2096,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     int es=max(_evtNcol,1);
     //MODFLOW multiplies the rate by the whole cell area: spread the unmet-PET volume of the coupled HRUs over the cell,
     //so the maximum ET MODFLOW can remove equals that volume (not more where HRUs cover only part of the cell)
-    for (size_t i=0;i<_evtCol.size();i++){int ic=_evtCol[i]; _evtRate[i*es]=_work[ic]/_grid.area[ic];}
+    for (size_t i=0;i<_evtCol.size();i++){int ic=_evtCol[i]; _evtRate[i*es]=_work[ic]/MF6CellArea(ic)*_rf;} //(model units: an existing model's own cell area)
     if (SZPhysical()){_evtBase.assign(_evtCol.size(),0.0); for (size_t i=0;i<_evtCol.size();i++){_evtBase[i]=_evtRate[i*es];}}
   }
   SetBoundaryArrays(tt.model_time,tstep);
@@ -2113,7 +2121,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       if (it!=_hotResSeep.end()){V=it->second;}
     }
     double q=V/tstep*_resW[e]; //[m3/d] (+: into aquifer)
-    _resQ[e*max(_resNcol,1)]=q; _Qres_spec+=q;
+    _resQ[e*max(_resNcol,1)]=q/_qf; _Qres_spec+=q;                              //(model units)
   }
   //surface-water stores: head = land surface + store depth; conductance limited so the largest possible
   //leakage in the step cannot exceed the water the stores hold in that cell
@@ -2131,14 +2139,15 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       V+=_swxVl[e][j];
     }
     double sbar=(A>0)?dA/A:0.0;                       //mean store depth [m]
-    double bhead=_top[ic]+sbar;                         //stage; bed (RBOT) = model top
+    const double zt=IsExternal()?_extTopRaw[ic]:_top[ic]; //model top in model units (an existing model's own value)
+    double bhead=zt+sbar/_hf;                           //stage; bed (RBOT) = model top [model units]
     double C=S.leakance*A, dhmax=sbar;                  //leakage is at most C*sbar (water table below the bed)
     //supply limit: the largest possible leakage, C*(bhead - cell bottom)*dt, may not exceed the water the stores
     //hold, so a store can never be over-drawn whatever the head does during the solve. (Groundwater reaching the
     //surface under an empty store is still returned to Raven by the seepage drains at the model top.)
     if (dhmax>1e-6){C=min(C,max(V,0.0)/(tstep*dhmax));}
     if ((V<=0.0) || (sbar<=0.0)){C=0.0;}
-    int st=max(_swxNcol,1); _swxHead[e*st]=bhead; _swxCond[e*st]=C; _swxRbot[e*st]=_top[ic]; //bed set in memory: exactly equal to stage when the store is empty
+    int st=max(_swxNcol,1); _swxHead[e*st]=bhead; _swxCond[e*st]=C*_hf/_qf; _swxRbot[e*st]=zt; //bed set in memory: exactly equal to stage when the store is empty
   }
   bool conv; int niter;
   std::function<bool(int,bool)> szcb; //:SoilZone PHYSICAL: interface update after every MODFLOW outer iteration
@@ -2268,7 +2277,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   ComputeStressFlows();
   _Qres=0.0; _resShortVol=0.0;
   for (size_t e=0;e<_resNode.size();e++){
-    double act=(_resHcof[e]*_X[_reduced[_resNode[e]]]-_resRhs[e])*_qf,spec=_resQ[e*max(_resNcol,1)]; //[m3/d], + into aquifer
+    double act=(_resHcof[e]*_X[_reduced[_resNode[e]]]-_resRhs[e])*_qf,spec=_resQ[e*max(_resNcol,1)]*_qf; //[m3/d], + into aquifer
     _Qres+=act; gross+=fabs(act);
     //a gain Raven already gave the lake (spec<0) that MODFLOW could not fully supply because the cell was drying
     //(AUTO_FLOW_REDUCE): the difference is taken back from the water reaching that subbasin in this step's routing,
@@ -2902,6 +2911,7 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
     S<<"  packages in balance   :"; for (size_t i=0;i<_extOther.size();i++){S<<" "<<_extOther[i];} S<<endl;
     if (_extSteady){S<<"  time                  : steady-state model with one stress period, stretched over Raven's run: every Raven step is a steady-state solution (no storage)"<<endl;}
     if (_extMoverDropped>0){S<<"  water mover           : "<<_extMoverDropped<<" movers from or to packages taken over by Raven removed"<<endl;}
+    if (_extTSShifted>0){S<<"  time series           : "<<_extTSShifted<<" TS6 files shifted to Raven's start ("<<_extOffset<<" d after the model's time zero)"<<endl;}
     S<<"  stream package        : "<<((_streamPkg=="")?string("none"):_streamPkg+((_streamMap=="AUX")?" (subbasin from auxiliary "+_streamAux+")":" (subbasin of the dominant HRU)"))<<endl;
     double Ahru=0,Alink=0; int nlow=0;
     bool poly=_owTable.empty(); //with polygons, coverage is measured against each HRU's polygon; otherwise against its .rvh area
@@ -2921,6 +2931,9 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
   S<<"  recharge/seepage cells: "<<_bndCol.size()<<endl;
   if (IsExternal()){ //rivers, wells and boundaries are the model's own packages (listed above); Raven adds none
     S<<"  river/well/boundary cells: those of the model's own packages listed above (none added by Raven)"<<endl;
+    if (_evtCol.size()>0){S<<"  water-table ET cells  : "<<_evtCol.size()<<" (EVT_RAVEN, raven.evt)"<<endl;}
+    if (_swxCol.size()>0){S<<"  surface-water exchange cells: "<<_swxCol.size()<<" (SWX_RAVEN, raven.swx)"<<endl;}
+    if (_resExchange){S<<"  coupled reservoirs / cells  : "<<_resP.size()<<" / "<<_resNode.size()<<" (RES_RAVEN, raven.res)"<<endl;}
   }
   else {
   S<<"  river cells           : "<<_rivNode.size()<<endl;
@@ -2934,6 +2947,7 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
   S<<"  coupled reservoirs / cells  : "<<_resP.size()<<" / "<<_resNode.size()<<endl;
   }
   if (_inCRS.IsSet()){S<<"  input coordinates     : "<<_inCRS.Describe()<<" (:InputCRS)"<<endl;}
+  if (_writeCBC){S<<"  budget file           : gwf.cbc every "<<max(1,_headSaveFreq)<<" steps (with specific discharge and saturation), porosity in gwf.porosity (:WriteGWBudgetFile)"<<endl;}
   S<<"  HRU/grid linkage      : "<<(_cacheHit?"read from cache":"computed")<<" in "<<_geomSeconds<<" s"<<endl;
   for (size_t o=0;o<_aObsWells.size();o++){
     int n=_aObsWells[o].node;

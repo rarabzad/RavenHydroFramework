@@ -5,7 +5,8 @@
   SPDX-License-Identifier: Artistic-2.0
   Raven-MODFLOW 6 groundwater coupling: an existing MODFLOW 6 model coupled to Raven.
   The user's simulation is copied into the output folder and kept intact except for the time discretization (split
-  into Raven time steps), the packages Raven takes over (removed) and two packages added (RCH_RAVEN, DRN_RAVEN).
+  into Raven time steps), the packages Raven takes over (removed) and Raven's packages added (RCH_RAVEN, DRN_RAVEN; with
+  water-table ET, :SurfaceWaterExchange, :ReservoirExchange or :SoilZone PHYSICAL also EVT_RAVEN, SWX_RAVEN, RES_RAVEN, SZ*_RAVEN).
   HRUs are linked to the cells of the model's top active layer through overlap areas - from cell polygons, or from an
   :OverlapWeights table as in the MODFLOW-USG coupling - normalised per HRU so that each HRU's volume is conserved.
 ----------------------------------------------------------------*/
@@ -165,6 +166,23 @@ void CGroundwaterModel::ExtReadSimulation()
     }
     if ((P.pname==Upper(_streamPkg)) && tk){ExitGracefully("CGroundwaterModel: the stream package cannot be taken over",BAD_DATA);}
   }
+  //water-table ET of the aquifer profiles (EVT_RAVEN) beside a kept ET or UZF package would take the same water twice
+  double ed=0.0; for (size_t i=0;i<_aProfiles.size();i++){ed=max(ed,_aProfiles[i].extinction_depth);}
+  for (size_t i=0;(i<_extPkgs.size()) && (ed>0);i++){
+    const gw_ext_pkg &P=_extPkgs[i]; string f=Upper(P.ftype);
+    if (((f.find("EVT")==0) || (f.find("UZF")==0)) && (find(_keepPkgs.begin(),_keepPkgs.end(),P.pname)!=_keepPkgs.end())){
+      ExitGracefully(("CGroundwaterModel: an aquifer profile has EXTINCTION_DEPTH > 0 (Raven's water-table ET) and the model keeps its "+P.ftype+" package "+P.pname+
+                      " (:KeepPackages): evapotranspiration from the water table would be counted twice. List "+P.pname+" in :RavenTakesOver, or set EXTINCTION_DEPTH 0").c_str(),BAD_DATA);
+    }
+  }
+  //lakes and wetlands that Raven exchanges with must not also be in the model's own lake or stream-flow-routing packages
+  if ((_aSWX.size()>0) || _resExchange){
+    string lk; for (size_t i=0;i<_extPkgs.size();i++){string f=Upper(_extPkgs[i].ftype); if ((f=="LAK6") || (f=="SFR6")){lk+=(lk.empty()?"":", ")+_extPkgs[i].pname+" ("+f+")";}}
+    if (!lk.empty()){
+      WriteWarning("CGroundwaterModel: the model has its own lake or stream-flow-routing packages ("+lk+"); with :SurfaceWaterExchange or :ReservoirExchange make sure "
+                   "that the wetlands, lakes and reservoirs Raven exchanges with are not also in those packages, or their exchange with the aquifer is counted twice",false);
+    }
+  }
 }
 
 //////////////////////////////////////////////////////////////////
@@ -187,7 +205,14 @@ void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
       opts.push_back(line); if ((W0=="TIME_UNITS") && (w.size()>1)){units=Upper(w[1]);}
     }
     if (block=="PERIODDATA"){
-      ExitGracefullyIf((W0=="OPEN/CLOSE") || (W0=="INTERNAL"),"CGroundwaterModel: TDIS period data must be listed in the TDIS file itself",BAD_DATA);
+      ExitGracefullyIf(W0=="INTERNAL","CGroundwaterModel: TDIS period data given as INTERNAL cannot be read by Raven; list them in the TDIS file itself or in an OPEN/CLOSE file",BAD_DATA);
+      if (W0=="OPEN/CLOSE"){ //the rows in a file of their own (path relative to the simulation folder): written inline below
+        ExitGracefullyIf(w.size()<2,("CGroundwaterModel: OPEN/CLOSE without a file name in "+f).c_str(),BAD_DATA);
+        for (size_t j=2;j<w.size();j++){ExitGracefullyIf(Upper(w[j]).find("BINARY")!=string::npos,("CGroundwaterModel: the TDIS period data file "+w[1]+" is binary; Raven reads text files only").c_str(),BAD_DATA);}
+        vector<string> rows=ExtReadOpenClose(w[1]);
+        for (size_t j=0;j<rows.size();j++){perlen.push_back(atof(Words(rows[j])[0].c_str()));}
+        continue;
+      }
       perlen.push_back(atof(w[0].c_str()));
     }
   }
@@ -258,6 +283,23 @@ void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
 }
 
 //////////////////////////////////////////////////////////////////
+/// \brief the data rows of an OPEN/CLOSE file of the working copy (path relative to the simulation folder; comments and
+///  blank lines left out)
+//
+vector<string> CGroundwaterModel::ExtReadOpenClose(const string &name) const
+{
+  string fn=name; if ((fn.size()>1) && ((fn[0]=='\'') || (fn[0]=='"'))){fn=fn.substr(1,fn.size()-2);}
+  ifstream I((_mf6dir+"/"+fn).c_str());
+  ExitGracefullyIf(!I,("CGroundwaterModel: cannot open the OPEN/CLOSE file "+_mf6dir+"/"+fn).c_str(),BAD_DATA);
+  vector<string> rows; string line;
+  while (getline(I,line)){
+    if (!line.empty() && (line[line.size()-1]=='\r')){line.erase(line.size()-1);}
+    if (!Words(line).empty()){rows.push_back(line);}
+  }
+  return rows;
+}
+
+//////////////////////////////////////////////////////////////////
 /// \brief days since 1970-01-01 of a yyyy-mm-dd date (proleptic Gregorian); LLONG_MIN if malformed
 //
 long long CGroundwaterModel::CivilDays(const string &date)
@@ -281,25 +323,33 @@ void CGroundwaterModel::ExtRenumberPeriods()
   //only the coupled model's packages are renumbered: other models' period data would stay on the old numbers
   ExitGracefullyIf((_extDrop>0) && (_extNModels>1),"CGroundwaterModel: Raven starts after the model's time zero, which renumbers the stress periods, "
     "but the simulation holds several models; start Raven at :MF6StartDate",BAD_DATA);
+  set<string> tsDone; _extTSShifted=0; //time-series files already shifted (a file may serve several packages)
   for (size_t i=0;i<_extPkgs.size();i++){
     const gw_ext_pkg &P=_extPkgs[i];
     if (find(_takeOver.begin(),_takeOver.end(),P.pname)!=_takeOver.end()){continue;}
     string f=_mf6dir+"/"+P.fname;
     ifstream I(f.c_str()); if (!I){continue;}
-    vector<string> pre; map<int,vector<string> > blk; string line; int k=-1; bool arrays=false,ts=false,tv=false;
+    vector<string> pre,tsFiles; map<int,vector<string> > blk; string line; int k=-1; bool arrays=false,ts=false,tv=false;
     while (getline(I,line)){
       vector<string> w=Words(line); string W0=w.empty()?"":Upper(w[0]);
       if ((W0=="BEGIN") && (w.size()>2) && (Upper(w[1])=="PERIOD")){k=atoi(w[2].c_str()); blk[k].clear(); continue;}
       if ((k>=0) && (W0=="END")){k=-1; continue;}
       if (k>=0){blk[k].push_back(line); continue;}
       if (W0=="READASARRAYS"){arrays=true;}
-      if ((W0=="TS6") || (W0=="TAS6") || (W0=="TIMESERIESFILE")){ts=true;}
+      if ((W0=="TAS6") || (W0=="TIMESERIESFILE")){ts=true;}
+      if ((W0=="TS6") && (w.size()>2) && (Upper(w[1])=="FILEIN")){tsFiles.push_back(w[2]);}
       if ((W0=="TVK6") || (W0=="TVS6")){tv=true;} //time-varying K or storage: their own period blocks accumulate
       pre.push_back(line);
     }
     I.close();
-    //time series count from the model's time zero: any later start shifts them, even if no period is dropped
-    ExitGracefullyIf(ts,("CGroundwaterModel: "+P.pname+" uses time series, whose times count from the model's time zero; start Raven at :MF6StartDate").c_str(),BAD_DATA);
+    //time series count from the model's time zero: any later start shifts them, even if no period is dropped. TS6 files are
+    //shifted (ExtShiftTimeSeries); time-array series (TAS6) are not
+    ExitGracefullyIf(ts,("CGroundwaterModel: "+P.pname+" uses time-array series (TAS6), whose times count from the model's time zero; start Raven at :MF6StartDate").c_str(),BAD_DATA);
+    if (!tsFiles.empty()){
+      ExitGracefullyIf(_extNModels>1,("CGroundwaterModel: "+P.pname+" uses time series, whose times count from the model's time zero, and the simulation holds "
+        "several models (whose series Raven would not shift); start Raven at :MF6StartDate").c_str(),BAD_DATA);
+      for (size_t j=0;j<tsFiles.size();j++){if (tsDone.insert(tsFiles[j]).second){ExtShiftTimeSeries(tsFiles[j]);}}
+    }
     if (_extDrop==0){continue;} //start inside the first period: period numbers are unchanged
     ExitGracefullyIf(tv,("CGroundwaterModel: "+P.pname+" uses time-varying properties (TVK6/TVS6), whose period data cannot be renumbered safely; start Raven at :MF6StartDate").c_str(),BAD_DATA);
     if (blk.empty()){continue;}
@@ -325,6 +375,36 @@ void CGroundwaterModel::ExtRenumberPeriods()
       O<<"END PERIOD\n";
     }
   }
+}
+
+//////////////////////////////////////////////////////////////////
+/// \brief a TS6 file of the working copy on Raven's later start: every time is shifted by the time elapsed before the start,
+///  so the series' new time zero is Raven's start. Earlier times become negative and stay: MODFLOW interpolates between the
+///  entries on either side of the new zero as it did on the original clock
+//
+void CGroundwaterModel::ExtShiftTimeSeries(const string &name)
+{
+  string fn=name; if ((fn.size()>1) && ((fn[0]=='\'') || (fn[0]=='"'))){fn=fn.substr(1,fn.size()-2);}
+  const string f=_mf6dir+"/"+fn;
+  ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot open the time-series file "+f).c_str(),BAD_DATA);
+  vector<string> L; string line,block;
+  while (getline(I,line)){if (!line.empty() && (line[line.size()-1]=='\r')){line.erase(line.size()-1);} L.push_back(line);}
+  I.close();
+  const double shift=_extOffset*_extTf; //[model time units]
+  ofstream O(f.c_str()); ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+f).c_str(),BAD_DATA);
+  O<<"# times shifted by Raven by -"<<setprecision(15)<<shift<<" (Raven starts "<<_extOffset<<" d after the model's time zero)\n";
+  for (size_t i=0;i<L.size();i++){
+    vector<string> w=Words(L[i]); string W0=w.empty()?"":Upper(w[0]);
+    if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); O<<L[i]<<"\n"; continue;}
+    if (W0=="END"){block=""; O<<L[i]<<"\n"; continue;}
+    if ((block=="TIMESERIES") && !w.empty()){
+      ExitGracefullyIf((W0=="OPEN/CLOSE") || (W0=="INTERNAL"),("CGroundwaterModel: the time-series file "+f+" reads its rows from another file; list them in the file itself").c_str(),BAD_DATA);
+      O<<"  "<<setprecision(15)<<atof(w[0].c_str())-shift; for (size_t j=1;j<w.size();j++){O<<" "<<w[j];} O<<"\n"; continue;
+    }
+    O<<L[i]<<"\n";
+  }
+  ExitGracefullyIf(!O.good(),("CGroundwaterModel: failed writing "+f).c_str(),BAD_DATA);
+  _extTSShifted++;
 }
 
 //////////////////////////////////////////////////////////////////
@@ -421,10 +501,21 @@ void CGroundwaterModel::ExtEditMover()
     if ((block=="DIMENSIONS") && (W0=="MAXPACKAGES")){O<<"  MAXPACKAGES  "<<keepPk.size()<<"   # "<<L[i]<<" (packages taken over by Raven removed)\n"; continue;}
     if ((block=="PACKAGES") && tk.count(Upper(w.back()))){O<<"# "<<L[i]<<"   # taken over by Raven\n"; continue;}
     if (block=="PERIOD"){
-      ExitGracefullyIf((W0=="OPEN/CLOSE") || (W0=="INTERNAL"),("CGroundwaterModel: the water mover "+fn+
-        " reads its period data from another file; Raven cannot remove the movers of the packages it takes over").c_str(),BAD_DATA);
-      //provider id receiver id type value (model-level): a mover from or to a taken-over package goes
-      if ((w.size()>=4) && (tk.count(Upper(w[0])) || tk.count(Upper(w[2])))){ndrop++; continue;}
+      ExitGracefullyIf(W0=="INTERNAL",("CGroundwaterModel: the water mover "+fn+" gives its period data as INTERNAL; Raven cannot remove "
+        "the movers of the packages it takes over there (list them in the file or in an OPEN/CLOSE file)").c_str(),BAD_DATA);
+      vector<string> rows; //the period's rows: inline, or read from an OPEN/CLOSE file and written inline
+      if (W0=="OPEN/CLOSE"){
+        ExitGracefullyIf(w.size()<2,("CGroundwaterModel: OPEN/CLOSE without a file name in "+fn).c_str(),BAD_DATA);
+        rows=ExtReadOpenClose(w[1]); O<<"# "<<L[i]<<"   # read by Raven and written below\n";
+      }
+      else {rows.push_back(L[i]);}
+      for (size_t j=0;j<rows.size();j++){
+        vector<string> v=Words(rows[j]);
+        //provider id receiver id type value (model-level): a mover from or to a taken-over package goes
+        if ((v.size()>=4) && (tk.count(Upper(v[0])) || tk.count(Upper(v[2])))){ndrop++; continue;}
+        O<<rows[j]<<"\n";
+      }
+      continue;
     }
     O<<L[i]<<"\n";
   }
@@ -453,6 +544,9 @@ void CGroundwaterModel::ExtEditNameFile(const bool addRaven)
       if (_extSeepage){O<<"  DRN6  raven.drn  DRN_RAVEN   # added by Raven\n";}
       if (_szxLink.size()>0){O<<"  GHB6  raven.szx  SZX_RAVEN   # added by Raven (:SoilZone PHYSICAL)\n  WEL6  raven.szq  SZQ_RAVEN   # added by Raven\n  DRN6  raven.szd  SZD_RAVEN   # added by Raven\n";}
       if (_szwNode.size()>0){O<<"  WEL6  raven.szw  SZW_RAVEN   # added by Raven\n";}
+      if (_evtCol.size()>0) {O<<"  EVT6  raven.evt  EVT_RAVEN   # added by Raven (water-table ET)\n";}
+      if (_swxCol.size()>0) {O<<"  RIV6  raven.swx  SWX_RAVEN   # added by Raven (:SurfaceWaterExchange)\n";}
+      if (_resNode.size()>0){O<<"  WEL6  raven.res  RES_RAVEN   # added by Raven (:ReservoirExchange)\n";}
     }
     if (!w.empty() && (Upper(w[0])=="END")){block="";}
     if ((block=="PACKAGES") && (w.size()>=2) && (Upper(w[0])!="BEGIN")){
@@ -784,11 +878,14 @@ void CGroundwaterModel::ExtBuild(const optStruct &Options)
     "CGroundwaterModel: an existing MODFLOW 6 model needs a Gregorian :Calendar (dates are compared day by day)",BAD_DATA);
   long long dm=CivilDays(_extStart),dr=CivilDays(t0.date_string);
   _extRavenStart=t0.date_string.substr(0,10);
+  { //a start within the day (sub-daily steps): the time of day too, ISO 8601
+    const double fr=Options.julian_start_day-floor(Options.julian_start_day); const long s=lround(fr*86400.0)%86400;
+    if (s>0){char b[32]; snprintf(b,sizeof(b),"T%02ld:%02ld:%02ld",s/3600,(s/60)%60,s%60); _extRavenStart+=b;}
+  }
   ExitGracefullyIf((dm==LLONG_MIN) || (dr==LLONG_MIN),"CGroundwaterModel: :MF6StartDate must be yyyy-mm-dd",BAD_DATA);
   ExitGracefullyIf(dr<dm,("CGroundwaterModel: Raven's :StartDate "+t0.date_string+" is before the model's time zero (:MF6StartDate "+_extStart+")").c_str(),BAD_DATA);
   //[d] Raven starts this long after the model's time zero (a restart), including a time of day in :StartDate
   _extOffset=(double)(dr-dm)+(Options.julian_start_day-floor(Options.julian_start_day));
-  ExitGracefullyIf((_extOffset>0) && (Options.timestep<1.0-1e-9),"CGroundwaterModel: runs starting after the model's time zero need daily or longer time steps",BAD_DATA);
   ExtWriteSimFile();
   ExtRewriteTDIS(Options);
   ExtEditMover();
@@ -874,6 +971,28 @@ void CGroundwaterModel::ExtWritePackages(const optStruct &Options)
       for (size_t j=0;j<_szwNode.size();j++){int n=_szwNode[j]; F<<"  "<<CellID(n/_ncpl,n%_ncpl)<<" 0.0\n";}
       F<<"END PERIOD\n"; F.close();
     }
+  }
+  if (_evtCol.size()>0){ //water-table ET: rate = PET left unmet by Raven, set every step (model units)
+    F.open((_mf6dir+"/raven.evt").c_str());
+    F<<"# water-table evapotranspiration from Raven: surface = model top, rate set every time step\nBEGIN OPTIONS\n  SAVE_FLOWS\nEND OPTIONS\n\n";
+    F<<"BEGIN DIMENSIONS\n  MAXBOUND "<<_evtCol.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(12);
+    for (size_t i=0;i<_evtCol.size();i++){int ic=_evtCol[i],n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<_extTopRaw[ic]<<" 0.0 "<<_aProfiles[_colProfile[ic]].extinction_depth*_extLf<<"\n";}
+    F<<"END PERIOD\n"; F.close();
+  }
+  if (_swxCol.size()>0){ //surface-water stores <-> aquifer: bed at the model top; stage and conductance set every step
+    F.open((_mf6dir+"/raven.swx").c_str());
+    F<<"# surface-water stores (wetlands, lakes) exchanging with the aquifer (:SurfaceWaterExchange): river-type boundary with its bed at the\n"
+       "# model top; stage = model top + store depth and conductance are set by Raven every step (model units)\nBEGIN OPTIONS\n  SAVE_FLOWS\nEND OPTIONS\n\n";
+    F<<"BEGIN DIMENSIONS\n  MAXBOUND "<<_swxCol.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(12);
+    for (size_t e=0;e<_swxCol.size();e++){int ic=_swxCol[e],n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<_extTopRaw[ic]<<" 0.0 "<<_extTopRaw[ic]<<"\n";}
+    F<<"END PERIOD\n"; F.close();
+  }
+  if (_resNode.size()>0){ //seepage of Raven reservoirs into the top active cells under their lake HRUs (:ReservoirExchange)
+    F.open((_mf6dir+"/raven.res").c_str());
+    F<<"# seepage of Raven reservoirs into the aquifer under their lake HRUs (negative: groundwater feeding the reservoir); rates set by Raven\n";
+    F<<"BEGIN OPTIONS\n  AUTO_FLOW_REDUCE 0.1\n  SAVE_FLOWS\nEND OPTIONS\n\nBEGIN DIMENSIONS\n  MAXBOUND "<<_resNode.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n";
+    for (size_t e=0;e<_resNode.size();e++){int n=_resNode[e]; F<<"  "<<CellID(n/_ncpl,n%_ncpl)<<" 0.0\n";}
+    F<<"END PERIOD\n"; F.close();
   }
   if (_hotHeads.size()>0){
     F.open((_mf6dir+"/raven.ic").c_str());
