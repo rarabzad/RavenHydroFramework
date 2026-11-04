@@ -27,6 +27,7 @@
 ///  :MF6Library       [path to libmf6]                           (optional; else RAVEN_MF6_LIB)
 ///  :SeepageReturnTo  [state variable]                           (default: lowest soil layer)
 ///  :HeadSaveFrequency [time steps]                              (default 30)
+///  :WriteGWBudgetFile                                           (optional; MODFLOW budget file and porosity)
 ///
 /// \param *&pModel [in] The input model object
 /// \param &Options [in] Global model options information
@@ -411,6 +412,10 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     else if (!strcmp(s[0],":WriteNetCDFHeads"))
     {/*:WriteNetCDFHeads   full head field to GWHeads.nc every :HeadSaveFrequency steps (needs -Dnetcdf) */
       pGW->SetWriteNetCDFHeads(true);
+    }
+    else if (!strcmp(s[0],":WriteGWBudgetFile"))
+    {/*:WriteGWBudgetFile   MODFLOW budget file mf6/gwf.cbc every :HeadSaveFrequency steps, with mf6/gwf.porosity (generated models) */
+      pGW->SetWriteBudgetFile();
     }
     else if (!strcmp(s[0],":SolverHeadTolerance"))
     {/*:SolverHeadTolerance [m]  Newton head-change tolerance (default 0.00001) */
