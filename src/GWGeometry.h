@@ -35,8 +35,10 @@ public:
   double GetLon0() const {return _lon0;}
 };
 
+class CGWCRS;
 ///////////////////////////////////////////////////////////////////
-/// \brief ESRI ASCII grid in geographic (lon/lat) coordinates, sampled bilinearly
+/// \brief ESRI ASCII grid in geographic (lon/lat) coordinates, or in the projected coordinates of an :InputCRS,
+/// sampled bilinearly
 //
 class CGWRaster
 {
@@ -44,9 +46,11 @@ private:
   int _ncols,_nrows;
   double _xll,_yll,_cs,_nodata;
   vector<double> _v;          ///< row-major, north row first
+  const CGWCRS *_crs;         ///< projection of the raster's coordinates (NULL: longitude/latitude)
   bool Valid(int r,int c) const;
 public:
   CGWRaster();
+  void SetCRS(const CGWCRS *crs){_crs=crs;}  ///< (before Read)
   bool Read  (const string &filename,string &err);
   bool Sample(const double lon,const double lat,double &val) const;
   bool IsLoaded() const {return (_ncols>0);}
@@ -75,13 +79,15 @@ public:
   void   Inverse(const double x,const double y,double &lon,double &lat) const; ///< [m] -> [deg]
   void   Forward(const double lon,const double lat,double &x,double &y) const; ///< [deg] -> [m]
   string Describe() const;
+  bool   Same   (const CGWCRS &o) const;        ///< the same projection (parameters within round-off)
 };
 namespace GWGeom
 {
+  //(crs: projection of the file's coordinates, :InputCRS; NULL: longitude/latitude. Vertices are returned in lon/lat)
   bool   ReadGeoJSONPolygons(const string &filename,const string &idField,
-                             map<long long,vector<gw_ring> > &shapes,string &err);
+                             map<long long,vector<gw_ring> > &shapes,string &err,const CGWCRS *crs=NULL);
   bool   ReadGeoJSONLines   (const string &filename,const string &idField,
-                             vector<gw_ring> &lines,vector<long long> &ids,string &err);
+                             vector<gw_ring> &lines,vector<long long> &ids,string &err,const CGWCRS *crs=NULL);
   double SignedArea         (const gw_ring &r);
   double ClipRingAreaToRect (const gw_ring &r,const double x0,const double y0,const double x1,const double y1);
 }

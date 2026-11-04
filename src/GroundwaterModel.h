@@ -29,12 +29,14 @@ struct gw_well       ///< pumping/injection well
 {
   long long id; string name;
   double lat,lon,screen_top,screen_bot;  ///< [deg],[m]
+  bool   xy;                             ///< given as X,Y in :InputCRS (lat,lon hold Y,X until ResolveInputCRS)
   CTimeSeries *pRate;                    ///< [m3/d], negative = withdrawal (from .rvt :WellFlowRate)
 };
 struct gw_obswell    ///< monitoring well
 {
   long long id; string name;
   double lat,lon,z;                      ///< screen elevation [m]
+  bool   xy;                             ///< given as X,Y in :InputCRS (lat,lon hold Y,X until ResolveInputCRS)
   int    node;                           ///< user cell, -1 if outside the active model
 };
 struct gw_swx        ///< surface-water store <-> aquifer exchange (wetlands, lakes)
@@ -68,6 +70,7 @@ struct gw_aquifer_class
   double clapp_b;   ///< Campbell exponent of the unsaturated column [-] (:SoilZoneVadose RICHARDS)
   double psia;      ///< air-entry suction of the unsaturated column [m]
   bool   unsatGiven;///< CLAPP_B and AIR_ENTRY_PRESSURE were given
+  bool   syGiven;   ///< SPEC_YIELD was given
 };
 
 struct gw_layer
@@ -119,6 +122,7 @@ private:/*----------------------------------------------------*/
 
   //-- grid ------------------------------------------------------
   CGWProjection _proj;
+  CGWCRS        _inCRS;                 ///< :InputCRS projection of the geometry and raster input files (not set: lon/lat)
   CGWGrid       _grid;                  ///< cells of one layer (regular, quadtree, HRU mesh or imported)
   int    _gridType;                    ///< gw_grid_type
   double _gridAngle;                   ///< rotation of regular and quadtree grids [deg, counterclockwise]
@@ -198,6 +202,7 @@ private:/*----------------------------------------------------*/
   double                 _Qwel_spec,_Qwel,_Qghb,_Qchd; ///< [m3/d]
   bool                   _steadyInit; double _ssRecharge; ///< steady-state first period requested (.rvg), recharge [mm/d]
   bool                   _doSteady;  ///< steady-state period in this run (off on hotstart; decided per run/member)
+  string                 _dryStart;  ///< layers whose active convertible cells all start dry (summary; empty: none)
   string                 _initMode;  double _initValue;   ///< .rvc :InitialGWHeads
   vector<double>         _hotHeads;  int _hotDims[3];     ///< .rvc :GWHeads (hotstart)
   bool                   _active;
@@ -642,6 +647,10 @@ public:/*-------------------------------------------------------*/
   void   SetMF6GridFile       (const string &f,const string &id) {_extGridFile=f; _extGridID=id;}
   void   SetMF6StartDate      (const string &d)        {_extStart=d; _extOnly+=" :MF6StartDate";}
   bool   SetMF6CRS            (const string &spec,string &err) {return _extCRS.Parse(spec,err);}
+  bool   SetInputCRS          (const string &spec,string &err) {return _inCRS.Parse(spec,err);}
+  const CGWCRS *InCRS         () const {return _inCRS.IsSet()?&_inCRS:NULL;}
+  void   ResolveInputCRS      ();   ///< wells given as X,Y: to lon/lat (after the .rvg file is read)
+  void   CheckDryStart        (const optStruct &Options);   ///< warns of layers that start completely dry
   void   AddTakeOver          (const string &p)        {string u=p; for (size_t i=0;i<u.size();i++){u[i]=(char)toupper((unsigned char)u[i]);} _takeOver.push_back(u);}
   void   AddKeepPackage       (const string &p)        {string u=p; for (size_t i=0;i<u.size();i++){u[i]=(char)toupper((unsigned char)u[i]);} _keepPkgs.push_back(u); if (_extOnly.find(" :KeepPackages")==string::npos){_extOnly+=" :KeepPackages";}}
   void   SetStreamPackage     (const string &p,const string &map,const string &aux) {_streamPkg=p; _streamMap=map; _streamAux=aux;}

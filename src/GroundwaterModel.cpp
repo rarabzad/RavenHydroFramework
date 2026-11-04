@@ -244,7 +244,44 @@ string CGroundwaterModel::GridSpec() const
   if (_gridFile!=""){ifstream G(_gridFile.c_str(),ios::binary); uint64_t hh=1469598103934665603ULL; char b[65536];
     while (G.read(b,sizeof(b)) || G.gcount()>0){for (streamsize k=0;k<G.gcount();k++){hh^=(unsigned char)b[k]; hh*=1099511628211ULL;}}
     s<<":"<<hex<<hh<<dec;}
+  if (_inCRS.IsSet()){s<<":incrs:"<<_inCRS.Describe();}
   return s.str();
+}
+//////////////////////////////////////////////////////////////////
+/// \brief start-up diagnostic: a layer of a generated model whose active convertible cells all start at or below their
+///  bottom (initial heads, cold start without a steady-state period, or hotstart heads) is dry as a whole; MODFLOW then has
+///  to rewet it in the first steps, which can take many iterations or leave steps unconverged
+//
+void CGroundwaterModel::CheckDryStart(const optStruct &Options)
+{
+  _dryStart="";
+  if (IsExternal() || _doSteady){return;}
+  for (int l=0;l<_nlay;l++){
+    int nact=0,ndry=0;
+    for (int ic=0;ic<_ncpl;ic++){
+      const int ip=_colProfile[ic],n=UserNode(l,ic);
+      if ((ip==DOESNT_EXIST) || (_idomain[n]<=0) || (l>=(int)_aProfiles[ip].layers.size())){continue;}
+      if (_aProfiles[ip].layers[l].type==GWL_CONFINED_AQUIFER){continue;} //(confined cells never dry)
+      nact++; if (_strt[n]<=_botm[n]){ndry++;}
+    }
+    if ((nact==0) || (ndry<nact)){continue;}
+    _dryStart+=(_dryStart==""?"":", ")+to_string(l+1)+" ("+to_string(nact)+" cells)";
+    WriteWarning("CGroundwaterModel: layer "+to_string(l+1)+" starts dry: the initial head is at or below the bottom of all its "+to_string(nact)+
+                 " active convertible cells"+string((_hotHeads.size()>0)?" (hotstart heads)":" (INITIAL_HEAD_DEPTH or :InitialGWHeads deeper than the layers above it)")+
+                 "; MODFLOW has to rewet the whole layer, which can take many iterations or leave the first steps unconverged. Start from "
+                 ":GWInitialization STEADY_STATE, a smaller INITIAL_HEAD_DEPTH or :InitialGWHeads",Options.noisy);
+  }
+}
+//wells and monitoring wells given as X,Y (:InputCRS) to longitude/latitude
+void CGroundwaterModel::ResolveInputCRS()
+{
+  for (size_t w=0;w<_aWells.size()+_aObsWells.size();w++){
+    bool ow=(w>=_aWells.size()); double &lat=ow?_aObsWells[w-_aWells.size()].lat:_aWells[w].lat,&lon=ow?_aObsWells[w-_aWells.size()].lon:_aWells[w].lon;
+    bool &xy=ow?_aObsWells[w-_aWells.size()].xy:_aWells[w].xy;
+    if (!xy){continue;}
+    ExitGracefullyIf(!_inCRS.IsSet(),("CGroundwaterModel: well "+(ow?_aObsWells[w-_aWells.size()].name:_aWells[w].name)+" is given by X and Y: give :InputCRS (their projection) in the .rvg file, or LATITUDE and LONGITUDE").c_str(),BAD_DATA);
+    double x=lon,y=lat; _inCRS.Inverse(x,y,lon,lat); xy=false;
+  }
 }
 //refinement features in the grid's local frame
 void CGroundwaterModel::BuildRefinement(vector<gw_refine> &ref) const
@@ -260,7 +297,7 @@ void CGroundwaterModel::BuildRefinement(vector<gw_refine> &ref) const
       string file=(_refKind[i]=="RIVERS")?_riverFile:_refFile[i];
       ExitGracefullyIf(file=="","CGroundwaterModel: :GridRefinement RIVERS needs :RiverGeometry",BAD_DATA);
       vector<gw_ring> lines; vector<long long> ids;
-      if (!GWGeom::ReadGeoJSONLines(file,(_refKind[i]=="RIVERS")?_riverIDField:"",lines,ids,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+      if (!GWGeom::ReadGeoJSONLines(file,(_refKind[i]=="RIVERS")?_riverIDField:"",lines,ids,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
       for (size_t l=0;l<lines.size();l++){
         f.kind=1; f.geom.clear();
         for (size_t k=0;k<lines[l].size();k++){double X,Y; gw_pt p; _proj.Forward(lines[l][k].x,lines[l][k].y,X,Y); _grid.ToLocal(X,Y,p.x,p.y); f.geom.push_back(p);}
@@ -269,7 +306,7 @@ void CGroundwaterModel::BuildRefinement(vector<gw_refine> &ref) const
     }
     else if (_refKind[i]=="POLYGONS"){
       map<long long,vector<gw_ring> > polys;
-      if (!GWGeom::ReadGeoJSONPolygons(_refFile[i],"",polys,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+      if (!GWGeom::ReadGeoJSONPolygons(_refFile[i],"",polys,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
       for (map<long long,vector<gw_ring> >::iterator it=polys.begin();it!=polys.end();it++){
         for (size_t r=0;r<it->second.size();r++){
           f.kind=2; f.geom.clear();
@@ -609,6 +646,7 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
     WriteAdvisory("CGroundwaterModel: hotstart heads found in .rvc; steady-state initialization skipped",Options.noisy);
     _doSteady=false; //decided per run: the user's setting is kept for later ensemble members
   }
+  CheckDryStart(Options);
   if (IsExternal()){ExtWritePackages(Options); GWPROF("ExtWritePackages"); if (_owTable.empty()){WriteGridCells(Options); GWPROF("WriteGridCells");}}
   else {
   WriteMF6Files(Options); GWPROF("WriteMF6Files");
@@ -929,7 +967,7 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
     }
   }
   if (!_cacheHit){
-  if (!GWGeom::ReadGeoJSONPolygons(_hruGeomFile,_hruIDField,shapes,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+  if (!GWGeom::ReadGeoJSONPolygons(_hruGeomFile,_hruIDField,shapes,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
 
   int nHRUs=_pModel->GetNumHRUs();
   //-- projection origin = mean centroid of coupled HRUs
@@ -1022,7 +1060,7 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   }
   else { //imported cells
     map<long long,vector<gw_ring> > cellshapes;
-    if (!GWGeom::ReadGeoJSONPolygons(_gridFile,_gridFileID,cellshapes,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    if (!GWGeom::ReadGeoJSONPolygons(_gridFile,_gridFileID,cellshapes,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
     vector<gw_ring> cells;
     for (map<long long,vector<gw_ring> >::iterator it=cellshapes.begin();it!=cellshapes.end();it++){
       ExitGracefullyIf(it->second.size()!=1,("CGroundwaterModel: grid cell "+to_string(it->first)+" in "+_gridFile+" must be a single polygon without holes").c_str(),BAD_DATA);
@@ -1079,6 +1117,7 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
     }
   }
   CGWRaster &dem=_dem;
+  dem.SetCRS(InCRS());
   if (_demFile!=""){ if (!dem.Read(_demFile,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);} }
   _land.assign(_ncpl,0.0);
   for (int ic=0;ic<_ncpl;ic++)
@@ -1098,6 +1137,7 @@ void CGroundwaterModel::BuildVertical(const optStruct &Options)
 {
   string err;
   CGWRaster bed;
+  bed.SetCRS(InCRS());
   if (_bedrockFile!=""){ if (!bed.Read(_bedrockFile,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);} }
   _nlay=1;
   for (size_t i=0;i<_aProfiles.size();i++){_nlay=max(_nlay,(int)_aProfiles[i].layers.size());}
@@ -1225,7 +1265,7 @@ void CGroundwaterModel::BuildRivers()
   }
   if (_riverFile==""){return;}
   vector<gw_ring> lines; vector<long long> ids; string err;
-  if (!GWGeom::ReadGeoJSONLines(_riverFile,_riverIDField,lines,ids,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+  if (!GWGeom::ReadGeoJSONLines(_riverFile,_riverIDField,lines,ids,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
   map<pair<int,int>,pair<double,double> > acc; //(subbasin,column) -> (length, min bed elevation)
   double cs=_cellSize;
   for (size_t i=0;i<lines.size();i++)
@@ -1303,7 +1343,7 @@ vector<int> CGroundwaterModel::SelectColumns(const string &file) const
 {
   vector<int> cols; vector<char> sel(_ncpl,0); string err;
   map<long long,vector<gw_ring> > polys;
-  if (GWGeom::ReadGeoJSONPolygons(file,"",polys,err))
+  if (GWGeom::ReadGeoJSONPolygons(file,"",polys,err,InCRS()))
   {
     vector<gw_ring> rings;
     for (map<long long,vector<gw_ring> >::const_iterator it=polys.begin();it!=polys.end();it++){
@@ -1327,8 +1367,9 @@ vector<int> CGroundwaterModel::SelectColumns(const string &file) const
   }
   else
   {
-    vector<gw_ring> lines; vector<long long> ids;
-    if (!GWGeom::ReadGeoJSONLines(file,"",lines,ids,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    ExitGracefullyIf(err.find("no Polygon/MultiPolygon")==string::npos,("CGroundwaterModel: "+err).c_str(),BAD_DATA); //(a polygon file refused by its coordinates)
+    vector<gw_ring> lines; vector<long long> ids; err="";
+    if (!GWGeom::ReadGeoJSONLines(file,"",lines,ids,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
     for (size_t i=0;i<lines.size();i++){
       for (size_t n=0;n+1<lines[i].size();n++){
         double xa,ya,xb,yb; _proj.Forward(lines[i][n].x,lines[i][n].y,xa,ya); _proj.Forward(lines[i][n+1].x,lines[i][n+1].y,xb,yb);
@@ -2892,6 +2933,7 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
   S<<"  surface-water exchange cells: "<<_swxCol.size()<<endl;
   S<<"  coupled reservoirs / cells  : "<<_resP.size()<<" / "<<_resNode.size()<<endl;
   }
+  if (_inCRS.IsSet()){S<<"  input coordinates     : "<<_inCRS.Describe()<<" (:InputCRS)"<<endl;}
   S<<"  HRU/grid linkage      : "<<(_cacheHit?"read from cache":"computed")<<" in "<<_geomSeconds<<" s"<<endl;
   for (size_t o=0;o<_aObsWells.size();o++){
     int n=_aObsWells[o].node;
@@ -2899,6 +2941,7 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
   }
   if (_doSteady){S<<"  initialization        : steady state, recharge "<<_ssRecharge<<" mm/d"<<endl;}
   else if (_hotHeads.size()>0){S<<"  initialization        : hotstart heads from .rvc"<<endl;}
+  if (_dryStart!=""){S<<"  dry at the start      : layer "<<_dryStart<<"; every active convertible cell at or below its bottom"<<endl;}
   for (size_t p=0;p<_aProfiles.size();p++){
     int n=0; for (int ic=0;ic<_ncpl;ic++){if (_colProfile[ic]==(int)p){n++;}}
     S<<"  profile "<<_aProfiles[p].name<<": ";

@@ -49,7 +49,7 @@ void CGWProjection::Inverse(const double x,const double y,double &lon,double &la
 //=================================================================
 // Raster
 //=================================================================
-CGWRaster::CGWRaster(){_ncols=_nrows=0;_xll=_yll=0;_cs=1;_nodata=-9999;}
+CGWRaster::CGWRaster(){_ncols=_nrows=0;_xll=_yll=0;_cs=1;_nodata=-9999;_crs=NULL;}
 bool CGWRaster::Read(const string &filename,string &err)
 {
   ifstream IN(filename.c_str());
@@ -73,6 +73,11 @@ bool CGWRaster::Read(const string &filename,string &err)
   }
   if ((_ncols<=0) || (_nrows<=0) || (_cs<=0)){err="invalid raster header in "+filename;return false;}
   if (center){_xll-=0.5*_cs;_yll-=0.5*_cs;}
+  if ((_crs==NULL) && ((_xll<-360.0) || (_xll+_ncols*_cs>360.0) || (_yll<-90.0-_cs) || (_yll+_nrows*_cs>90.0+_cs))){ //(projected metres read as degrees)
+    ostringstream s; s<<"raster "<<filename<<" lies outside the longitude/latitude range (lower-left corner "<<_xll<<", "<<_yll<<", cell size "<<_cs
+                      <<"): a raster in projected coordinates needs :InputCRS in the .rvg file";
+    err=s.str(); _ncols=0; return false;
+  }
   _v.resize((size_t)_ncols*_nrows);
   for (size_t i=0;i<_v.size();i++){
     if (!(IN>>val)){err="raster "+filename+" has fewer values than ncols*nrows";_ncols=0;return false;}
@@ -88,9 +93,11 @@ bool CGWRaster::Valid(int r,int c) const
 bool CGWRaster::Sample(const double lon,const double lat,double &val) const
 {
   if (_ncols==0){return false;}
+  double px=lon,py=lat;
+  if (_crs!=NULL){_crs->Forward(lon,lat,px,py);} //(a projected raster: interpolated in its own coordinates)
   double ytop=_yll+_nrows*_cs;
-  double fc=(lon-_xll)/_cs-0.5;
-  double fr=(ytop-lat)/_cs-0.5;
+  double fc=(px-_xll)/_cs-0.5;
+  double fr=(ytop-py)/_cs-0.5;
   if ((fc<-1.0) || (fr<-1.0) || (fc>_ncols) || (fr>_nrows)){return false;}
   fc=std::max(0.0,std::min((double)(_ncols-1),fc));
   fr=std::max(0.0,std::min((double)(_nrows-1),fr));
@@ -192,7 +199,20 @@ namespace
       }
     }
   };
-  bool RingFromJSON(const JVal &jr,gw_ring &r)
+  //coordinates of a file: projected ones (:InputCRS) go to lon/lat as they are read; without a projection the largest
+  //|x| and |y| are kept, to recognise projected coordinates read as degrees
+  struct JCoords
+  {
+    const CGWCRS *crs; double ax,ay;
+    JCoords(const CGWCRS *c):crs(c),ax(0),ay(0){}
+    gw_pt Point(const double x,const double y){
+      gw_pt q; q.x=x; q.y=y;
+      if (crs!=NULL){crs->Inverse(x,y,q.x,q.y);}
+      else {ax=std::max(ax,fabs(x)); ay=std::max(ay,fabs(y));}
+      return q;
+    }
+  };
+  bool RingFromJSON(const JVal &jr,gw_ring &r,JCoords &C)
   {
     r.clear();
     if (jr.t!=J_ARR){return false;}
@@ -202,18 +222,51 @@ namespace
       gw_pt q; q.x=pt.a[0].n; q.y=pt.a[1].n; r.push_back(q);
     }
     if ((r.size()>1) && (r.front().x==r.back().x) && (r.front().y==r.back().y)){r.pop_back();}
+    for (size_t i=0;i<r.size();i++){r[i]=C.Point(r[i].x,r[i].y);}
     return (r.size()>=3);
   }
-  void AddPolygon(const JVal &jpoly,vector<gw_ring> &rings)
+  void AddPolygon(const JVal &jpoly,vector<gw_ring> &rings,JCoords &C)
   {
     for (size_t i=0;i<jpoly.a.size();i++){
       gw_ring r;
-      if (!RingFromJSON(jpoly.a[i],r)){continue;}
+      if (!RingFromJSON(jpoly.a[i],r,C)){continue;}
       double A=GWGeom::SignedArea(r);
       bool outer=(i==0);
       if ((outer && (A<0)) || (!outer && (A>0))){std::reverse(r.begin(),r.end());}
       rings.push_back(r);
     }
+  }
+  //the GeoJSON "crs" member (GDAL: {"type":"name","properties":{"name":"urn:ogc:def:crs:EPSG::32610"}}) against :InputCRS:
+  //a file that names a projected EPSG code needs :InputCRS (and the same projection); one in longitude/latitude may
+  //not have :InputCRS. Codes that are not built in cannot be compared and are accepted with an :InputCRS
+  bool CheckFileCRS(const JVal &root,const string &filename,const CGWCRS *crs,string &err)
+  {
+    const JVal *jc=root.Get("crs"); if ((jc==NULL) || (jc->t!=J_OBJ)){return true;}
+    const JVal *pr=jc->Get("properties"); if ((pr==NULL) || (pr->t!=J_OBJ)){return true;}
+    const JVal *nm=pr->Get("name"); if ((nm==NULL) || (nm->t!=J_STR)){return true;}
+    string name=nm->s,u=name; for (size_t i=0;i<u.size();i++){u[i]=(char)toupper((unsigned char)u[i]);}
+    if (u.find("CRS84")!=string::npos){u="EPSG:4326";}
+    size_t pe=u.find("EPSG"); if (pe==string::npos){return true;}
+    size_t pd=u.find_first_of("0123456789",pe); if (pd==string::npos){return true;}
+    long code=atol(u.c_str()+pd);
+    bool geographic=(code==4326) || (code==4269) || (code==4617) || (code==4258) || (code==4167) || (code==4283);
+    ostringstream cs; cs<<"EPSG:"<<code;
+    if (geographic){
+      if (crs!=NULL){err="GeoJSON file "+filename+" is in longitude/latitude ("+name+"), but :InputCRS says the input files are projected: remove :InputCRS, or give the file in "+crs->Describe();return false;}
+      return true;
+    }
+    if (crs==NULL){err="GeoJSON file "+filename+" is in "+cs.str()+" (its \"crs\" member, "+name+"): give :InputCRS "+cs.str()+" in the .rvg file (or the projection's parameters), or reproject the file to longitude/latitude";return false;}
+    CGWCRS f; string e2;
+    if (f.Parse(cs.str(),e2) && !f.Same(*crs)){err="GeoJSON file "+filename+" is in "+cs.str()+" ("+f.Describe()+"), but :InputCRS is "+crs->Describe()+": all input files must use the projection of :InputCRS";return false;}
+    return true;
+  }
+  bool CheckLonLat(const JCoords &C,const string &filename,string &err)
+  {
+    if ((C.crs==NULL) && ((C.ax>360.0) || (C.ay>90.0))){
+      err="GeoJSON file "+filename+" has coordinates outside the longitude/latitude range: a file in projected coordinates needs :InputCRS in the .rvg file";
+      return false;
+    }
+    return true;
   }
 }
 
@@ -228,7 +281,7 @@ double GWGeom::SignedArea(const gw_ring &r)
 }
 
 bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
-                                 map<long long,vector<gw_ring> > &shapes,string &err)
+                                 map<long long,vector<gw_ring> > &shapes,string &err,const CGWCRS *crs)
 {
   ifstream IN(filename.c_str(),ios::binary);
   if (IN.fail()){err="cannot open GeoJSON file "+filename;return false;}
@@ -237,6 +290,8 @@ bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
   if (!P.Parse(root) || (root.t!=J_OBJ)){err="invalid JSON in "+filename;return false;}
   const JVal *feats=root.Get("features");
   if ((feats==NULL) || (feats->t!=J_ARR)){err=filename+" is not a GeoJSON FeatureCollection";return false;}
+  if (!CheckFileCRS(root,filename,crs,err)){return false;}
+  JCoords C(crs);
   int nfound=0;
   for (size_t f=0;f<feats->a.size();f++)
   {
@@ -256,17 +311,17 @@ bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
     if ((gt==NULL) || (co==NULL)){continue;}
     if ((gt->s!="Polygon") && (gt->s!="MultiPolygon")){continue;} //(checked first: a line with the same ID adds no empty entry)
     vector<gw_ring> &rings=shapes[id];
-    if (gt->s=="Polygon"){AddPolygon(*co,rings);}
-    else {for (size_t i=0;i<co->a.size();i++){AddPolygon(co->a[i],rings);}}
+    if (gt->s=="Polygon"){AddPolygon(*co,rings,C);}
+    else {for (size_t i=0;i<co->a.size();i++){AddPolygon(co->a[i],rings,C);}}
     nfound++;
   }
   if (nfound==0){err="no Polygon/MultiPolygon features found in "+filename;return false;}  //(callers may then try lines)
-  return true;
+  return CheckLonLat(C,filename,err);
 }
 
 //reads LineString/MultiLineString features; idField may be empty (ids set to -1)
 bool GWGeom::ReadGeoJSONLines(const string &filename,const string &idField,
-                              vector<gw_ring> &lines,vector<long long> &ids,string &err)
+                              vector<gw_ring> &lines,vector<long long> &ids,string &err,const CGWCRS *crs)
 {
   ifstream IN(filename.c_str(),ios::binary);
   if (IN.fail()){err="cannot open GeoJSON file "+filename;return false;}
@@ -275,6 +330,8 @@ bool GWGeom::ReadGeoJSONLines(const string &filename,const string &idField,
   if (!P.Parse(root) || (root.t!=J_OBJ)){err="invalid JSON in "+filename;return false;}
   const JVal *feats=root.Get("features");
   if ((feats==NULL) || (feats->t!=J_ARR)){err=filename+" is not a GeoJSON FeatureCollection";return false;}
+  if (!CheckFileCRS(root,filename,crs,err)){return false;}
+  JCoords C(crs);
   for (size_t f=0;f<feats->a.size();f++)
   {
     const JVal &F=feats->a[f];
@@ -295,13 +352,13 @@ bool GWGeom::ReadGeoJSONLines(const string &filename,const string &idField,
       gw_ring L;
       for (size_t n=0;n<parts[i]->a.size();n++){
         const JVal &pt=parts[i]->a[n];
-        if ((pt.t==J_ARR) && (pt.a.size()>=2)){gw_pt q; q.x=pt.a[0].n; q.y=pt.a[1].n; L.push_back(q);}
+        if ((pt.t==J_ARR) && (pt.a.size()>=2)){L.push_back(C.Point(pt.a[0].n,pt.a[1].n));}
       }
       if (L.size()>=2){lines.push_back(L); ids.push_back(id);}
     }
   }
   if (lines.size()==0){err="no LineString features found in "+filename;return false;}
-  return true;
+  return CheckLonLat(C,filename,err);
 }
 
 //Sutherland-Hodgman clipping of an arbitrary ring by an axis-aligned rectangle; returns signed area of result
@@ -436,6 +493,14 @@ void CGWCRS::Inverse(const double x,const double y,double &lon,double &lat) cons
     return;
   }
   lon=x; lat=y;
+}
+bool CGWCRS::Same(const CGWCRS &o) const
+{
+  const double tr=1e-10,tm=1e-4; //[rad], [m]
+  if ((_type!=o._type) || (fabs(_f-o._f)>1e-15)){return false;}
+  if ((fabs(_lat0-o._lat0)>tr) || (fabs(_lon0-o._lon0)>tr) || (fabs(_fe-o._fe)>tm) || (fabs(_fn-o._fn)>tm)){return false;}
+  if (_type==1){return (fabs(_k0-o._k0)<1e-12);}
+  return (fabs(_lat1-o._lat1)<tr) && (fabs(_lat2-o._lat2)<tr);
 }
 string CGWCRS::Describe() const
 {

@@ -550,8 +550,17 @@ void CGroundwaterModel::ExtProbe()
     double *kk=_mf6.HasVar(ak)?_mf6.GetDoublePtr(ak):NULL;
     string as=_mf6.GetVarAddress(M,"STO","SY"); double *sy=(!_extNoSto && _mf6.HasVar(as))?_mf6.GetDoublePtr(as):NULL;
     ExitGracefullyIf(kk==NULL,"CGroundwaterModel: :SoilZone PHYSICAL with an existing model: cannot read the model's hydraulic conductivity (NPF K33/K)",RUNTIME_ERR);
-    if (sy==NULL){WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: the existing model has no specific yield (no STO package or SY); 0.2 is assumed for the soil-zone checks, the release limits and the unsaturated columns",false);}
-    _extKv.assign(nuser,0.0); _extSy.assign(nuser,0.2);
+    double sy0=0.2;                                                            //(no SY: SPEC_YIELD of :SoilZoneAquiferClass when given, else 0.2)
+    if (sy==NULL){
+      const int ix=(_szExtClass!="")?GetAquiferClassIndex(_szExtClass):DOESNT_EXIST;
+      if ((ix!=DOESNT_EXIST) && _aClasses[ix].syGiven){
+        sy0=_aClasses[ix].Sy;
+        WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: the existing model has no specific yield (no STO package or SY); SPEC_YIELD "+ToStr(sy0)+" of :SoilZoneAquiferClass "+
+                     _szExtClass+" is used for the soil-zone checks, the release limits and the unsaturated columns",false);
+      }
+      else {WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: the existing model has no specific yield (no STO package or SY); 0.2 is assumed for the soil-zone checks, the release limits and the unsaturated columns",false);}
+    }
+    _extKv.assign(nuser,0.0); _extSy.assign(nuser,sy0);
     int nlow=0,nact=0;
     for (int n=0;n<nuser;n++){int r=_reduced[n]; if (r<0){continue;} _extKv[n]=kk[r]*_hf*_extTf; if (sy!=NULL){_extSy[n]=sy[r]; nact++; if (!(sy[r]>=0.01)){nlow++;}}}
     if (nlow>0){ //(SY is the model's data, kept: e.g. ICONVERT 0 cells, whose SY MODFLOW does not use, often hold 0; all of them 0
@@ -710,7 +719,7 @@ void CGroundwaterModel::ExtLinkHRUs(const optStruct &Options)
   }
   else if (_extGridFile!=""){
     map<long long,vector<gw_ring> > shapes; string err;
-    if (!GWGeom::ReadGeoJSONPolygons(_extGridFile,_extGridID,shapes,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    if (!GWGeom::ReadGeoJSONPolygons(_extGridFile,_extGridID,shapes,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
     ExitGracefullyIf((int)shapes.size()!=_ncpl,("CGroundwaterModel: "+_extGridFile+" holds "+to_string(shapes.size())+" cells; the model layer has "+to_string(_ncpl)).c_str(),BAD_DATA);
     long long expect=1;
     for (map<long long,vector<gw_ring> >::iterator it=shapes.begin();it!=shapes.end();it++,expect++){

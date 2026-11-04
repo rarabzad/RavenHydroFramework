@@ -19,6 +19,7 @@
 ///  :HRUGeometry      [file.geojson] {ID field, default HRU_ID}   (REQUIRED)
 ///  :LandSurface      [ESRI ASCII raster, lon/lat]               (optional; else HRU ELEVATION)
 ///  :BedrockSurface   [ESRI ASCII raster, lon/lat]               (optional; else DEFAULT_BEDROCK_DEPTH)
+///  :InputCRS         [projection of the geometry and raster files] (optional; else lon/lat)
 ///  :GridCellSize     [m]                                        (default 1000)
 ///  :MinCellCoverage  [fraction]                                 (default 0.25)
 ///  :GridType REGULAR|QUADTREE|HRU_MESH|FILE, :GridRotation, :GridRefinement, :GridFile, :QuadtreeMaxLevel,
@@ -139,6 +140,15 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
       else {
         string spec; for (int i=1;i<Len;i++){spec+=string(s[i])+" ";}
         string err; if (!pGW->SetMF6CRS(spec,err)){ExitGracefully(("ParseGWFile: :MF6CRS - "+err).c_str(),BAD_DATA);}
+      }
+    }
+    else if (!strcmp(s[0],":InputCRS"))
+    {/*:InputCRS EPSG:code | TMERC ... | ALBERS ... | LCC ...  (grammar of :MF6CRS) - projection of the coordinates of every
+       GeoJSON and raster input file (and of wells given by X and Y); without it they are longitude/latitude */
+      if (Len<2){GWImproperFormat(s,Options);}
+      else {
+        string spec; for (int i=1;i<Len;i++){spec+=string(s[i])+" ";}
+        string err; if (!pGW->SetInputCRS(spec,err)){ExitGracefully(("ParseGWFile: :InputCRS - "+err).c_str(),BAD_DATA);}
       }
     }
     else if (!strcmp(s[0],":MF6GridFile"))
@@ -324,20 +334,25 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
        :EndWells
        :ObservationWells
          :Attributes, NAME, LATITUDE, LONGITUDE, SCREEN_ELEV
-       :EndObservationWells */
+       :EndObservationWells
+       with :InputCRS, X and Y (projected, m) may replace LATITUDE and LONGITUDE */
       bool obs=!strcmp(s[0],":ObservationWells");
       vector<string> attrs; vector<vector<string> > rows;
       ReadAttributeTable(p,obs?":EndObservationWells":":EndWells",attrs,rows);
       for (size_t r=0;r<rows.size();r++){
         if (obs){
           gw_obswell O; O.id=s_to_ll(rows[r][0].c_str()); O.name=GetAttr(attrs,rows[r],"NAME",rows[r][0]);
-          O.lat=atof(GetAttr(attrs,rows[r],"LATITUDE","REQUIRED").c_str()); O.lon=atof(GetAttr(attrs,rows[r],"LONGITUDE","REQUIRED").c_str());
+          O.xy=(GetAttr(attrs,rows[r],"X","")!="") && (GetAttr(attrs,rows[r],"LATITUDE","")=="");
+          if (O.xy){O.lat=atof(GetAttr(attrs,rows[r],"Y","REQUIRED").c_str()); O.lon=atof(GetAttr(attrs,rows[r],"X","REQUIRED").c_str());}
+          else {O.lat=atof(GetAttr(attrs,rows[r],"LATITUDE","REQUIRED").c_str()); O.lon=atof(GetAttr(attrs,rows[r],"LONGITUDE","REQUIRED").c_str());}
           O.z=atof(GetAttr(attrs,rows[r],"SCREEN_ELEV","REQUIRED").c_str()); O.node=-1;
           pGW->AddObservationWell(O);
         }
         else {
           gw_well W; W.id=s_to_ll(rows[r][0].c_str()); W.name=GetAttr(attrs,rows[r],"NAME",rows[r][0]);
-          W.lat=atof(GetAttr(attrs,rows[r],"LATITUDE","REQUIRED").c_str()); W.lon=atof(GetAttr(attrs,rows[r],"LONGITUDE","REQUIRED").c_str());
+          W.xy=(GetAttr(attrs,rows[r],"X","")!="") && (GetAttr(attrs,rows[r],"LATITUDE","")=="");
+          if (W.xy){W.lat=atof(GetAttr(attrs,rows[r],"Y","REQUIRED").c_str()); W.lon=atof(GetAttr(attrs,rows[r],"X","REQUIRED").c_str());}
+          else {W.lat=atof(GetAttr(attrs,rows[r],"LATITUDE","REQUIRED").c_str()); W.lon=atof(GetAttr(attrs,rows[r],"LONGITUDE","REQUIRED").c_str());}
           W.screen_top=atof(GetAttr(attrs,rows[r],"SCREEN_TOP","REQUIRED").c_str()); W.screen_bot=atof(GetAttr(attrs,rows[r],"SCREEN_BOT","REQUIRED").c_str());
           W.pRate=NULL;
           ExitGracefullyIf(W.screen_top<W.screen_bot,("ParseGWFile: well "+W.name+" has SCREEN_TOP below SCREEN_BOT").c_str(),BAD_DATA);
@@ -425,6 +440,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
   }
   RVG.close();
   delete p;
+  pGW->ResolveInputCRS();
   if ((szOpts!="") && !pGW->UsesPhysicalSoilZone()){
     WriteWarning("ParseGWFile:"+szOpts+" ignored: these apply only with :SoilZone PHYSICAL",Options.noisy);
   }
