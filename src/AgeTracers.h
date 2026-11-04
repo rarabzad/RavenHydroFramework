@@ -19,6 +19,9 @@ private:
    double _model_time; //local storage of tt.model_time, measured from the datum of the entry times (_t_diff + tt.model_time)
    double _t_diff;     //[d] start of this run after the datum of the entry times (the start of the run that wrote the
                        //hotstart file; 0 on a cold start): the masses keep that datum, the clock is shifted
+   bool   _datumSet;   //the datum is a date before this run's start (a hotstart from a file with age-tracer masses)
+   double _datumJday;  //its Julian day (as time_struct::julian_day) and year: written back as :AgeTracerDatum
+   int    _datumYear;
 
 public:/*-------------------------------------------------------*/
   CAgeTracer(CModel *pMod,CTransportModel *pTMod,string name,const int c);
@@ -33,6 +36,8 @@ public:/*-------------------------------------------------------*/
   void   SetModelTime(const double &t);
   void   SetInitialTimeOffset(const double &tdiff);
   double GetTimeOffset() const {return _t_diff;} ///< [d] datum of the entry times before this run's start
+  void   SetDatum(const bool set,const double &jday,const int year){_datumSet=set; _datumJday=jday; _datumYear=year;}
+  bool   GetDatum(double &jday,int &year) const {jday=_datumJday; year=_datumYear; return _datumSet;} ///< false: the datum is this run's start
 
   //Manipulators (inherited from CConstitModel)
   void   Initialize                 (const optStruct &Options);

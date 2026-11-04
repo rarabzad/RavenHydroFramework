@@ -64,7 +64,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _rchStoreTot=0.0; _QrchCHD=0.0; _rivBedDepth=-1.0;
   _swxHead=_swxCond=_swxRbot=_swxHcof=_swxRhs=NULL; _swxNcol=0; _Qswx_in=_Qswx_out=_swxAppliedVol=0.0;
   _resExchange=false; _resQ=_resHcof=_resRhs=NULL; _resNcol=0; _Qres_spec=_Qres=_resPendingVol=_resShortVol=0.0;
-  _cacheHit=false; _geomSeconds=0.0; _writeNC=false; _ncid=-1; _ncTime=_ncHead=-1; _ncRec=0; _nstp=0; _stepCount=0; _jday0=0; _jyear0=0; _calendar=0;
+  _cacheHit=false; _geomSeconds=0.0; _writeNC=false; _ncid=-1; _ncTime=_ncHead=-1; _ncRec=0; _nstp=0; _stepCount=0; _jday0=0; _jyear0=0; _calendar=0; _tsDur=_tsDt=0.0;
   _Qriv_in=_Qriv_out=_riverAppliedVol=_riverDeficitVol=0.0; _budgetLineOpen=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
@@ -439,6 +439,7 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
   if (!Options.silent){cout<<"  Initializing groundwater model (MODFLOW 6)..."<<endl;}
   ValidateInputs();
   _jday0=Options.julian_start_day; _jyear0=Options.julian_start_year; _calendar=Options.calendar;
+  _tsDur=Options.duration; _tsDt=Options.timestep;
   _nstp=(int)floor(Options.duration/Options.timestep+0.5); _stepCount=0;
   _subDaily=(Options.timestep<1.0-1e-9);
   if (fabs(_nstp*Options.timestep-Options.duration)>1e-6){
@@ -651,6 +652,60 @@ void CGroundwaterModel::ClearHotstartData()
   _hotHeads.clear(); _hotDims[0]=_hotDims[1]=_hotDims[2]=0;
   _hotRchStore.clear(); _hotResSeep.clear(); _hotRivCarry.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotVzc.clear(); _hotLag.clear(); _hotDebt.clear();
   _initMode="FROM_PROFILE"; _initValue=0.0;
+}
+//////////////////////////////////////////////////////////////////
+/// \brief well-rate and boundary-head series of the .rvt file. An EnKF member's :ExtraRVTFilename is read after the model
+///  was built (CalculateInitialWaterStorage): the series it gives replace the ones linked, are initialised and linked here
+//
+void CGroundwaterModel::SetWellFlowRateSeries(const long long id,CTimeSeries *pTS)
+{
+  map<long long,CTimeSeries*>::iterator it=_wellTS.find(id);
+  if ((it!=_wellTS.end()) && (it->second!=pTS)){delete it->second;}
+  _wellTS[id]=pTS;
+  if (!_active){return;}
+  pTS->Initialize(_jday0,_jyear0,_tsDur,_tsDt,false,_calendar);
+  bool used=false; string ids;
+  for (size_t w=0;w<_aWells.size();w++){if (_aWells[w].id==id){_aWells[w].pRate=pTS; used=true;} ids+=((w>0)?", ":"")+to_string(_aWells[w].id);}
+  ExitGracefullyIf(!used,("CGroundwaterModel: :WellFlowRate "+to_string(id)+" in the .rvt file names no well of :Wells in the .rvg file ("+
+    ((_aWells.size()>0)?("well IDs: "+ids):string("no wells"))+")").c_str(),BAD_DATA);
+}
+void CGroundwaterModel::SetBoundaryHeadSeries(const string &name,CTimeSeries *pTS)
+{
+  map<string,CTimeSeries*>::iterator it=_headTS.find(name);
+  if ((it!=_headTS.end()) && (it->second!=pTS)){delete it->second;}
+  _headTS[name]=pTS;
+  if (!_active){return;}
+  pTS->Initialize(_jday0,_jyear0,_tsDur,_tsDt,false,_calendar);
+  bool used=false; string names;
+  for (size_t b=0;b<_aBounds.size();b++){if (_aBounds[b].name==name){_aBounds[b].pHead=pTS; used=true;} names+=((b>0)?", ":"")+_aBounds[b].name;}
+  ExitGracefullyIf(!used,("CGroundwaterModel: :BoundaryHead "+name+" in the .rvt file names no :GeneralHeadBoundary or :SpecifiedHeadBoundary of the .rvg file ("+
+    ((_aBounds.size()>0)?("boundaries: "+names):string("no boundaries"))+")").c_str(),BAD_DATA);
+}
+//////////////////////////////////////////////////////////////////
+/// \brief the state variable that receives HRU k's groundwater seepage (as Initialize sets _hruReturnSV), from the
+///  inputs alone (the .rvc is read before Initialize); DOESNT_EXIST for an HRU that is not coupled
+//
+int CGroundwaterModel::SeepageTargetSV(const int k) const
+{
+  const CHydroUnit *pHRU=_pModel->GetHydroUnit(k);
+  string name=pHRU->GetAquiferProfileName();
+  if ((name=="") || (name=="[NONE]") || (name=="NONE") || !pHRU->IsEnabled()){return DOESNT_EXIST;}
+  int iSV=DOESNT_EXIST; bool toSoil=true;
+  if (_seepTarget==""){
+    int nsoil=_pModel->GetNumSoilLayers();
+    iSV=(nsoil>0)?_pModel->GetStateVarIndex(SOIL,nsoil-1):_pModel->GetStateVarIndex(SURFACE_WATER);
+  }
+  else {
+    int layer=0;
+    sv_type typ=_pModel->GetStateVarInfo()->StringToSVType(_seepTarget,layer,false);
+    if (typ==UNRECOGNIZED_SVTYPE){return DOESNT_EXIST;}
+    iSV=_pModel->GetStateVarIndex(typ,layer); toSoil=(typ==SOIL);
+  }
+  if (toSoil){
+    double th=0; for (int m=0;m<_pModel->GetNumSoilLayers();m++){th+=pHRU->GetSoilThickness(m);}
+    if (th<=0.0){iSV=_pModel->GetStateVarIndex(SURFACE_WATER);}
+  }
+  return iSV;
 }
 void CGroundwaterModel::ValidateInputs() const
 {
@@ -2338,8 +2393,8 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     //   supply), which is withheld from all discharge to Raven (seepage, gains of enabled subbasins, surface-store gains) in
     //   proportion, as the PHYSICAL guard above does; what that discharge cannot cover stays in the aquifer (MODFLOW's balance
     //   error). The withheld volume is a run total in GWModelSummary.txt; per step it is the GWBudget row's residual, recharge
-    //   + storage release + other inflows - discharge - MF6 balance error. (the earlier cap at the step's
-    //   inflow left out the storage release that MODFLOW had drained, and lost that discharge unbooked.)
+    //   + storage release + other inflows - discharge - MF6 balance error: the row's discharge columns (seepage to Raven,
+    //   aquifer discharge to rivers and to surface stores) are the discharge handed to Raven, after the withholding.
     const double R=-_Qerr;                                                       //[m3/d]
     double gR=0.0,gS=0.0;
     for (size_t p=0;p<_sbGain.size();p++){if (_pModel->GetSubBasin((int)p)->IsEnabled()){gR+=max(_sbGain[p],0.0);}}
@@ -2350,6 +2405,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       for (int ic=0;ic<_ncpl;ic++){_Qseep[ic]*=f;} _Qseep_tot*=f;
       for (size_t p=0;p<_sbGain.size();p++){if (_sbGain[p]>0){_sbGain[p]*=f;}}
       for (size_t e=0;e<_swxQ.size();e++){if (_swxQ[e]<0){_swxQ[e]*=f;}}
+      _Qriv_out-=(1.0-f)*gR; _Qswx_out-=(1.0-f)*gS;                              //(GWBudget: the discharge handed to Raven)
       const double w=(1.0-f)*D*tstep;                                            //[m3]
       _ncWithheldVol+=w; _ncWithheldN++;
       if ((w>1e-6) && (++_szGuardN<=10)){
@@ -2673,7 +2729,7 @@ void CGroundwaterModel::FinishBudgetLine()
                                                                                  // reduces the columns' inflow and outflow, rule (ii) their inflow)
     if (SZPhysical() && SZCapOn()){_BUDGET<<","<<_szCapWT*_szTstep;}
     if (SZPhysical() && (_szTiming==1)){_BUDGET<<","<<_szDebtVol<<","<<_szRepayQ*_szTstep;}
-    if (SZPhysical() && ((_szcLink.size()>0) || IsExternal() || !_chdNode.empty())){_BUDGET<<","<<_QszCHD_in<<","<<_QszCHD_out;}
+    if (SZPhysical() && SZChdColumns()){_BUDGET<<","<<_QszCHD_in<<","<<_QszCHD_out;}
     if (IsExternal() && !_mf6Newton){_BUDGET<<","<<_rchLostQ;}
     _BUDGET<<endl;
   }
@@ -2725,13 +2781,14 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
          <<((SZPhysical() && (_vzMode>0))?",unsaturated zone inflow [m3],unsaturated zone to aquifer [m3],capillary rise to soil zone [m3],unsaturated zone storage [m3]":"")
          <<((SZPhysical() && SZCapOn())?",capillary rise from the water table [m3]":"")
          <<((SZPhysical() && (_szTiming==1))?",lagged-exchange debt [m3],lagged-exchange repayment [m3]":"")
-         <<((SZPhysical() && ((_szcLink.size()>0) || IsExternal() || !_chdNode.empty()))?",soil zone to specified heads [m3/d],specified heads to soil zone [m3/d]":"")
+         <<((SZPhysical() && SZChdColumns())?",soil zone to specified heads [m3/d],specified heads to soil zone [m3/d]":"")
          <<((IsExternal() && !_mf6Newton)?",recharge not applied by MODFLOW [m3/d]":"")<<endl;
   if (SZPhysical()){
     _SZOUT.open(FilenamePrepare("GWSoilExchange.csv",Options).c_str());
     ExitGracefullyIf(_SZOUT.fail(),"CGroundwaterModel: cannot open GWSoilExchange.csv",FILE_OPEN_ERR);
     _SZOUT<<"time [d],date,HRU_ID,soil-zone base [m],soil water level [m],water table [m],saturated fraction [-],"
-          <<"soil zone to aquifer [m3/d],aquifer to soil zone [m3/d],rejected recharge [mm],overflow [mm],soil-zone water [mm],soil-zone capacity [mm],interface updates,interface change [m]"<<endl;
+          <<"soil zone to aquifer [m3/d],aquifer to soil zone [m3/d],rejected recharge [mm],overflow [mm],soil-zone water [mm],soil-zone capacity [mm],interface updates,interface change [m]"
+          <<(SZChdColumns()?",soil zone to specified heads [m3/d],specified heads to soil zone [m3/d]":"")<<endl;
   }
   if (_aObsWells.size()>0){
     _HEADS.open(FilenamePrepare("GWHeads.csv",Options).c_str());

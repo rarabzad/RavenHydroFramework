@@ -1344,22 +1344,40 @@ void CGroundwaterModel::SZWriteStep(const double &t,const string &dstr)
     int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
     if ((pG!=NULL) && !pG->IsInGroup(k)){continue;}
     double A=_pModel->GetHydroUnit(k)->GetArea()*M2_PER_KM2;
-    double sa=0,zb=0,lam=0,hc=0,Fk=0,qa=0,qs=0,fa=0;
+    //base, level and water table: area means over all the HRU's columns, those over specified heads included (their water
+    //table is the specified head); the exchange split as GWBudget.csv books it: with the aquifer (its active cells), and
+    //with specified heads (columns over them, and exchange columns whose cell is a specified head this step, with the
+    //capillary rise a specified head supplies)
+    const int n=_szNLayers;
+    double sa=0,zb=0,lam=0,hc=0,Fk=0,qa=0,qs=0,ca=0,cs=0,xa=0,xzb=0,xlam=0;
     for (size_t j=0;j<_szxOfHRU[k].size();j++){
       int e=_szxOfHRU[k][j]; const gw_link &L=_aLinks[_szxLink[e]];
-      vector<double> phi(_szColPhi.begin()+_szxCol[e]*_szNLayers,_szColPhi.begin()+(_szxCol[e]+1)*_szNLayers); //column after the step
-      sa+=L.area; zb+=L.area*_szxZb[e]; lam+=L.area*gwsz::SubgridLevel(_szxCell[e],gwsz::SatThickness(_szLay[L.k],phi)); hc+=L.area*WaterTable(L.ic); Fk+=L.area*_linkF[_szxLink[e]];
-      if (_szxQ[e]>0){qa+=_szxQ[e];} else {qs-=_szxQ[e];}
+      vector<double> phi(_szColPhi.begin()+_szxCol[e]*n,_szColPhi.begin()+(_szxCol[e]+1)*n); //column after the step
+      const double lev=gwsz::SubgridLevel(_szxCell[e],gwsz::SatThickness(_szLay[L.k],phi));
+      sa+=L.area; zb+=L.area*_szxZb[e]; lam+=L.area*lev; hc+=L.area*WaterTable(L.ic); Fk+=L.area*_linkF[_szxLink[e]];
+      xa+=L.area; xzb+=L.area*_szxZb[e]; xlam+=L.area*lev;
+      double rise=0.0; if (_colCHDTop[L.ic] || (((size_t)e<_szxUpCHD.size()) && _szxUpCHD[e])){for (int jj=0;jj<n;jj++){rise+=_szxCapL[e*n+jj];}}
+      if (_colCHDTop[L.ic]){if (_szxQ[e]>0){ca+=_szxQ[e];} else {cs-=_szxQ[e];}}
+      else                 {if (_szxQ[e]>0){qa+=_szxQ[e];} else {qs-=_szxQ[e];}}
+      cs+=rise;
     }
-    fa=sa;
-    if (k<(int)_szcOfHRU.size()){for (size_t j=0;j<_szcOfHRU[k].size();j++){const int li=_szcLink[_szcOfHRU[k][j]]; fa+=_aLinks[li].area; Fk+=_aLinks[li].area*_linkF[li];}}
-    double lv=0.0;
-    if (sa>0){zb/=sa; lv=lam/sa; hc/=sa;}
-    if (fa>0){Fk/=fa;}
-    _szLam[k]=lv-zb;
+    if (k<(int)_szcOfHRU.size()){
+      for (size_t j=0;j<_szcOfHRU[k].size();j++){
+        const int e=_szcOfHRU[k][j],li=_szcLink[e]; const gw_link &L=_aLinks[li];
+        vector<double> phi(_szColPhi.begin()+_szcCol[e]*n,_szColPhi.begin()+(_szcCol[e]+1)*n);
+        const double z0=SZBase(L.k,L.ic);
+        sa+=L.area; zb+=L.area*z0; lam+=L.area*gwsz::SubgridLevel(_szcCell[e],gwsz::SatThickness(_szLay[L.k],phi)); hc+=L.area*WaterTable(L.ic); Fk+=L.area*_linkF[li];
+        if (_szcQ[e]>0){ca+=_szcQ[e];} else {cs-=_szcQ[e];}
+        for (int jj=0;jj<n;jj++){cs+=_szcCapL[e*n+jj];}
+      }
+    }
+    if (xa>0){_szLam[k]=xlam/xa-xzb/xa;} else {_szLam[k]=0.0;}
     double Wmax=0; for (size_t j=0;j<_szSV[k].size();j++){Wmax+=_szLay[k][j].phimax;}
     double W=_szW[k];
-    _SZOUT<<setprecision(10)<<t<<","<<dstr<<","<<_pModel->GetHydroUnit(k)->GetHRUID()<<","<<zb<<","<<lv<<","<<hc<<","<<Fk<<","
-          <<qa<<","<<qs<<","<<_szRej[k]/A*MM_PER_METER<<","<<_szOvfV[k]/A*MM_PER_METER<<","<<W<<","<<Wmax<<","<<_szIter<<","<<_szResid<<endl;
+    _SZOUT<<setprecision(10)<<t<<","<<dstr<<","<<_pModel->GetHydroUnit(k)->GetHRUID()<<",";
+    if (sa>0){_SZOUT<<zb/sa<<","<<lam/sa<<","<<hc/sa<<","<<Fk/sa<<",";} else {_SZOUT<<",,,,";} //(empty: an HRU with no soil-zone column)
+    _SZOUT<<qa<<","<<qs<<","<<_szRej[k]/A*MM_PER_METER<<","<<_szOvfV[k]/A*MM_PER_METER<<","<<W<<","<<Wmax<<","<<_szIter<<","<<_szResid;
+    if (SZChdColumns()){_SZOUT<<","<<ca<<","<<cs;}
+    _SZOUT<<endl;
   }
 }

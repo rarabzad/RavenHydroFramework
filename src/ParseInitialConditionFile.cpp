@@ -14,6 +14,19 @@
 
 void SetInitialStateVar(CModel *&pModel,const int SVind,const sv_type typ,const int m,const int k,const double &val);
 //////////////////////////////////////////////////////////////////
+/// \brief a value of a groundwater hotstart block: stops on a value that is not a finite number, or (water amounts) is
+///  negative beyond round-off (a damaged .rvc would otherwise carry NaN through the run, or negative water)
+//
+static double GWHotValue(const char *s,const char *block,const bool water)
+{
+  const double v=s_to_d(s);
+  if (!std::isfinite(v) || (water && (v<-1e-6))){
+    ExitGracefully(("ParseInitialConditionsFile: "+string(block)+": the value "+string(s)+(std::isfinite(v)?" is negative (a water amount)":" is not a finite number")+
+                    "; is the .rvc file damaged?").c_str(),BAD_DATA);
+  }
+  return v;
+}
+//////////////////////////////////////////////////////////////////
 /// \brief Parses Initial conditions file
 /// \details model.rvc: input file that defines HRU and Subbasin initial conditions\n
 ///
@@ -31,6 +44,11 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
 
   double      rvc_tstep=Options.timestep; //default
   double      time_diff=0;
+  double      start_diff=0;          //[d] this run's start after the file's :StartTime (the start of the run that wrote it)
+  bool        datum_given=false;     //:AgeTracerDatum read: the datum of the file's age-tracer entry times
+  bool        age_masses=false;      //the file holds age-tracer masses (its state table has columns of an age tracer)
+  time_struct tt_datum;              //the datum of the entry times (:AgeTracerDatum, else :StartTime)
+  tt_datum.julian_day=Options.julian_start_day; tt_datum.year=Options.julian_start_year;
 
 
 
@@ -144,6 +162,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":Nudge"                       )){code=11; }
     else if  (!strcmp(s[0],":TimeStep"                    )){code=18; }
     else if  (!strcmp(s[0],":StartTime"                   )){code=19; }
+    else if  (!strcmp(s[0],":AgeTracerDatum"              )){code=20; }
 
     // management solution vars
     else if  (!strcmp(s[0],":WorkflowVar"                 )){code=13;}
@@ -391,6 +410,11 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         }
         else{
           SVinds[i]=pModel->GetStateVarIndex(typ,layer_ind);
+          if ((typ==CONSTITUENT) && (c==DOESNT_EXIST) && (SVinds[i]!=DOESNT_EXIST) && (layer_ind>=0)){ //(masses of an age tracer: entry times)
+            const CTransportModel *pTM=pModel->GetTransportModel();
+            const int nw=pTM->GetNumWaterCompartments();
+            if ((nw>0) && (layer_ind/nw<pTM->GetNumConstituents()) && (pTM->GetConstituentModel(layer_ind/nw)->GetType()==AGE_TRACER)){age_masses=true;}
+          }
 
           if(c!=DOESNT_EXIST) { //convert water storage index to corresponding constituent index
             int m=pModel->GetTransportModel()->GetLayerIndex(c,SVinds[i]);
@@ -953,7 +977,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWHeads")){break;}
-        for (int i=0;i<Len;i++){h.push_back(s_to_d(s[i]));}
+        for (int i=0;i<Len;i++){h.push_back(GWHotValue(s[i],":GWHeads",false));}
       }
       pModel->GetGroundwaterModel()->SetHotstartHeads(nl,nr,nc,h);
       break;
@@ -963,7 +987,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWRechargeStore")){break;}
-        if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRechargeStore(s_to_ll(s[0]),s_to_d(s[1]));}
+        if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRechargeStore(s_to_ll(s[0]),GWHotValue(s[1],":GWRechargeStore",false));}
       }
       break;
     }
@@ -974,7 +998,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWVadoseColumns")){break;}
         if (Len>=4){
-          vector<double> v; for (int i=2;i<Len;i++){v.push_back(s_to_d(s[i]));}
+          vector<double> v; for (int i=2;i<Len;i++){v.push_back(GWHotValue(s[i],":GWVadoseColumns",i>2));} //(water table, contents)
           pModel->GetGroundwaterModel()->SetHotstartVadose(s_to_ll(s[0]),s_to_i(s[1]),v);
         }
       }
@@ -988,7 +1012,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWVadoseClassColumns")){break;}
         if (Len>=6){
-          vector<double> v; for (int i=3;i<Len;i++){v.push_back(s_to_d(s[i]));} //classes of the cell, water table, contents
+          vector<double> v; for (int i=3;i<Len;i++){v.push_back(GWHotValue(s[i],":GWVadoseClassColumns",i>4));} //classes of the cell, water table, contents
           pModel->GetGroundwaterModel()->SetHotstartVadoseClass(s_to_ll(s[0]),s_to_i(s[1]),s_to_i(s[2]),v);
         }
       }
@@ -1000,7 +1024,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWSoilZoneLag")){break;}
-        if (Len>=3){pModel->GetGroundwaterModel()->SetHotstartSoilZoneLag(s_to_ll(s[0]),s_to_i(s[1]),s_to_d(s[2]),(Len>=4)?s_to_d(s[3]):0.0);}
+        if (Len>=3){pModel->GetGroundwaterModel()->SetHotstartSoilZoneLag(s_to_ll(s[0]),s_to_i(s[1]),GWHotValue(s[2],":GWSoilZoneLag",false),(Len>=4)?GWHotValue(s[3],":GWSoilZoneLag",false):0.0);}
       }
       break;
     }
@@ -1012,7 +1036,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         if (!strcmp(s[0],":EndGWSoilZoneColumns")){break;}
         if (Len>=3){
           ExitGracefullyIf(s_to_i(s[1])<0,"ParseInitialConditionsFile: :GWSoilZoneColumns: cell number must be 0 or more",BAD_DATA);
-          vector<double> phi; for (int i=2;i<Len;i++){phi.push_back(s_to_d(s[i]));}
+          vector<double> phi; for (int i=2;i<Len;i++){phi.push_back(GWHotValue(s[i],":GWSoilZoneColumns",true));}
           pModel->GetGroundwaterModel()->SetHotstartSoilZoneColumn(s_to_ll(s[0]),s_to_i(s[1]),phi);
         }
       }
@@ -1023,7 +1047,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWReservoirSeepage")){break;}
-        if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartReservoirSeepage(s_to_ll(s[0]),s_to_d(s[1]));}
+        if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartReservoirSeepage(s_to_ll(s[0]),GWHotValue(s[1],":GWReservoirSeepage",false));}
       }
       break;
     }
@@ -1032,7 +1056,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWRiverLossCarry")){break;}
-        if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRiverLossCarry(s_to_ll(s[0]),s_to_d(s[1]));}
+        if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRiverLossCarry(s_to_ll(s[0]),GWHotValue(s[1],":GWRiverLossCarry",false));}
       }
       break;
     }
@@ -1114,15 +1138,27 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     case(19):  //----------------------------------------------
     {
       //:StartTime [yyyy-mm-dd] [00:00:00]
-      //needed for initialization of ages
+      //the start of the run that wrote the file; its age-tracer masses (volume x entry time) count from it, unless
+      //:AgeTracerDatum gives their datum. start_diff: this run's start (tt_end) after it, in days
       if (Len<3){break;}
-      //the offset of this run's start (tt_end: the end of the run that wrote the file, when it is continued) from the start
-      //of the run that wrote the file, in days: the ages' entry times are shifted by it (CAgeTracer::SetInitialTimeOffset).
-      //(tt_end was never set: an uninitialised read)
       time_struct tt_start,tt_end;
       tt_start =DateStringToTimeStruct(s[1],s[2],Options.calendar);
       JulianConvert(0.0,Options.julian_start_day,Options.julian_start_year,Options.calendar,tt_end);
-      time_diff=TimeDifference(tt_start.julian_day,tt_start.year,tt_end.julian_day,tt_end.year,Options.calendar);
+      start_diff=TimeDifference(tt_start.julian_day,tt_start.year,tt_end.julian_day,tt_end.year,Options.calendar);
+      if (!datum_given){tt_datum=tt_start;}
+      break;
+    }
+    case(20):  //----------------------------------------------
+    {
+      //:AgeTracerDatum [yyyy-mm-dd] [00:00:00]
+      //the datum of the age-tracer entry times in the file (written when it differs from :StartTime: the start of the
+      //first run of a hotstart chain)
+      if (Len<3){break;}
+      time_struct tt_end;
+      tt_datum=DateStringToTimeStruct(s[1],s[2],Options.calendar);
+      JulianConvert(0.0,Options.julian_start_day,Options.julian_start_year,Options.calendar,tt_end);
+      time_diff=TimeDifference(tt_datum.julian_day,tt_datum.year,tt_end.julian_day,tt_end.year,Options.calendar);
+      datum_given=true;
       break;
     }
     default://------------------------------------------------
@@ -1172,17 +1208,26 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
 
   // update initial conditions for transport models
   //======================================================================
+  //the age clock is shifted by the offset of this run's start from the datum of the file's entry times: :AgeTracerDatum,
+  //else :StartTime when the file holds age-tracer masses; 0 for a file without them (a spin-up run without the tracer:
+  //the initial water has age 0)
+  if (!datum_given){time_diff=age_masses?start_diff:0.0;}
+  const bool use_datum=datum_given || age_masses;
   CConstituentModel *pConstit;
   for (int c = 0; c < pModel->GetTransportModel()->GetNumConstituents(); c++) {
     pConstit=pModel->GetTransportModel()->GetConstituentModel(c);
-    if (pConstit->GetType()==AGE_TRACER){ //the offset first: UpdateInitialConditions shifts the entry times by it
-      ((CAgeTracer*)(pConstit))->SetInitialTimeOffset(time_diff); //(base Raven set it after, so it never reached the masses)
+    if (pConstit->GetType()==AGE_TRACER){
+      ((CAgeTracer*)(pConstit))->SetInitialTimeOffset(time_diff);
+      ((CAgeTracer*)(pConstit))->SetDatum(use_datum && (time_diff!=0.0),tt_datum.julian_day,tt_datum.year);
     }
     pConstit->UpdateInitialConditions(Options);
   }
 
   // check quality of initial state variables
   //======================================================================
+  //(a coupled model without :SoilZone PHYSICAL adds groundwater seepage to its seepage target with no capacity limit:
+  //the lowest soil layer can legitimately hold more than its capacity, and a hotstart keeps that water as a continuous run does)
+  CGroundwaterModel *pGWm=((Options.modeltype==MODELTYPE_COUPLED) && (pModel->GetGroundwaterModel()!=NULL))?pModel->GetGroundwaterModel():NULL;
   CHydroUnit *pHRU;
   double *v=NULL;
   v=new double [pModel->GetNumStateVars()];
@@ -1190,12 +1235,14 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
   for (int k=0;k<pModel->GetNumHRUs();k++)
   {
     pHRU=pModel->GetHydroUnit(k);
+    const int iSeep=(pGWm!=NULL)?pGWm->SeepageTargetSV(k):DOESNT_EXIST;
     for (int i=0; i<pModel->GetNumStateVars(); i++)
     {
       v[i]=pHRU->GetStateVarValue(i);
     }
     for (int i=0; i<pModel->GetNumStateVars(); i++)
     {
+      if (i==iSeep){continue;}
       double maxv=max(pHRU->GetStateVarMax(i,v,Options,true),0.0); //ignores all variable maximum thresholds that are dependent upon model state
       if ((v[i]-maxv)>PRETTY_SMALL)// check for capacity
       {

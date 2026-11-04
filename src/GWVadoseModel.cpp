@@ -289,7 +289,12 @@ void CGroundwaterModel::VZInit()
       if (have){
         gwvz::Build(c,S,zb,v[0],_vzN);                                            //zbot, then the contents top down
         if (c.active && (c.th.size()==v.size()-1)){
-          for (size_t q=0;q<c.th.size();q++){c.psi[q]=gwvz::PsiOf(S.mat[c.im[q]],v[q+1]); c.th[q]=gwvz::Theta(S.mat[c.im[q]],c.psi[q]);} //(content and suction consistent)
+          for (size_t q=0;q<c.th.size();q++){ //the content as written; floored only at what the method can hold: air-dry
+            const gwvz::vz_mat &M=S.mat[c.im[q]];                                 //(RICHARDS, LAG), 0 (KINEMATIC, whose contents
+            double th=max(v[q+1],(gwvz::GetReference()==1)?0.0:gwvz::Theta(M,-1e5)); // go down to ths - Sy, below air-dry when Sy
+            if (!(M.Ss>0.0)){th=min(th,M.ths);}                                   // is near the porosity), and at most saturation
+            c.th[q]=th; c.psi[q]=gwvz::PsiOf(M,th);                               // without specific storage
+          }
           if (!c.th.empty()){c.dryTop=(c.psi[0]<=-0.999999*1e5); c.satTop=(c.psi[0]>=-1e-9);} //(the top's memory: a top held at air-dry or
                                                                                  // saturation by the last step, as in a continuous run)
           nHot++;
@@ -609,9 +614,9 @@ void CGroundwaterModel::SZCapRiseWT(const double &tstep)
       }
       if (!chu){ //out of an aquifer cell: fades out as it nears drying, and at most half the water it holds above its bottom
         double cap=SZUpCap(e,tstep);                                             // under the link per step (a thin cell would be pumped dry), less
-        if ((_vzMode>0) && (e<(int)_vzAbsQ.size())){                             // what a column removed in this step took out of it
-          cap=max(cap-((up==TopNode(L.ic))?_vzAbsN[e]-_vzPass[e]:_vzUpA[e]),0.0);
-        }
+        if ((_vzMode>0) && (e<(int)_vzUsed.size())){                             // what the link's columns took out of it in this step
+          cap=max(cap-_vzUsed[e],0.0);                                           // (uptakes of moving bottoms, passed negative recharge and
+        }                                                                        //  the columns' bottom upflow, as SZNegCaps counts them)
         const double sc2=(Qs*_szxUpF[e]>cap)?cap/Qs:_szxUpF[e];
         if (sc2<1.0){Qs*=sc2; for (int j=0;j<n;j++){CL[e*n+j]*=sc2;}}
       }

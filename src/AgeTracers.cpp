@@ -17,6 +17,7 @@ CAgeTracer::CAgeTracer(CModel* pMod,CTransportModel* pTMod,string name,const int
   :CConstituentModel(pMod,pTMod,name,AGE_TRACER,false,c)
 {
   _t_diff=0.0;
+  _datumSet=false; _datumJday=0.0; _datumYear=0;
   _model_time=0.0;
 }
 

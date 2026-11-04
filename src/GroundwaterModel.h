@@ -209,6 +209,7 @@ private:/*----------------------------------------------------*/
   double                 _rivBedDepth; ///< fixed channel depth below DEM [m]; <0: depth at Raven reference flow
   int                    _nstp,_stepCount;
   double                 _jday0; int _jyear0,_calendar; ///< for end-of-step date labels
+  double                 _tsDur,_tsDt;   ///< run duration and time step [d] (time series read after Initialize)
   vector<double>         _work;      ///< work array per column
   //-- reservoir <-> aquifer (Raven reservoirs with :SeepageParameters on coupled lake HRUs)
   bool                   _resExchange;
@@ -629,8 +630,9 @@ public:/*-------------------------------------------------------*/
   void   AddWell              (const gw_well &w){_aWells.push_back(w);}
   void   AddObservationWell   (const gw_obswell &o){_aObsWells.push_back(o);}
   void   AddBoundary          (const gw_boundary &b){_aBounds.push_back(b);}
-  void   SetWellFlowRateSeries    (const long long id,CTimeSeries *pTS){_wellTS[id]=pTS;}
-  void   SetBoundaryHeadSeries(const string &name,CTimeSeries *pTS){_headTS[name]=pTS;}
+  void   SetWellFlowRateSeries    (const long long id,CTimeSeries *pTS); ///< (also after Initialize: an ensemble member's extra .rvt)
+  void   SetBoundaryHeadSeries(const string &name,CTimeSeries *pTS);
+  int    SeepageTargetSV      (const int k) const; ///< state variable receiving HRU k's seepage (DOESNT_EXIST: HRU not coupled); usable before Initialize
   void   SetSteadyStateInit   (const double &rch_mm_d){_steadyInit=true;_ssRecharge=rch_mm_d;}
   void   SetInitialHeads      (const string &mode,const double &value){_initMode=mode;_initValue=value;}
   void   ClearHotstartData    (); ///< before an ensemble member's .rvc is read: forget the previous member's values
@@ -646,6 +648,7 @@ public:/*-------------------------------------------------------*/
   void   SetExtSeepage        (const bool on)          {_extSeepage=on; _extOnly+=" :SeepageToRaven";}
   void   AddOverlapWeight     (const long long hru,const int cell,const double w) {gw_ow o; o.hru=hru; o.cell=cell; o.w=w; _owTable.push_back(o);}
   bool   IsExternal           () const                 {return _extSim!="";}
+  bool   SZChdColumns         () const {return (_szcLink.size()>0) || IsExternal() || !_chdNode.empty();} ///< soil-zone exchange with specified heads is possible (its output columns)
   double MF6CellArea          (const int ic) const     {return IsExternal()?_extArea[ic]:_grid.area[ic];} ///< [m2] as MODFLOW measures it
   void   SetGridRotation      (const double a)         {_gridAngle=a;}
   void   SetQuadtreeMaxLevel  (const int n)            {_qtMaxLevel=n;}
