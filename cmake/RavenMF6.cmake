@@ -85,8 +85,8 @@ macro(_rmf6_report_ignored mode)
   endforeach()
 endmacro()
 
-# A plain -DRAVEN_MF6=OFF leaves the build exactly as without this module: no cache entries, targets, RPATH or install
-# rules are added (the compile and link commands are those of Raven before the MODFLOW 6 build integration; the default
+# A plain -DRAVEN_MF6=OFF leaves the build exactly as without this module: no cache entries, targets or RPATH are added
+# (CMakeLists.txt installs Raven alone; the compile and link commands are those of Raven before the MODFLOW 6 build integration; the default
 # CMAKE_BUILD_TYPE Release of CMakeLists.txt, for single-configuration generators, applies to every mode).
 if(_rmf6_given STREQUAL "OFF")
   _rmf6_report_ignored(OFF)
@@ -128,6 +128,7 @@ file(MAKE_DIRECTORY "${_rmf6_work}")
 
 # explicit, inferred from an offline option, or default
 set(_rmf6_explicit FALSE)
+set(_rmf6_tools_found FALSE)
 set(RAVEN_MF6_MODE "")
 if(_rmf6_given)
   set(_rmf6_explicit TRUE)
@@ -168,9 +169,16 @@ macro(_rmf6_giveup)
     message(FATAL_ERROR "RAVEN_MF6: ${_rmf6_msg}\nChoose another way to get the library (-DRAVEN_MF6=SOURCE, PREBUILT or PATH "
                         "with -DRAVEN_MF6_PATH=/path/to/${RAVEN_MF6_LIBNAME}), or build Raven without it: -DRAVEN_MF6=OFF")
   endif()
+  if(_rmf6_tools_found)                            # the tools are there; what failed is the network
+    set(_rmf6_hint "The source tools (Fortran compiler, meson, ninja, git) are installed: with network access, configure "
+                   "again; offline, give a MODFLOW 6 source folder (-DRAVEN_MF6_SOURCE_DIR=...) or release zip "
+                   "(-DRAVEN_MF6_ZIP=...)")
+  else()
+    set(_rmf6_hint "To build it from source, install a Fortran compiler (gfortran or ifx), meson >= 1.7, ninja and git "
+                   "(-DRAVEN_MF6=SOURCE)")
+  endif()
   message(WARNING "RAVEN_MF6: ${_rmf6_msg}\nRaven is built without the MODFLOW 6 library (a coupled model then needs one at run "
-                  "time: :MF6Library, RAVEN_MF6_LIB, or ${RAVEN_MF6_LIBNAME} next to Raven). To build it from source, "
-                  "install a Fortran compiler (gfortran or ifx), meson >= 1.7, ninja and git (-DRAVEN_MF6=SOURCE); to use "
+                  "time: :MF6Library, RAVEN_MF6_LIB, or ${RAVEN_MF6_LIBNAME} next to Raven). ${_rmf6_hint}; to use "
                   "a library you have: -DRAVEN_MF6_PATH=/path/to/${RAVEN_MF6_LIBNAME}; to silence this warning: "
                   "-DRAVEN_MF6=OFF")
   set(RAVEN_MF6_MODE OFF)
@@ -388,6 +396,7 @@ endfunction()
 _rmf6_release_suffix("${RAVEN_MF6_VERSION}" _rmf6_suffix _rmf6_nozip_why)
 if(NOT RAVEN_MF6_MODE)
   _rmf6_source_tools(_rmf6_tools_ok _rmf6_tools_why)
+  set(_rmf6_tools_found ${_rmf6_tools_ok})        # (the fallback warning names the network, not the tools)
   if(_rmf6_tools_ok)
     _rmf6_git_reachable(_rmf6_git_ok _rmf6_git_why)
     if(NOT _rmf6_git_ok)                           # offline: fall back now, not at build time
