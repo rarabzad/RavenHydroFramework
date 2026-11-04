@@ -139,6 +139,16 @@ bool ParseInputFiles (CModel      *&pModel,
   if (Options.modeltype == MODELTYPE_COUPLED)
   {
     if (!ParseGWFile(pModel, Options)) { return false; }
+    //Raven-MODFLOW 6: no constituent mass is exchanged with the groundwater model (recharge leaves its mass in Raven's
+    //groundwater store, seepage and discharge return water without mass), so Raven transport is not available
+    if (pModel->GetTransportModel()->GetNumConstituents()>0){
+      string name=pModel->GetTransportModel()->GetConstituentModel(0)->GetName();
+      ExitGracefully(("ParseInput: :Transport "+name+" cannot be used with :GroundwaterModel MODFLOW6: the coupling exchanges water only, "
+                      "no constituent mass (the mass of the water sent to MODFLOW would stay in Raven's groundwater store, and seepage and "
+                      "groundwater discharge would return water without mass). Remove the :Transport commands from the .rvi file, "
+                      "or run the model without :GroundwaterModel MODFLOW6.").c_str(),BAD_DATA);
+      return false;
+    }
   }
 
   for(int pp=0;pp<pModel->GetNumSubBasins(); pp++) {

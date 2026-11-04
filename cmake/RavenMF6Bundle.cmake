@@ -7,6 +7,7 @@
 #   RAVEN_MF6_BUNDLE_FC      the Fortran compiler of a source build (Windows: its folder holds the runtime DLLs), or empty
 #   RAVEN_MF6_BUNDLE_SYSTEM  CMAKE_SYSTEM_NAME
 #   RAVEN_MF6_BUNDLE_NAME    libmf6.so / libmf6.dylib / libmf6.dll
+#   RAVEN_MF6_PATCHELF       (optional, Linux) the patchelf program; found on the PATH when not given
 # The files go through file(INSTALL ... DESTINATION ${CMAKE_INSTALL_PREFIX}/bin), which prefixes $ENV{DESTDIR} exactly as
 # for Raven's own files (staged installs, also with a relative DESTDIR, get the runtime too). Anything
 # that cannot be resolved is reported with a warning, never skipped silently.
@@ -254,12 +255,14 @@ endif()
 # Linux: the copied runtime libraries find each other beside libmf6 only with a run path $ORIGIN of their own (a copied
 # libgfortran that needs libquadmath); patchelf sets it where available
 if(NOT RAVEN_MF6_BUNDLE_SYSTEM STREQUAL "Darwin" AND NOT RAVEN_MF6_BUNDLE_SYSTEM STREQUAL "Windows")
+  if(_copied AND NOT DEFINED RAVEN_MF6_PATCHELF)
+    find_program(RAVEN_MF6_PATCHELF patchelf)
+  endif()
   list(LENGTH _copied _nc)
   if(_nc GREATER 1)
-    find_program(_patchelf patchelf)
     foreach(_n IN LISTS _copied)
-      if(_patchelf)
-        execute_process(COMMAND "${_patchelf}" --set-rpath "$ORIGIN" "${_inst}/${_n}" RESULT_VARIABLE _r)
+      if(RAVEN_MF6_PATCHELF)
+        execute_process(COMMAND "${RAVEN_MF6_PATCHELF}" --set-rpath "$ORIGIN" "${_inst}/${_n}" RESULT_VARIABLE _r)
       else()
         set(_r 1)
       endif()
@@ -268,6 +271,61 @@ if(NOT RAVEN_MF6_BUNDLE_SYSTEM STREQUAL "Darwin" AND NOT RAVEN_MF6_BUNDLE_SYSTEM
                         "libraries it needs beside it are found only through the system's library path")
       endif()
     endforeach()
+  endif()
+  # Raven loads libmf6 by its path, so Raven's own run path does not apply to libmf6's dependencies: the copied runtime
+  # is used only when the installed libmf6 has the run path $ORIGIN (a libmf6 built by this CMake from source has it; one
+  # built elsewhere and given with RAVEN_MF6_PATH may not). patchelf adds it where needed.
+  set(_mf6inst "${_inst}/${RAVEN_MF6_BUNDLE_NAME}")
+  if(_copied AND EXISTS "${_mf6inst}")
+    set(_rp "")
+    set(_rp_known FALSE)
+    if(RAVEN_MF6_PATCHELF)
+      execute_process(COMMAND "${RAVEN_MF6_PATCHELF}" --print-rpath "${_mf6inst}" OUTPUT_VARIABLE _rp
+                      RESULT_VARIABLE _r OUTPUT_STRIP_TRAILING_WHITESPACE)
+      if(_r EQUAL 0)
+        set(_rp_known TRUE)
+      endif()
+    else()
+      find_program(_readelf readelf)
+      if(_readelf)
+        execute_process(COMMAND "${_readelf}" -d "${_mf6inst}" OUTPUT_VARIABLE _d RESULT_VARIABLE _r ERROR_QUIET)
+        if(_r EQUAL 0)
+          set(_rp_known TRUE)
+          if(_d MATCHES "\\((RPATH|RUNPATH)\\)[^[]*\\[([^]]*)\\]")
+            set(_rp "${CMAKE_MATCH_2}")
+          endif()
+        endif()
+      endif()
+    endif()
+    string(REPLACE ":" ";" _rpl "${_rp}")
+    if(_rp_known AND ("$ORIGIN" IN_LIST _rpl OR "\${ORIGIN}" IN_LIST _rpl))
+      message(STATUS "MODFLOW 6 runtime: ${RAVEN_MF6_BUNDLE_NAME} has the run path $ORIGIN")
+    elseif(RAVEN_MF6_PATCHELF AND _rp_known)
+      if(_rp STREQUAL "")
+        set(_newrp "$ORIGIN")
+      else()
+        set(_newrp "$ORIGIN:${_rp}")
+      endif()
+      execute_process(COMMAND "${RAVEN_MF6_PATCHELF}" --set-rpath "${_newrp}" "${_mf6inst}" RESULT_VARIABLE _r ERROR_VARIABLE _e)
+      if(_r EQUAL 0)
+        message(STATUS "MODFLOW 6 runtime: run path $ORIGIN given to the installed ${RAVEN_MF6_BUNDLE_NAME} (patchelf), so "
+                       "it loads the runtime beside it")
+      else()
+        message(WARNING "MODFLOW 6 runtime bundling: patchelf --set-rpath on ${_mf6inst} failed (${_e}): the installed "
+                        "${RAVEN_MF6_BUNDLE_NAME} loads the Fortran runtime of the system, not the copy beside it")
+      endif()
+    else()
+      string(REPLACE ";" ", " _cl "${_copied}")
+      if(RAVEN_MF6_PATCHELF)
+        set(_why "patchelf could not read its run path")
+      else()
+        set(_why "patchelf was not found")
+      endif()
+      message(WARNING "MODFLOW 6 runtime bundling: the installed ${RAVEN_MF6_BUNDLE_NAME} has no run path $ORIGIN and "
+                      "${_why}, so it loads the system's ${_cl} (if any) instead of the copies beside it; "
+                      "the folder then does not run on a computer without that runtime. Install patchelf and run "
+                      "cmake --install again, or build libmf6 with the link option -Wl,-rpath,'$ORIGIN'.")
+    endif()
   endif()
 endif()
 if(NOT _found)

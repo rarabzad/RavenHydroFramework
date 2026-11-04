@@ -101,17 +101,23 @@ source_group("Header Files" FILES ${HEADER})
 source_group("Source Files" FILES ${SOURCE})
 
 # MODFLOW 6 library for the groundwater coupling, placed next to Raven (cmake/RavenMF6.cmake):
-#   -DRAVEN_MF6=SOURCE|PREBUILT|PATH|OFF (default: SOURCE when a Fortran compiler, meson >= 1.7, ninja and git are found,
-#   else PREBUILT when MODFLOW releases a library for this platform, else OFF with a warning). With OFF the build is the
-#   same as without this block.
+#   -DRAVEN_MF6=SOURCE|PREBUILT|PATH|OFF (default: SOURCE when a Fortran compiler, meson >= 1.7, ninja and git are found
+#   and the MODFLOW 6 git repository answers at configure time, else PREBUILT when MODFLOW releases a library for this
+#   platform and it can be downloaded, else OFF with a warning). With OFF the compile and link commands are the same as
+#   without this block, and cmake --install installs Raven alone.
 if(TARGET Raven)
   include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/RavenMF6.cmake")
-  if(NOT RAVEN_MF6_MODE STREQUAL "OFF")
+  # cmake --install / cpack: one bin folder with Raven, and unless RAVEN_MF6 is OFF libmf6 (always under its standard
+  # name), libmf6_version.txt and the Fortran runtime the library needs
+  install(TARGETS Raven RUNTIME DESTINATION bin COMPONENT Raven)
+  if(RAVEN_MF6_MODE STREQUAL "OFF")
+    message(STATUS "RAVEN_MF6: OFF, so cmake --install installs Raven alone (bin/Raven, no MODFLOW 6 library); a coupled "
+                   "model then needs one at run time (:MF6Library, RAVEN_MF6_LIB, or libmf6 next to Raven)")
+    install(CODE "message(STATUS \"RAVEN_MF6 was OFF: Raven installed without the MODFLOW 6 library (a coupled model needs \"
+                 \"one at run time: :MF6Library, RAVEN_MF6_LIB, or libmf6 next to Raven)\")" COMPONENT Raven)
+  else()
     raven_mf6_rpath(Raven)
 
-    # cmake --install / cpack: one bin folder with Raven, libmf6 (always under its standard name), libmf6_version.txt
-    # and the Fortran runtime the library needs
-    install(TARGETS Raven RUNTIME DESTINATION bin COMPONENT Raven)
     install(PROGRAMS "${RAVEN_MF6_LIB_FILE}" DESTINATION bin RENAME "${RAVEN_MF6_LIBNAME}" COMPONENT mf6)
     install(FILES "${CMAKE_BINARY_DIR}/mf6/libmf6_version.txt" DESTINATION bin COMPONENT mf6)
     install(CODE "set(RAVEN_MF6_BUNDLE_LIB \"${RAVEN_MF6_LIB_FILE}\")
