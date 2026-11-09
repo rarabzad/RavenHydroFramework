@@ -2132,20 +2132,37 @@ bool ParseTimeSeriesFile(CModel *&pModel, const optStruct &Options)
     }
 
     case (150): //---------------------------------------------
-    {/*:WellFlowRate [well ID] {units m3/d}
+    {/*:WellFlowRate [well ID] {units: m3/d (default), m3/s or L/s}
          {yyyy-mm-dd} {hh:mm:ss.0} {timestep} {nValues}
-         {rate [m3/d], negative = withdrawal} x nValues
-       :EndWellFlowRate */
+         {rate [units], negative = withdrawal} x nValues
+       :EndWellFlowRate
+       rates in m3/s or L/s are converted to m3/d; other units stop the run */
       if (Len<2){ExitGracefully(("improper format of groundwater command "+string(s[0])).c_str(),BAD_DATA); break;}
       long long wid=s_to_ll(s[1]); //capture before Parse(), which re-tokenizes into s[]
+      string units=(Len>=3)?string(s[2]):string("m3/d"),u=units;
+      for (size_t i=0;i<u.size();i++){u[i]=(char)tolower((unsigned char)u[i]);}
+      double factor=0.0;
+      if      ((u=="m3/d") || (u=="m3/day")){factor=1.0;}
+      else if (u=="m3/s"){factor=SEC_PER_DAY;}
+      else if (u=="l/s") {factor=SEC_PER_DAY/1000.0;}
+      if (factor==0.0){ExitGracefully((":WellFlowRate "+string(s[1])+": units "+units+" are not supported; give the rates in m3/d (or m3/s or L/s, which Raven converts to m3/d)").c_str(),BAD_DATA);}
+      if (Len>3){ExitGracefully((":WellFlowRate "+string(s[1])+" "+units+": surplus value '"+string(s[3])+"' (the command takes a well ID and its units)").c_str(),BAD_DATA);}
       pTimeSer=CTimeSeries::Parse(p,true,"WELL_RATE_"+to_string(wid),wid,"none",Options);
+      if ((factor!=1.0) && (pTimeSer!=NULL)){ //(blank entries keep their marker)
+        for (int n=0;n<pTimeSer->GetNumValues();n++){double v=pTimeSer->GetValue(n); if (v!=RAV_BLANK_DATA){pTimeSer->SetValue(n,v*factor);}}
+      }
       pModel->GetGroundwaterModel()->SetWellFlowRateSeries(wid,pTimeSer);
       break;
     }
     case (151): //---------------------------------------------
-    {/*:BoundaryHead [boundary name] {units m}  ... :EndBoundaryHead */
+    {/*:BoundaryHead [boundary name] {units: m}  ... :EndBoundaryHead  (heads in m; other units stop the run) */
       if (Len<2){ExitGracefully(("improper format of groundwater command "+string(s[0])).c_str(),BAD_DATA); break;}
       string bname=s[1]; //capture before Parse(), which re-tokenizes into s[]
+      if (Len>=3){
+        string units=s[2],u=units; for (size_t i=0;i<u.size();i++){u[i]=(char)tolower((unsigned char)u[i]);}
+        if (u!="m"){ExitGracefully((":BoundaryHead "+bname+": units "+units+" are not supported; give the heads in m").c_str(),BAD_DATA);}
+        if (Len>3){ExitGracefully((":BoundaryHead "+bname+" "+units+": surplus value '"+string(s[3])+"' (the command takes a boundary name and its units)").c_str(),BAD_DATA);}
+      }
       pTimeSer=CTimeSeries::Parse(p,true,"BOUNDARY_HEAD_"+bname,DOESNT_EXIST,"none",Options);
       pModel->GetGroundwaterModel()->SetBoundaryHeadSeries(bname,pTimeSer);
       break;

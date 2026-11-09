@@ -660,6 +660,7 @@ public:/*-------------------------------------------------------*/
   bool   SetInputCRS          (const string &spec,string &err) {return _inCRS.Parse(spec,err);}
   const CGWCRS *InCRS         () const {return _inCRS.IsSet()?&_inCRS:NULL;}
   void   ResolveInputCRS      ();   ///< wells given as X,Y: to lon/lat (after the .rvg file is read)
+  void   CheckInputLonLat     (const string &file,const double *box,const string &what) const; ///< :InputCRS: stop on a file in longitude/latitude
   void   CheckDryStart        (const optStruct &Options);   ///< warns of layers that start completely dry
   void   AddTakeOver          (const string &p)        {string u=p; for (size_t i=0;i<u.size();i++){u[i]=(char)toupper((unsigned char)u[i]);} _takeOver.push_back(u);}
   void   AddKeepPackage       (const string &p)        {string u=p; for (size_t i=0;i<u.size();i++){u[i]=(char)toupper((unsigned char)u[i]);} _keepPkgs.push_back(u); if (_extOnly.find(" :KeepPackages")==string::npos){_extOnly+=" :KeepPackages";}}

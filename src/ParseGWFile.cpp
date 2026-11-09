@@ -58,6 +58,43 @@ static void GWImproperFormat(char **s,const optStruct &Options)
 {
   ExitGracefully(("ParseGWFile: improper format of command "+string(s[0])+" in "+Options.rvg_filename).c_str(),BAD_DATA);
 }
+//numbers are read strictly: the whole token must be a finite number (no units, no thousands separators; a comma
+//separates tokens, so 2,000.0 is read as the two tokens 2 and 000.0)
+static double GWNumber(const string &cmd,const char *tok,const optStruct &Options)
+{
+  char *e=NULL; double v=strtod(tok,&e);
+  if ((e==tok) || (*e!='\0') || !std::isfinite(v)){
+    ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": '"+string(tok)+"' is not a number (give a plain number "
+                    "in the units of the manual, without units or thousands separators)").c_str(),BAD_DATA);
+  }
+  return v;
+}
+static int GWInteger(const string &cmd,const char *tok,const optStruct &Options)
+{
+  double v=GWNumber(cmd,tok,Options);
+  if ((v!=floor(v)) || (fabs(v)>2.0e9)){
+    ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": '"+string(tok)+"' is not a whole number").c_str(),BAD_DATA);
+  }
+  return (int)v;
+}
+static long long GWID(const string &cmd,const char *tok,const optStruct &Options)
+{
+  char *e=NULL; long long v=strtoll(tok,&e,10);
+  if ((e==tok) || (*e!='\0')){
+    ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": '"+string(tok)+"' is not a whole-number ID").c_str(),BAD_DATA);
+  }
+  return v;
+}
+static double GWNum(char **s,const int i,const optStruct &Options){return GWNumber(s[0],s[i],Options);}
+static int    GWInt(char **s,const int i,const optStruct &Options){return GWInteger(s[0],s[i],Options);}
+//a command with more tokens than it takes stops (a thousands separator splits a number into two tokens)
+static void GWMaxTokens(char **s,const int Len,const int nmax,const optStruct &Options)
+{
+  if (Len>nmax){
+    ExitGracefully(("ParseGWFile: command "+string(s[0])+" in "+Options.rvg_filename+" has the surplus value '"+string(s[nmax])+"' (it takes "+
+                    to_string(nmax-1)+" value"+((nmax==2)?"":"s")+" at most; a comma separates values, so write 2000.0, not 2,000.0)").c_str(),BAD_DATA);
+  }
+}
 //////////////////////////////////////////////////////////////////
 /// \brief true if the .rvg file asks for :SoilZone PHYSICAL. Read ahead of the .rvp file: Raven discards soil
 ///  parameters that no process needs, and the soil zone needs HYDRAUL_COND, POROSITY and FIELD_CAPACITY
@@ -123,7 +160,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     }
     else if (!strcmp(s[0],":GridCellSize"))
     {
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetCellSize(s_to_d(s[1]));}
+      if (Len<2){GWImproperFormat(s,Options);} else {GWMaxTokens(s,Len,2,Options); pGW->SetCellSize(GWNum(s,1,Options));}
     }
     //-- existing MODFLOW 6 model ------------------------------------------------------------------
     else if (!strcmp(s[0],":MF6Simulation"))
@@ -186,9 +223,11 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
         if (!strcmp(s[0],":EndOverlapWeights")){break;}
         if (!strcmp(s[0],":Attributes") || !strcmp(s[0],":Units")){continue;}
         if (Len<3){GWImproperFormat(s,Options); break;}
-        double w=s_to_d(s[2]);
+        if (Len>3){ExitGracefully(("ParseGWFile: :OverlapWeights row "+string(s[0])+" "+string(s[1])+" in "+Options.rvg_filename+" has the surplus value '"+string(s[3])+"' (each row is HRU ID, cell, weight)").c_str(),BAD_DATA);}
+        double w=GWNumber(":OverlapWeights",s[2],Options);
         ExitGracefullyIf((w<0.0) || (w>1.0+1e-9),"ParseGWFile: :OverlapWeights weights must be between 0 and 1",BAD_DATA);
-        if (w>0.0){pGW->AddOverlapWeight(s_to_ll(s[0]),s_to_i(s[1]),w);}
+        long long hid=GWID(":OverlapWeights",s[0],Options); int cell=(int)GWID(":OverlapWeights",s[1],Options);
+        if (w>0.0){pGW->AddOverlapWeight(hid,cell,w);}
       }
     }
     else if (!strcmp(s[0],":GridType"))
@@ -202,12 +241,12 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     }
     else if (!strcmp(s[0],":GridRotation"))
     {/*:GridRotation [degrees counterclockwise] (regular and quadtree grids) */
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetGridRotation(s_to_d(s[1]));}
+      if (Len<2){GWImproperFormat(s,Options);} else {GWMaxTokens(s,Len,2,Options); pGW->SetGridRotation(GWNum(s,1,Options));}
     }
     else if (!strcmp(s[0],":GridRefinement"))
     {/*:GridRefinement RIVERS [size] | WELLS [size] | LAKES [size] | LINES [file] [size] | POLYGONS [file] [size] */
-      if ((Len>=3) && (!strcmp(s[1],"RIVERS") || !strcmp(s[1],"WELLS") || !strcmp(s[1],"LAKES"))){pGW->AddGridRefinement(s[1],"",s_to_d(s[2]));}
-      else if ((Len>=4) && (!strcmp(s[1],"LINES") || !strcmp(s[1],"POLYGONS"))){pGW->AddGridRefinement(s[1],CorrectForRelativePath(s[2],Options.rvg_filename),s_to_d(s[3]));}
+      if ((Len>=3) && (!strcmp(s[1],"RIVERS") || !strcmp(s[1],"WELLS") || !strcmp(s[1],"LAKES"))){GWMaxTokens(s,Len,3,Options); pGW->AddGridRefinement(s[1],"",GWNum(s,2,Options));}
+      else if ((Len>=4) && (!strcmp(s[1],"LINES") || !strcmp(s[1],"POLYGONS"))){GWMaxTokens(s,Len,4,Options); pGW->AddGridRefinement(s[1],CorrectForRelativePath(s[2],Options.rvg_filename),GWNum(s,3,Options));}
       else {GWImproperFormat(s,Options);}
     }
     else if (!strcmp(s[0],":GridFile"))
@@ -216,7 +255,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     }
     else if (!strcmp(s[0],":QuadtreeMaxLevel"))
     {/*:QuadtreeMaxLevel [halvings of the base cell size] (default: from the refinement sizes) */
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetQuadtreeMaxLevel(s_to_i(s[1]));}
+      if (Len<2){GWImproperFormat(s,Options);} else {GWMaxTokens(s,Len,2,Options); pGW->SetQuadtreeMaxLevel(GWInt(s,1,Options));}
     }
     else if (!strcmp(s[0],":FlowCorrection"))
     {/*:FlowCorrection AUTO | XT3D | XT3D_RHS | NONE  (default AUTO: no correction; XT3D options for strongly non-orthogonal cells) */
@@ -228,7 +267,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     }
     else if (!strcmp(s[0],":MinCellCoverage"))
     {
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetMinCoverage(s_to_d(s[1]));}
+      if (Len<2){GWImproperFormat(s,Options);} else {GWMaxTokens(s,Len,2,Options); pGW->SetMinCoverage(GWNum(s,1,Options));}
     }
     else if (!strcmp(s[0],":MF6Library"))
     {
@@ -256,7 +295,8 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
        predictor only); tolerances not given keep their defaults */
       if (Len<2){GWImproperFormat(s,Options);}
       else {
-        int n=s_to_i(s[1]); double th=(Len>=3)?s_to_d(s[2]):1e-4,tq=(Len>=4)?s_to_d(s[3]):1e-6;
+        GWMaxTokens(s,Len,4,Options);
+        int n=GWInt(s,1,Options); double th=(Len>=3)?GWNum(s,2,Options):1e-4,tq=(Len>=4)?GWNum(s,3,Options):1e-6;
         szOpts+=" :SoilZoneIteration";
         ExitGracefullyIf((n<0) || !(th>0) || !(tq>0),":SoilZoneIteration: max updates >= 0, tolerances > 0",BAD_DATA);
         pGW->SetSoilZoneIteration(n,th,tq);
@@ -265,7 +305,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     else if (!strcmp(s[0],":SoilZoneSubgrid"))
     {/*:SoilZoneSubgrid [DEM samples per cell side]  (default 5; 1 = cell-mean land surface only) */
       if (Len<2){GWImproperFormat(s,Options);}
-      else {int n=s_to_i(s[1]); ExitGracefullyIf((n<1) || (n>20),":SoilZoneSubgrid: samples per cell side must be 1 to 20",BAD_DATA); pGW->SetSoilZoneSubgrid(n); szOpts+=" :SoilZoneSubgrid";}
+      else {GWMaxTokens(s,Len,2,Options); int n=GWInt(s,1,Options); ExitGracefullyIf((n<1) || (n>20),":SoilZoneSubgrid: samples per cell side must be 1 to 20",BAD_DATA); pGW->SetSoilZoneSubgrid(n); szOpts+=" :SoilZoneSubgrid";}
     }
     else if (!strcmp(s[0],":SoilZoneVadose"))
     {/*:SoilZoneVadose NONE | RICHARDS {accuracy} {nodes} | KINEMATIC {accuracy} {nodes} | LAG {parameter} {nodes}
@@ -276,10 +316,11 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
       const int mode=(Len<2)?-1:(!strcmp(s[1],"NONE")?0:(!strcmp(s[1],"RICHARDS")?1:(!strcmp(s[1],"KINEMATIC")?2:(!strcmp(s[1],"LAG")?3:-1))));
       if (mode<0){GWImproperFormat(s,Options);}
       else {
-        double acc=0.0,par=0.0; int n=(Len>=4)?s_to_i(s[3]):0;
-        if (mode==3){par=(Len>=3)?s_to_d(s[2]):0.0; ExitGracefullyIf((Len>=3) && !(par>=0.0),":SoilZoneVadose LAG: the parameter may not be negative",BAD_DATA);}
+        GWMaxTokens(s,Len,4,Options);
+        double acc=0.0,par=0.0; int n=(Len>=4)?GWInt(s,3,Options):0;
+        if (mode==3){par=(Len>=3)?GWNum(s,2,Options):0.0; ExitGracefullyIf((Len>=3) && !(par>=0.0),":SoilZoneVadose LAG: the parameter may not be negative",BAD_DATA);}
         else {
-          acc=(Len>=3)?s_to_d(s[2]):0.0;
+          acc=(Len>=3)?GWNum(s,2,Options):0.0;
           ExitGracefullyIf((Len>=3) && !((acc>0.0) && (acc<=0.2)),":SoilZoneVadose: accuracy (largest content change in a substep) must lie in (0, 0.2]",BAD_DATA);
         }
         ExitGracefullyIf((Len>=4) && ((n<3) || (n>200)),":SoilZoneVadose: nodes per column must be 3 to 200",BAD_DATA);
@@ -290,13 +331,13 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     {/*:SoilZoneVadoseClasses K  (default 1: one unsaturated column per soil-zone column, at its mean base; K > 1: up to K
        columns, one per depth class of its DEM samples) */
       if (Len<2){GWImproperFormat(s,Options);}
-      else {int K=s_to_i(s[1]); ExitGracefullyIf((K<1) || (K>10),":SoilZoneVadoseClasses: classes must be 1 to 10",BAD_DATA); pGW->SetSoilZoneVadoseClasses(K); szOpts+=" :SoilZoneVadoseClasses";}
+      else {GWMaxTokens(s,Len,2,Options); int K=GWInt(s,1,Options); ExitGracefullyIf((K<1) || (K>10),":SoilZoneVadoseClasses: classes must be 1 to 10",BAD_DATA); pGW->SetSoilZoneVadoseClasses(K); szOpts+=" :SoilZoneVadoseClasses";}
     }
     else if (!strcmp(s[0],":SoilZoneVadoseInitialFlux"))
     {/*:SoilZoneVadoseInitialFlux q  [mm/d] (default 0: the columns start at rest, at their reference profile): on a cold start
        every unsaturated column starts at its steady profile for the downward flux q (not on a groundwater hotstart) */
       if (Len<2){GWImproperFormat(s,Options);}
-      else {double q=s_to_d(s[1]); ExitGracefullyIf(!(q>=0.0),":SoilZoneVadoseInitialFlux: the flux may not be negative",BAD_DATA); pGW->SetSoilZoneVadoseInitialFlux(q); szOpts+=" :SoilZoneVadoseInitialFlux";}
+      else {GWMaxTokens(s,Len,2,Options); double q=GWNum(s,1,Options); ExitGracefullyIf(!(q>=0.0),":SoilZoneVadoseInitialFlux: the flux may not be negative",BAD_DATA); pGW->SetSoilZoneVadoseInitialFlux(q); szOpts+=" :SoilZoneVadoseInitialFlux";}
     }
     else if (!strcmp(s[0],":SoilZoneCapillaryRise"))
     {/*:SoilZoneCapillaryRise ON | OFF  (default ON with an unsaturated column, :SoilZoneVadose other than NONE; else OFF) */
@@ -313,7 +354,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     {/*:SoilZoneClasses K  (default 1: Raven's processes act on the HRU's mean soil water; K > 1: on up to K classes of
        its soil-zone columns, grouped by wetness) */
       if (Len<2){GWImproperFormat(s,Options);}
-      else {int K=s_to_i(s[1]); ExitGracefullyIf((K<1) || (K>50),":SoilZoneClasses: 1 to 50 classes",BAD_DATA); pGW->SetSoilZoneClasses(K); szOpts+=" :SoilZoneClasses";}
+      else {GWMaxTokens(s,Len,2,Options); int K=GWInt(s,1,Options); ExitGracefullyIf((K<1) || (K>50),":SoilZoneClasses: 1 to 50 classes",BAD_DATA); pGW->SetSoilZoneClasses(K); szOpts+=" :SoilZoneClasses";}
     }
     else if (!strcmp(s[0],":SoilZoneAquiferClass"))
     {/*:SoilZoneAquiferClass [aquifer class]  (an existing model: CLAPP_B, AIR_ENTRY_PRESSURE and POROSITY of its cells for
@@ -342,19 +383,21 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
       ReadAttributeTable(p,obs?":EndObservationWells":":EndWells",attrs,rows);
       for (size_t r=0;r<rows.size();r++){
         if (obs){
-          gw_obswell O; O.id=s_to_ll(rows[r][0].c_str()); O.name=GetAttr(attrs,rows[r],"NAME",rows[r][0]);
+          const string c=":ObservationWells";
+          gw_obswell O; O.id=GWID(c,rows[r][0].c_str(),Options); O.name=GetAttr(attrs,rows[r],"NAME",rows[r][0]);
           O.xy=(GetAttr(attrs,rows[r],"X","")!="") && (GetAttr(attrs,rows[r],"LATITUDE","")=="");
-          if (O.xy){O.lat=atof(GetAttr(attrs,rows[r],"Y","REQUIRED").c_str()); O.lon=atof(GetAttr(attrs,rows[r],"X","REQUIRED").c_str());}
-          else {O.lat=atof(GetAttr(attrs,rows[r],"LATITUDE","REQUIRED").c_str()); O.lon=atof(GetAttr(attrs,rows[r],"LONGITUDE","REQUIRED").c_str());}
-          O.z=atof(GetAttr(attrs,rows[r],"SCREEN_ELEV","REQUIRED").c_str()); O.node=-1;
+          if (O.xy){O.lat=GWNumber(c,GetAttr(attrs,rows[r],"Y","REQUIRED").c_str(),Options); O.lon=GWNumber(c,GetAttr(attrs,rows[r],"X","REQUIRED").c_str(),Options);}
+          else {O.lat=GWNumber(c,GetAttr(attrs,rows[r],"LATITUDE","REQUIRED").c_str(),Options); O.lon=GWNumber(c,GetAttr(attrs,rows[r],"LONGITUDE","REQUIRED").c_str(),Options);}
+          O.z=GWNumber(c,GetAttr(attrs,rows[r],"SCREEN_ELEV","REQUIRED").c_str(),Options); O.node=-1;
           pGW->AddObservationWell(O);
         }
         else {
-          gw_well W; W.id=s_to_ll(rows[r][0].c_str()); W.name=GetAttr(attrs,rows[r],"NAME",rows[r][0]);
+          const string c=":Wells";
+          gw_well W; W.id=GWID(c,rows[r][0].c_str(),Options); W.name=GetAttr(attrs,rows[r],"NAME",rows[r][0]);
           W.xy=(GetAttr(attrs,rows[r],"X","")!="") && (GetAttr(attrs,rows[r],"LATITUDE","")=="");
-          if (W.xy){W.lat=atof(GetAttr(attrs,rows[r],"Y","REQUIRED").c_str()); W.lon=atof(GetAttr(attrs,rows[r],"X","REQUIRED").c_str());}
-          else {W.lat=atof(GetAttr(attrs,rows[r],"LATITUDE","REQUIRED").c_str()); W.lon=atof(GetAttr(attrs,rows[r],"LONGITUDE","REQUIRED").c_str());}
-          W.screen_top=atof(GetAttr(attrs,rows[r],"SCREEN_TOP","REQUIRED").c_str()); W.screen_bot=atof(GetAttr(attrs,rows[r],"SCREEN_BOT","REQUIRED").c_str());
+          if (W.xy){W.lat=GWNumber(c,GetAttr(attrs,rows[r],"Y","REQUIRED").c_str(),Options); W.lon=GWNumber(c,GetAttr(attrs,rows[r],"X","REQUIRED").c_str(),Options);}
+          else {W.lat=GWNumber(c,GetAttr(attrs,rows[r],"LATITUDE","REQUIRED").c_str(),Options); W.lon=GWNumber(c,GetAttr(attrs,rows[r],"LONGITUDE","REQUIRED").c_str(),Options);}
+          W.screen_top=GWNumber(c,GetAttr(attrs,rows[r],"SCREEN_TOP","REQUIRED").c_str(),Options); W.screen_bot=GWNumber(c,GetAttr(attrs,rows[r],"SCREEN_BOT","REQUIRED").c_str(),Options);
           W.pRate=NULL;
           ExitGracefullyIf(W.screen_top<W.screen_bot,("ParseGWFile: well "+W.name+" has SCREEN_TOP below SCREEN_BOT").c_str(),BAD_DATA);
           pGW->AddWell(W);
@@ -371,13 +414,15 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
       else {
         B.name=s[1]; B.file=CorrectForRelativePath(s[2],Options.rvg_filename);
         B.head=0.0; B.cond=0.0; B.allLayers=true; B.pHead=NULL; bool hasHead=false;
+        ExitGracefullyIf((Len-3)%2!=0,("ParseGWFile: boundary "+B.name+" in "+Options.rvg_filename+": the values after the file must come in "
+                         "keyword-value pairs (HEAD, CONDUCTANCE, LAYERS); '"+string(s[Len-1])+"' has no partner (a comma separates values: write 1146.85, not 1,146.85)").c_str(),BAD_DATA);
         for (int i=3;i+1<Len;i+=2){
-          if      (!strcmp(s[i],"HEAD"       )){B.head=s_to_d(s[i+1]); hasHead=true;}
-          else if (!strcmp(s[i],"CONDUCTANCE")){B.cond=s_to_d(s[i+1]);}
+          if      (!strcmp(s[i],"HEAD"       )){B.head=GWNum(s,i+1,Options); hasHead=true;}
+          else if (!strcmp(s[i],"CONDUCTANCE")){B.cond=GWNum(s,i+1,Options);}
           else if (!strcmp(s[i],"LAYERS"     )){
             ExitGracefullyIf(strcmp(s[i+1],"TOP") && strcmp(s[i+1],"ALL"),("ParseGWFile: boundary "+B.name+": LAYERS must be ALL or TOP, not "+string(s[i+1])).c_str(),BAD_DATA);
             B.allLayers=strcmp(s[i+1],"TOP")!=0;}
-          else {WriteWarning("ParseGWFile: unknown boundary keyword "+string(s[i]),Options.noisy);}
+          else {ExitGracefully(("ParseGWFile: boundary "+B.name+" in "+Options.rvg_filename+": unknown keyword '"+string(s[i])+"' (HEAD, CONDUCTANCE or LAYERS)").c_str(),BAD_DATA);}
         }
         ExitGracefullyIf(!hasHead,("ParseGWFile: boundary "+B.name+" needs a HEAD value").c_str(),BAD_DATA);
         ExitGracefullyIf((!B.isCHD) && (B.cond<=0),("ParseGWFile: general-head boundary "+B.name+" needs a positive CONDUCTANCE").c_str(),BAD_DATA);
@@ -387,18 +432,18 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     else if (!strcmp(s[0],":GWInitialization"))
     {/*:GWInitialization STEADY_STATE [uniform recharge, mm/d] */
       if ((Len<3) || strcmp(s[1],"STEADY_STATE")){GWImproperFormat(s,Options);}
-      else {pGW->SetSteadyStateInit(s_to_d(s[2]));}
+      else {GWMaxTokens(s,Len,3,Options); pGW->SetSteadyStateInit(GWNum(s,2,Options));}
     }
     else if (!strcmp(s[0],":RiverBedDepth"))
     {/*:RiverBedDepth [m | REFERENCE_FLOW]  channel bed depth below the DEM along rivers (default REFERENCE_FLOW) */
       if (Len<2){GWImproperFormat(s,Options);}
-      else {pGW->SetRiverBedDepth(strcmp(s[1],"REFERENCE_FLOW")?s_to_d(s[1]):-1.0);}
+      else {GWMaxTokens(s,Len,2,Options); pGW->SetRiverBedDepth(strcmp(s[1],"REFERENCE_FLOW")?GWNum(s,1,Options):-1.0);}
     }
     else if (!strcmp(s[0],":SurfaceWaterExchange"))
     {/*:SurfaceWaterExchange [state variable] [HRU group] LEAKANCE [1/d]   e.g. DEPRESSION WetlandHRUs LEAKANCE 0.01 */
       if (Len<5){GWImproperFormat(s,Options);}
       else if (strcmp(s[3],"LEAKANCE")){GWImproperFormat(s,Options);}
-      else {pGW->AddSurfaceWaterExchange(s[1],s[2],s_to_d(s[4]));}
+      else {GWMaxTokens(s,Len,5,Options); pGW->AddSurfaceWaterExchange(s[1],s[2],GWNum(s,4,Options));}
     }
     else if (!strcmp(s[0],":ReservoirExchange"))
     {/*:ReservoirExchange   couple Raven reservoirs (with :SeepageParameters, on lake HRUs that have an AQUIFER_PROFILE)
@@ -419,15 +464,15 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     }
     else if (!strcmp(s[0],":SolverHeadTolerance"))
     {/*:SolverHeadTolerance [m]  Newton head-change tolerance (default 0.00001) */
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetHeadTolerance(s_to_d(s[1]));}
+      if (Len<2){GWImproperFormat(s,Options);} else {GWMaxTokens(s,Len,2,Options); pGW->SetHeadTolerance(GWNum(s,1,Options));}
     }
     else if (!strcmp(s[0],":SolverMaxOuterIterations"))
     {
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetMaxOuterIterations(s_to_i(s[1]));}
+      if (Len<2){GWImproperFormat(s,Options);} else {GWMaxTokens(s,Len,2,Options); pGW->SetMaxOuterIterations(GWInt(s,1,Options));}
     }
     else if (!strcmp(s[0],":HeadSaveFrequency"))
     {
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetHeadSaveFrequency(s_to_i(s[1]));}
+      if (Len<2){GWImproperFormat(s,Options);} else {GWMaxTokens(s,Len,2,Options); pGW->SetHeadSaveFrequency(GWInt(s,1,Options));}
     }
     else if (!strcmp(s[0],":NameFile")         || !strcmp(s[0],":GWRiverConnection") || !strcmp(s[0],":Drains") ||
              !strcmp(s[0],":ETProperties")     || !strcmp(s[0],":RavenCBCUnitNumber")|| !strcmp(s[0],":Recharge") ||

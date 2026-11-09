@@ -285,6 +285,35 @@ void CGroundwaterModel::ResolveInputCRS()
     double x=lon,y=lat; _inCRS.Inverse(x,y,lon,lat); xy=false;
   }
 }
+//:InputCRS: a GeoJSON or raster input whose coordinates (box: xmin, ymin, xmax, ymax as written in the file) lie in the
+//longitude/latitude range, over the HRUs' LATITUDE/LONGITUDE of the .rvh file, and not near them in the :InputCRS
+//coordinates, is in longitude/latitude: stop (read as projected metres it would lie by the projection's false origin)
+void CGroundwaterModel::CheckInputLonLat(const string &file,const double *box,const string &what) const
+{
+  if (!_inCRS.IsSet()){return;}
+  if ((box[0]>box[2]) || (box[0]<-180.0) || (box[2]>180.0) || (box[1]<-90.0) || (box[3]>90.0)){return;}
+  double L[4]={1e300,1e300,-1e300,-1e300},P[4]={1e300,1e300,-1e300,-1e300}; int n=0;
+  int nH=(int)_aqHRUs.size(); if (nH==0){nH=_pModel->GetNumHRUs();}
+  for (int i=0;i<nH;i++){
+    location loc=_pModel->GetHydroUnit(_aqHRUs.empty()?i:_aqHRUs[i])->GetCentroid();
+    double lo=loc.longitude,la=loc.latitude,x,y;
+    if (!std::isfinite(lo) || !std::isfinite(la) || (fabs(la)>90.0) || (fabs(lo)>360.0)){continue;}
+    _inCRS.Forward(lo,la,x,y); if (!std::isfinite(x) || !std::isfinite(y)){continue;}
+    L[0]=min(L[0],lo); L[1]=min(L[1],la); L[2]=max(L[2],lo); L[3]=max(L[3],la);
+    P[0]=min(P[0],x);  P[1]=min(P[1],y);  P[2]=max(P[2],x);  P[3]=max(P[3],y); n++;
+  }
+  if (n==0){return;}
+  double mL=0.5+0.5*max(L[2]-L[0],L[3]-L[1]),mP=50000.0+0.5*max(P[2]-P[0],P[3]-P[1]); //(HRUs extend beyond their centroids)
+  bool overLL=(box[0]<=L[2]+mL) && (box[2]>=L[0]-mL) && (box[1]<=L[3]+mL) && (box[3]>=L[1]-mL);
+  bool overP =(box[0]<=P[2]+mP) && (box[2]>=P[0]-mP) && (box[1]<=P[3]+mP) && (box[3]>=P[1]-mP);
+  if (overLL && !overP){
+    ostringstream S; S<<setprecision(6)<<"CGroundwaterModel: "<<what<<" "<<file<<" looks like longitude/latitude: its coordinates (x "<<box[0]<<" to "<<box[2]
+      <<", y "<<box[1]<<" to "<<box[3]<<") lie over the HRUs' LATITUDE/LONGITUDE, while in the coordinates of :InputCRS ("<<_inCRS.Describe()
+      <<") the HRUs lie at x "<<setprecision(9)<<P[0]<<" to "<<P[2]<<", y "<<P[1]<<" to "<<P[3]<<". With :InputCRS every GeoJSON and raster input must be "
+      <<"in that projection: reproject the file (or remove :InputCRS if every input file is in longitude/latitude)";
+    ExitGracefully(S.str().c_str(),BAD_DATA);
+  }
+}
 //refinement features in the grid's local frame
 void CGroundwaterModel::BuildRefinement(vector<gw_refine> &ref) const
 {
@@ -299,7 +328,9 @@ void CGroundwaterModel::BuildRefinement(vector<gw_refine> &ref) const
       string file=(_refKind[i]=="RIVERS")?_riverFile:_refFile[i];
       ExitGracefullyIf(file=="","CGroundwaterModel: :GridRefinement RIVERS needs :RiverGeometry",BAD_DATA);
       vector<gw_ring> lines; vector<long long> ids;
-      if (!GWGeom::ReadGeoJSONLines(file,(_refKind[i]=="RIVERS")?_riverIDField:"",lines,ids,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+      double rb[4];
+      if (!GWGeom::ReadGeoJSONLines(file,(_refKind[i]=="RIVERS")?_riverIDField:"",lines,ids,err,InCRS(),rb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+      CheckInputLonLat(file,rb,"GeoJSON file");
       for (size_t l=0;l<lines.size();l++){
         f.kind=1; f.geom.clear();
         for (size_t k=0;k<lines[l].size();k++){double X,Y; gw_pt p; _proj.Forward(lines[l][k].x,lines[l][k].y,X,Y); _grid.ToLocal(X,Y,p.x,p.y); f.geom.push_back(p);}
@@ -308,7 +339,9 @@ void CGroundwaterModel::BuildRefinement(vector<gw_refine> &ref) const
     }
     else if (_refKind[i]=="POLYGONS"){
       map<long long,vector<gw_ring> > polys;
-      if (!GWGeom::ReadGeoJSONPolygons(_refFile[i],"",polys,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+      double rb[4];
+      if (!GWGeom::ReadGeoJSONPolygons(_refFile[i],"",polys,err,InCRS(),rb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+      CheckInputLonLat(_refFile[i],rb,"GeoJSON file");
       for (map<long long,vector<gw_ring> >::iterator it=polys.begin();it!=polys.end();it++){
         for (size_t r=0;r<it->second.size();r++){
           f.kind=2; f.geom.clear();
@@ -967,7 +1000,9 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
     }
   }
   if (!_cacheHit){
-  if (!GWGeom::ReadGeoJSONPolygons(_hruGeomFile,_hruIDField,shapes,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+  double rb[4];
+  if (!GWGeom::ReadGeoJSONPolygons(_hruGeomFile,_hruIDField,shapes,err,InCRS(),rb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+  CheckInputLonLat(_hruGeomFile,rb,"GeoJSON file");
 
   int nHRUs=_pModel->GetNumHRUs();
   //-- projection origin = mean centroid of coupled HRUs
@@ -1020,6 +1055,16 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
         double x,y; _grid.ToLocal(prj[k][r][n].x,prj[k][r][n].y,x,y); prj[k][r][n].x=x; prj[k][r][n].y=y;
         minx=min(minx,x);maxx=max(maxx,x);miny=min(miny,y);maxy=max(maxy,y);}}}
   }
+  if (_gridType!=GWGRID_FILE){ //a cell size far too small for the HRUs' extent (given in km, or split by a thousands separator) would exhaust the memory
+    const double maxCells=1.0e7;
+    double nc=ceil((maxx-minx)/cs)+1.0,nr=ceil((maxy-miny)/cs)+1.0;
+    if (nc*nr>maxCells){
+      ostringstream S; S<<"CGroundwaterModel: :GridCellSize "<<cs<<" m gives about "<<setprecision(3)<<nc*nr<<" cells per layer over the HRUs' extent ("
+        <<setprecision(4)<<(maxx-minx)/1000.0<<" km by "<<(maxy-miny)/1000.0<<" km), more than "<<maxCells<<": give the cell size in metres as a plain number "
+        <<"(for example 2000, not 2,000 or 2km)";
+      ExitGracefully(S.str().c_str(),BAD_DATA);
+    }
+  }
   vector<gw_refine> ref; BuildRefinement(ref);
   for (size_t i=0;i<_refKind.size();i++){ //:GridRefinement LAKES - the outline of every reservoir's lake HRU
     if (_refKind[i]!="LAKES"){continue;}
@@ -1035,6 +1080,27 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
       }
     }
     ExitGracefullyIf(nl==0,"CGroundwaterModel: :GridRefinement LAKES found no reservoir whose lake HRU has a polygon in :HRUGeometry (:Reservoir ... :HRUID)",BAD_DATA);
+  }
+  if ((_gridType==GWGRID_REGULAR) && !ref.empty()){ //columns x rows of the refined regular grid (before its 2:1 smoothing), before it is built
+    double ncr[2]={0,0};
+    for (int a=0;a<2;a++){
+      double a0=floor(((a==0)?minx:miny)/cs)*cs; int n=max(1,(int)ceil((((a==0)?maxx:maxy)-a0)/cs));
+      for (int i=0;i<n;i++){
+        double lo=a0+i*cs,hi=lo+cs,target=cs;
+        for (size_t f=0;f<ref.size();f++){
+          double mn=1e300,mx=-1e300;
+          for (size_t k=0;k<ref[f].geom.size();k++){double v=(a==0)?ref[f].geom[k].x:ref[f].geom[k].y; mn=min(mn,v); mx=max(mx,v);}
+          if ((mx+ref[f].size>=lo) && (mn-ref[f].size<=hi)){target=min(target,ref[f].size);}
+        }
+        ncr[a]+=max(1.0,ceil(cs/target-1e-9));
+      }
+    }
+    if (ncr[0]*ncr[1]>1.0e7){
+      ostringstream S; S<<"CGroundwaterModel: the :GridRefinement sizes give a regular grid of about "<<setprecision(3)<<ncr[0]*ncr[1]<<" cells per layer ("
+        <<setprecision(9)<<ncr[0]<<" columns by "<<ncr[1]<<" rows), more than 1e+07: give larger refinement sizes in metres as plain numbers, "
+        <<"or use :GridType QUADTREE or HRU_MESH, which refine only around the features";
+      ExitGracefully(S.str().c_str(),BAD_DATA);
+    }
   }
   if (_gridType==GWGRID_REGULAR){_grid.MakeRegular(minx,miny,maxx,maxy,cs,ref);}
   else if (_gridType==GWGRID_QUADTREE){
@@ -1060,7 +1126,9 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   }
   else { //imported cells
     map<long long,vector<gw_ring> > cellshapes;
-    if (!GWGeom::ReadGeoJSONPolygons(_gridFile,_gridFileID,cellshapes,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    double gb[4];
+    if (!GWGeom::ReadGeoJSONPolygons(_gridFile,_gridFileID,cellshapes,err,InCRS(),gb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    CheckInputLonLat(_gridFile,gb,"GeoJSON file");
     vector<gw_ring> cells;
     for (map<long long,vector<gw_ring> >::iterator it=cellshapes.begin();it!=cellshapes.end();it++){
       ExitGracefullyIf(it->second.size()!=1,("CGroundwaterModel: grid cell "+to_string(it->first)+" in "+_gridFile+" must be a single polygon without holes").c_str(),BAD_DATA);
@@ -1118,7 +1186,7 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   }
   CGWRaster &dem=_dem;
   dem.SetCRS(InCRS());
-  if (_demFile!=""){ if (!dem.Read(_demFile,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);} }
+  if (_demFile!=""){ if (!dem.Read(_demFile,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);} double rb[4]; dem.Extent(rb); CheckInputLonLat(_demFile,rb,"raster"); }
   _land.assign(_ncpl,0.0);
   for (int ic=0;ic<_ncpl;ic++)
   {
@@ -1138,7 +1206,7 @@ void CGroundwaterModel::BuildVertical(const optStruct &Options)
   string err;
   CGWRaster bed;
   bed.SetCRS(InCRS());
-  if (_bedrockFile!=""){ if (!bed.Read(_bedrockFile,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);} }
+  if (_bedrockFile!=""){ if (!bed.Read(_bedrockFile,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);} double rb[4]; bed.Extent(rb); CheckInputLonLat(_bedrockFile,rb,"raster"); }
   _nlay=1;
   for (size_t i=0;i<_aProfiles.size();i++){_nlay=max(_nlay,(int)_aProfiles[i].layers.size());}
 
@@ -1265,7 +1333,9 @@ void CGroundwaterModel::BuildRivers()
   }
   if (_riverFile==""){return;}
   vector<gw_ring> lines; vector<long long> ids; string err;
-  if (!GWGeom::ReadGeoJSONLines(_riverFile,_riverIDField,lines,ids,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+  double rb[4];
+  if (!GWGeom::ReadGeoJSONLines(_riverFile,_riverIDField,lines,ids,err,InCRS(),rb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+  CheckInputLonLat(_riverFile,rb,"GeoJSON file");
   map<pair<int,int>,pair<double,double> > acc; //(subbasin,column) -> (length, min bed elevation)
   double cs=_cellSize;
   for (size_t i=0;i<lines.size();i++)
@@ -1342,9 +1412,10 @@ void CGroundwaterModel::BuildRivers()
 vector<int> CGroundwaterModel::SelectColumns(const string &file) const
 {
   vector<int> cols; vector<char> sel(_ncpl,0); string err;
-  map<long long,vector<gw_ring> > polys;
-  if (GWGeom::ReadGeoJSONPolygons(file,"",polys,err,InCRS()))
+  map<long long,vector<gw_ring> > polys; double rb[4];
+  if (GWGeom::ReadGeoJSONPolygons(file,"",polys,err,InCRS(),rb))
   {
+    CheckInputLonLat(file,rb,"GeoJSON file");
     vector<gw_ring> rings;
     for (map<long long,vector<gw_ring> >::const_iterator it=polys.begin();it!=polys.end();it++){
       for (size_t r=0;r<it->second.size();r++){
@@ -1369,7 +1440,8 @@ vector<int> CGroundwaterModel::SelectColumns(const string &file) const
   {
     ExitGracefullyIf(err.find("no Polygon/MultiPolygon")==string::npos,("CGroundwaterModel: "+err).c_str(),BAD_DATA); //(a polygon file refused by its coordinates)
     vector<gw_ring> lines; vector<long long> ids; err="";
-    if (!GWGeom::ReadGeoJSONLines(file,"",lines,ids,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    if (!GWGeom::ReadGeoJSONLines(file,"",lines,ids,err,InCRS(),rb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    CheckInputLonLat(file,rb,"GeoJSON file");
     for (size_t i=0;i<lines.size();i++){
       for (size_t n=0;n+1<lines[i].size();n++){
         double xa,ya,xb,yb; _proj.Forward(lines[i][n].x,lines[i][n].y,xa,ya); _proj.Forward(lines[i][n+1].x,lines[i][n+1].y,xb,yb);

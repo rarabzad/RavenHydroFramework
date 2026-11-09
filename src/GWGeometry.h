@@ -54,6 +54,7 @@ public:
   bool Read  (const string &filename,string &err);
   bool Sample(const double lon,const double lat,double &val) const;
   bool IsLoaded() const {return (_ncols>0);}
+  void Extent(double *b) const;              ///< xmin, ymin, xmax, ymax in the raster's own coordinates
 };
 
 ///////////////////////////////////////////////////////////////////
@@ -83,11 +84,12 @@ public:
 };
 namespace GWGeom
 {
-  //(crs: projection of the file's coordinates, :InputCRS; NULL: longitude/latitude. Vertices are returned in lon/lat)
+  //(crs: projection of the file's coordinates, :InputCRS; NULL: longitude/latitude. Vertices are returned in lon/lat;
+  // rawbox, if given: xmin, ymin, xmax, ymax of the coordinates as written in the file)
   bool   ReadGeoJSONPolygons(const string &filename,const string &idField,
-                             map<long long,vector<gw_ring> > &shapes,string &err,const CGWCRS *crs=NULL);
+                             map<long long,vector<gw_ring> > &shapes,string &err,const CGWCRS *crs=NULL,double *rawbox=NULL);
   bool   ReadGeoJSONLines   (const string &filename,const string &idField,
-                             vector<gw_ring> &lines,vector<long long> &ids,string &err,const CGWCRS *crs=NULL);
+                             vector<gw_ring> &lines,vector<long long> &ids,string &err,const CGWCRS *crs=NULL,double *rawbox=NULL);
   double SignedArea         (const gw_ring &r);
   double ClipRingAreaToRect (const gw_ring &r,const double x0,const double y0,const double x1,const double y1);
 }

@@ -144,6 +144,22 @@ void CGroundwaterModel::ExtReadSimulation()
   ExitGracefullyIf(_extDisFtype=="DISU6",
     "CGroundwaterModel: models with DISU discretization are not yet supported in existing-model mode (DIS and DISV are)",BAD_DATA);
 
+  //the names of the packages Raven adds are reserved: a package of the model with one of them (e.g. a model Raven wrote,
+  //coupled again) would make MODFLOW stop with "Package name already exists", unless Raven takes it over (it is removed)
+  {
+    const char *reserved[]={"RCH_RAVEN","DRN_RAVEN","EVT_RAVEN","SWX_RAVEN","RES_RAVEN","SZX_RAVEN","SZQ_RAVEN","SZD_RAVEN","SZW_RAVEN"};
+    string list; for (size_t r=0;r<sizeof(reserved)/sizeof(reserved[0]);r++){list+=(r?", ":"")+string(reserved[r]);}
+    for (size_t i=0;i<_extPkgs.size();i++){
+      const gw_ext_pkg &P=_extPkgs[i];
+      bool res=false; for (size_t r=0;r<sizeof(reserved)/sizeof(reserved[0]);r++){if (P.pname==reserved[r]){res=true;}}
+      if (!res){continue;}
+      bool tk=false; for (size_t j=0;j<_takeOver.size();j++){if (Upper(_takeOver[j])==P.pname){tk=true;}}
+      if (tk && IsTakeOverType(P.ftype)){continue;}
+      ExitGracefully(("CGroundwaterModel: the model name file "+_extNamFile+" has a "+P.ftype+" package named "+P.pname+", a name Raven reserves for the "
+                      "packages it adds ("+list+"). Rename the package in the name file, or remove its line if it is a package Raven added to a model it wrote"+
+                      (IsTakeOverType(P.ftype)?string(" (or list it in :RavenTakesOver, so Raven replaces it)"):string(""))).c_str(),BAD_DATA);
+    }
+  }
   //every name the user gave must exist; every recharge/ET/UZF package must be declared taken over or kept
   vector<string> all=_takeOver; all.insert(all.end(),_keepPkgs.begin(),_keepPkgs.end()); if (_streamPkg!=""){all.push_back(_streamPkg);}
   for (size_t j=0;j<all.size();j++){
@@ -813,7 +829,9 @@ void CGroundwaterModel::ExtLinkHRUs(const optStruct &Options)
   }
   else if (_extGridFile!=""){
     map<long long,vector<gw_ring> > shapes; string err;
-    if (!GWGeom::ReadGeoJSONPolygons(_extGridFile,_extGridID,shapes,err,InCRS())){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    double rb[4];
+    if (!GWGeom::ReadGeoJSONPolygons(_extGridFile,_extGridID,shapes,err,InCRS(),rb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    CheckInputLonLat(_extGridFile,rb,"GeoJSON file");
     ExitGracefullyIf((int)shapes.size()!=_ncpl,("CGroundwaterModel: "+_extGridFile+" holds "+to_string(shapes.size())+" cells; the model layer has "+to_string(_ncpl)).c_str(),BAD_DATA);
     long long expect=1;
     for (map<long long,vector<gw_ring> >::iterator it=shapes.begin();it!=shapes.end();it++,expect++){
