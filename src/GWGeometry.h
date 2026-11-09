@@ -4,7 +4,7 @@
   Licensed under the Artistic License 2.0 (see LICENSE)
   SPDX-License-Identifier: Artistic-2.0
   Raven-MODFLOW 6 groundwater coupling: spatial utilities
-  (GeoJSON reading, equal-area projection, ESRI ASCII rasters,
+  (GeoJSON reading, equal-area projection, ESRI ASCII and GeoTIFF rasters,
    polygon/cell intersection)
 ----------------------------------------------------------------*/
 #ifndef GWGEOMETRY_H
@@ -37,17 +37,22 @@ public:
 
 class CGWCRS;
 ///////////////////////////////////////////////////////////////////
-/// \brief ESRI ASCII grid in geographic (lon/lat) coordinates, or in the projected coordinates of an :InputCRS,
-/// sampled bilinearly
+/// \brief raster map (ESRI ASCII grid, or GeoTIFF for a .tif/.tiff file) in geographic (lon/lat) coordinates, or in
+/// the projected coordinates of an :InputCRS, sampled bilinearly
 //
 class CGWRaster
 {
 private:
   int _ncols,_nrows;
-  double _xll,_yll,_cs,_nodata;
+  double _xll,_yll,_dx,_dy,_nodata; ///< lower-left corner, cell width and height (equal in an ESRI ASCII grid), NODATA value
+  bool _hasNodata;            ///< a NODATA value is given (always for ESRI ASCII grids: -9999 by default)
   vector<double> _v;          ///< row-major, north row first
   const CGWCRS *_crs;         ///< projection of the raster's coordinates (NULL: longitude/latitude)
+  string _note;               ///< what the caller should report as a warning (set by Read)
+  string _format;             ///< encoding of a GeoTIFF file
   bool Valid(int r,int c) const;
+  bool ReadTIFF(const string &filename,string &err);
+  bool CheckLonLatRange(const string &filename,string &err);
 public:
   CGWRaster();
   void SetCRS(const CGWCRS *crs){_crs=crs;}  ///< (before Read)
@@ -55,6 +60,9 @@ public:
   bool Sample(const double lon,const double lat,double &val) const;
   bool IsLoaded() const {return (_ncols>0);}
   void Extent(double *b) const;              ///< xmin, ymin, xmax, ymax in the raster's own coordinates
+  const string &Note  () const {return _note;}   ///< warnings for the caller, one per line
+  const string &Format() const {return _format;} ///< GeoTIFF encoding ("" for ESRI ASCII)
+  static const double MAX_PIXELS;            ///< largest raster read [cells]
 };
 
 ///////////////////////////////////////////////////////////////////
@@ -81,6 +89,11 @@ public:
   void   Forward(const double lon,const double lat,double &x,double &y) const; ///< [deg] -> [m]
   string Describe() const;
   bool   Same   (const CGWCRS &o) const;        ///< the same projection (parameters within round-off)
+  long   EPSG   () const {return _epsg;}        ///< EPSG code it was given by (0: given by its parameters, or ESRI:102001)
+  const string &Code() const {return _code;}  ///< the code it was given by ("EPSG:32610", "ESRI:102001"; "": given by its parameters)
+private:
+  long   _epsg;
+  string _code;
 };
 namespace GWGeom
 {
@@ -91,6 +104,7 @@ namespace GWGeom
   bool   ReadGeoJSONLines   (const string &filename,const string &idField,
                              vector<gw_ring> &lines,vector<long long> &ids,string &err,const CGWCRS *crs=NULL,double *rawbox=NULL);
   double SignedArea         (const gw_ring &r);
+  bool   GeographicEPSG     (const long code);  ///< an EPSG code of a geographic (longitude/latitude) coordinate system
   double ClipRingAreaToRect (const gw_ring &r,const double x0,const double y0,const double x1,const double y1);
 }
 #endif

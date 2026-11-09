@@ -845,6 +845,7 @@ void CGroundwaterModel::ExtLinkHRUs(const optStruct &Options)
   }
   else {
     //:OverlapWeights: w = A_overlap / A_cell for the model's top layer (MODFLOW-USG coupling format)
+    if (_demFile!=""){WriteWarning("CGroundwaterModel: :LandSurface "+_demFile+" is not used: an :OverlapWeights table has no cell outlines to sample it in, so the soil zone has no relief within the cells",Options.noisy);}
     _grid.ncpl=_ncpl; _grid.area=_extArea;
     for (size_t e=0;e<_owTable.size();e++){
       CHydroUnit *pH=_pModel->GetHRUByID(_owTable[e].hru);

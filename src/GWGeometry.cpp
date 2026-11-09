@@ -6,6 +6,8 @@
   Raven-MODFLOW 6 groundwater coupling: spatial utilities
 ----------------------------------------------------------------*/
 #include "GWGeometry.h"
+#include "GWGeoTIFF.h"
+#include "GWEPSGTable.h"
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -49,13 +51,16 @@ void CGWProjection::Inverse(const double x,const double y,double &lon,double &la
 //=================================================================
 // Raster
 //=================================================================
-CGWRaster::CGWRaster(){_ncols=_nrows=0;_xll=_yll=0;_cs=1;_nodata=-9999;_crs=NULL;}
+const double CGWRaster::MAX_PIXELS=GWGeoTIFF::MAX_PIXELS;
+CGWRaster::CGWRaster(){_ncols=_nrows=0;_xll=_yll=0;_dx=_dy=1;_nodata=-9999;_hasNodata=true;_crs=NULL;}
 bool CGWRaster::Read(const string &filename,string &err)
 {
+  _note=""; _format="";
+  if (GWGeoTIFF::IsTIFFName(filename)){return ReadTIFF(filename,err);}
   ifstream IN(filename.c_str());
   if (IN.fail()){err="cannot open raster file "+filename;return false;}
-  bool center=false; string key; double val;
-  _nodata=-9999;
+  bool center=false; string key; double val,cs=1;
+  _nodata=-9999; _hasNodata=true;
   for (int i=0;i<6;i++)
   {
     streampos pos=IN.tellg();
@@ -67,17 +72,19 @@ bool CGWRaster::Read(const string &filename,string &err)
     else if (lk=="yllcorner"){IN>>_yll;}
     else if (lk=="xllcenter"){IN>>_xll;center=true;}
     else if (lk=="yllcenter"){IN>>_yll;center=true;}
-    else if (lk=="cellsize" ){IN>>_cs;}
+    else if (lk=="cellsize" ){IN>>cs;}
     else if (lk=="nodata_value"){IN>>_nodata;}
     else {IN.seekg(pos);break;} //no NODATA line
   }
-  if ((_ncols<=0) || (_nrows<=0) || (_cs<=0)){err="invalid raster header in "+filename;return false;}
-  if (center){_xll-=0.5*_cs;_yll-=0.5*_cs;}
-  if ((_crs==NULL) && ((_xll<-360.0) || (_xll+_ncols*_cs>360.0) || (_yll<-90.0-_cs) || (_yll+_nrows*_cs>90.0+_cs))){ //(projected metres read as degrees)
-    ostringstream s; s<<"raster "<<filename<<" lies outside the longitude/latitude range (lower-left corner "<<_xll<<", "<<_yll<<", cell size "<<_cs
-                      <<"): a raster in projected coordinates needs :InputCRS in the .rvg file";
+  _dx=_dy=cs;
+  if ((_ncols<=0) || (_nrows<=0) || (cs<=0)){err="invalid raster header in "+filename;return false;}
+  if ((double)_ncols*(double)_nrows>MAX_PIXELS){
+    ostringstream s; s<<"raster "<<filename<<" has "<<_ncols<<" x "<<_nrows<<" cells, more than the "<<MAX_PIXELS/1e6<<" million Raven reads: resample it to a "
+                      <<"coarser resolution (a few raster cells per model cell are enough; each cell averages 25 samples)";
     err=s.str(); _ncols=0; return false;
   }
+  if (center){_xll-=0.5*cs;_yll-=0.5*cs;}
+  if (!CheckLonLatRange(filename,err)){return false;}
   _v.resize((size_t)_ncols*_nrows);
   for (size_t i=0;i<_v.size();i++){
     if (!(IN>>val)){err="raster "+filename+" has fewer values than ncols*nrows";_ncols=0;return false;}
@@ -85,23 +92,80 @@ bool CGWRaster::Read(const string &filename,string &err)
   }
   return true;
 }
+//without a projection (:InputCRS) the raster's extent must lie in the longitude/latitude range
+bool CGWRaster::CheckLonLatRange(const string &filename,string &err)
+{
+  if ((_crs==NULL) && ((_xll<-360.0) || (_xll+_ncols*_dx>360.0) || (_yll<-90.0-_dy) || (_yll+_nrows*_dy>90.0+_dy))){ //(projected metres read as degrees)
+    ostringstream s; s<<"raster "<<filename<<" lies outside the longitude/latitude range (lower-left corner "<<_xll<<", "<<_yll<<", cell size "<<_dx;
+    if (_dy!=_dx){s<<" x "<<_dy;}
+    s<<"): a raster in projected coordinates needs :InputCRS in the .rvg file";
+    err=s.str(); _ncols=0; return false;
+  }
+  return true;
+}
+//a GeoTIFF file: read natively (GWGeoTIFF); its EPSG code, if it has one, must agree with :InputCRS (a geographic code
+//without :InputCRS; with it, the same code or the same built-in projection); a user-defined CRS or none is treated as an
+//ESRI ASCII grid is (the extent decides)
+bool CGWRaster::ReadTIFF(const string &filename,string &err)
+{
+  gw_geotiff T; _ncols=0;
+  if (!GWGeoTIFF::Read(filename,T,err)){return false;}
+  if (T.epsg>0){
+    ostringstream cs; cs<<"EPSG:"<<T.epsg;
+    string inp=(_crs==NULL)?"":((_crs->Code()!="")?_crs->Code()+" ("+_crs->Describe()+")":_crs->Describe());
+    CGWCRS f; string e2;
+    const bool built=!T.geographic && f.Parse(cs.str(),e2);       //(a projection Raven has built in)
+    if (T.geographic){
+      if (_crs!=NULL){
+        err="raster "+filename+" is in longitude/latitude ("+cs.str()+" in its GeoTIFF keys), but :InputCRS is "+inp+
+            ": give the raster in the :InputCRS projection (or remove :InputCRS if every input file is in longitude/latitude)";
+        return false;
+      }
+    }
+    else if (_crs==NULL){
+      err="raster "+filename+" is in "+cs.str()+" (a projection, in its GeoTIFF keys), but there is no :InputCRS, so rasters are expected in longitude/latitude: "+
+          (built?"give :InputCRS "+cs.str()+" in the .rvg file":"give :InputCRS with the projection's parameters (TMERC, ALBERS or LCC; "+cs.str()+" is not built in)")+
+          ", or reproject the raster to longitude/latitude";
+      return false;
+    }
+    else if (_crs->EPSG()!=T.epsg){
+      if (built && !f.Same(*_crs)){
+        err="raster "+filename+" is in "+cs.str()+" ("+f.Describe()+", in its GeoTIFF keys), but :InputCRS is "+inp+": all input files must use the projection of :InputCRS";
+        return false;
+      }
+      if (!built && (_crs->Code()!="")){
+        err="raster "+filename+" is in "+cs.str()+" (in its GeoTIFF keys), but :InputCRS is "+inp+": all input files must use the projection of :InputCRS";
+        return false;
+      }
+      if (!built){_note="raster "+filename+" is in "+cs.str()+", a projection that is not built in, so it cannot be compared with :InputCRS ("+inp+"); it is read in the :InputCRS coordinates";}
+    }
+  }
+  _ncols=T.ncols; _nrows=T.nrows; _xll=T.xll; _yll=T.yll; _dx=T.dx; _dy=T.dy;
+  _hasNodata=T.hasNodata && (T.nodata==T.nodata); _nodata=T.nodata; _format=T.format; //(a NaN NODATA value: NaN pixels, never valid anyway)
+  if (T.notes!=""){_note+=(_note.empty()?"":"\n")+T.notes;}
+  if (!CheckLonLatRange(filename,err)){return false;}
+  _v.swap(T.v);
+  return true;
+}
 void CGWRaster::Extent(double *b) const
 {
-  b[0]=_xll; b[1]=_yll; b[2]=_xll+_ncols*_cs; b[3]=_yll+_nrows*_cs;
+  b[0]=_xll; b[1]=_yll; b[2]=_xll+_ncols*_dx; b[3]=_yll+_nrows*_dy;
 }
 bool CGWRaster::Valid(int r,int c) const
 {
   if ((r<0) || (c<0) || (r>=_nrows) || (c>=_ncols)){return false;}
-  return (fabs(_v[(size_t)r*_ncols+c]-_nodata)>1e-6);
+  double v=_v[(size_t)r*_ncols+c];
+  if (!_hasNodata){return (v==v);}  //(no NODATA value: any number is valid; NaN never is)
+  return (fabs(v-_nodata)>1e-6);
 }
 bool CGWRaster::Sample(const double lon,const double lat,double &val) const
 {
   if (_ncols==0){return false;}
   double px=lon,py=lat;
   if (_crs!=NULL){_crs->Forward(lon,lat,px,py);} //(a projected raster: interpolated in its own coordinates)
-  double ytop=_yll+_nrows*_cs;
-  double fc=(px-_xll)/_cs-0.5;
-  double fr=(ytop-py)/_cs-0.5;
+  double ytop=_yll+_nrows*_dy;
+  double fc=(px-_xll)/_dx-0.5;
+  double fr=(ytop-py)/_dy-0.5;
   if ((fc<-1.0) || (fr<-1.0) || (fc>_ncols) || (fr>_nrows)){return false;}
   fc=std::max(0.0,std::min((double)(_ncols-1),fc));
   fr=std::max(0.0,std::min((double)(_nrows-1),fr));
@@ -243,17 +307,6 @@ namespace
       rings.push_back(r);
     }
   }
-  //EPSG codes of geographic (longitude/latitude) coordinate systems: the EPSG range 4000-4999 (geographic 2D and 3D
-  //systems such as 4326 WGS 84, 4979 WGS 84 3D, 4269 NAD83, 4267 NAD27, 4617 NAD83(CSRS), 4152 NAD83(HARN), 4258 ETRS89;
-  //the geocentric ones in this range have metre coordinates, which the longitude/latitude range test refuses), and the
-  //later geographic realisations NAD83(2011) 6318/6319, NAD83(CSRS)v7 8255, GDA2020 7843/7844 and JGD2011 6667/6668
-  bool GeographicEPSG(const long code)
-  {
-    if ((code>=4000) && (code<=4999)){return true;}
-    const long more[]={6318,6319,8255,7843,7844,6667,6668};
-    for (size_t i=0;i<sizeof(more)/sizeof(more[0]);i++){if (code==more[i]){return true;}}
-    return false;
-  }
   //the GeoJSON "crs" member (GDAL: {"type":"name","properties":{"name":"urn:ogc:def:crs:EPSG::32610"}}) against :InputCRS.
   //The code is the number that ends the name (EPSG:4326, urn:ogc:def:crs:EPSG::4326, urn:ogc:def:crs:EPSG:6.6:4326,
   //http://www.opengis.net/def/crs/EPSG/0/4326); OGC CRS84, CRS83 and CRS27 are longitude/latitude.
@@ -275,9 +328,20 @@ namespace
       size_t pd=u.size(); while ((pd>0) && isdigit((unsigned char)u[pd-1])){pd--;}
       if (pd==u.size()){return true;}                                        //(no code at the end)
       code=atol(u.c_str()+pd);
-      geographic=GeographicEPSG(code);
+      geographic=GWGeom::GeographicEPSG(code);
     }
     ostringstream cs; cs<<"EPSG:"<<code;
+    if (geographic && (code>0)){ //(geographic codes whose longitudes are not degrees from Greenwich)
+      for (int k=0;k<2;k++){
+        const gw_epsg_name *tab=(k==0)?GW_EPSG_GEOG_PRIME_MERIDIAN:GW_EPSG_GEOG_NOT_DEGREES; int nt=(k==0)?GW_EPSG_GEOG_PRIME_MERIDIAN_N:GW_EPSG_GEOG_NOT_DEGREES_N;
+        for (int i=0;i<nt;i++){
+          if (tab[i].code!=code){continue;}
+          err="GeoJSON file "+filename+" is in "+cs.str()+" (its \"crs\" member, "+name+"), whose "+((k==0)?"longitudes count from the prime meridian of "+string(tab[i].name)+" from Greenwich":"angles are in "+string(tab[i].name))+
+              "; Raven reads longitude/latitude in degrees from Greenwich: reproject the file (e.g. to EPSG:4326)";
+          return false;
+        }
+      }
+    }
     if (geographic){
       if (crs!=NULL){err="GeoJSON file "+filename+" is in longitude/latitude (its \"crs\" member, "+name+"), but :InputCRS says the input files are projected: give the file in the :InputCRS projection, "+crs->Describe()+" (or remove :InputCRS if every input file is in longitude/latitude)";return false;}
       return true;
@@ -299,6 +363,12 @@ namespace
   }
 }
 
+//EPSG codes of geographic (longitude/latitude) coordinate systems, 2D and 3D: the table of GWEPSGTable.h (from the EPSG
+//registry). Codes of projections and of geocentric systems (metres) are not in it
+bool GWGeom::GeographicEPSG(const long code)
+{
+  return std::binary_search(GW_EPSG_GEOGRAPHIC,GW_EPSG_GEOGRAPHIC+GW_EPSG_GEOGRAPHIC_N,(int)code);
+}
 double GWGeom::SignedArea(const gw_ring &r)
 {
   double A=0; size_t n=r.size();
@@ -432,7 +502,7 @@ double GWGeom::ClipRingAreaToRect(const gw_ring &r,const double x0,const double 
 // CGWCRS: projections of existing models (formulas: Karney 2011 for Transverse Mercator, Snyder 1987 for the conics)
 //=====================================================================================================
 namespace { const double CRS_PI=3.14159265358979323846,D2R=CRS_PI/180.0; }
-CGWCRS::CGWCRS(){_type=0; _a=6378137.0; _f=1.0/298.257223563; _e2=_f*(2-_f); _e=sqrt(_e2); _lat0=_lon0=_lat1=_lat2=0; _k0=1; _fe=_fn=0;
+CGWCRS::CGWCRS(){_type=0; _epsg=0; _code=""; _a=6378137.0; _f=1.0/298.257223563; _e2=_f*(2-_f); _e=sqrt(_e2); _lat0=_lon0=_lat1=_lat2=0; _k0=1; _fe=_fn=0;
   _n=_A=_xi0=_nc=_C=_F=_rho0=0; for (int i=0;i<5;i++){_b[i]=_al[i]=_d[i]=0;}}
 double CGWCRS::M(const double p) const {return cos(p)/sqrt(1-_e2*sin(p)*sin(p));}
 double CGWCRS::T(const double p) const {double s=sin(p); return tan(CRS_PI/4-p/2)/pow((1-_e*s)/(1+_e*s),_e/2);}
@@ -440,6 +510,7 @@ double CGWCRS::Q(const double p) const {double s=sin(p); return (1-_e2)*(s/(1-_e
 bool CGWCRS::Parse(const string &spec0,string &err)
 {
   string spec=spec0; for (size_t i=0;i<spec.size();i++){spec[i]=(char)toupper((unsigned char)spec[i]);}
+  _epsg=0; _code="";
   istringstream is(spec); vector<string> w; string t; while (is>>t){w.push_back(t);}
   if (w.empty()){err="empty coordinate system"; return false;}
   string ell="WGS84";
@@ -454,6 +525,8 @@ bool CGWCRS::Parse(const string &spec0,string &err)
     else if (code==3978)  {_type=3; _lat1=49; _lat2=77; _lat0=49; _lon0=-95; _fe=0; _fn=0; ell="GRS80";}                    //NAD83 / Canada Atlas Lambert
     else if (code==3347)  {_type=3; _lat1=49; _lat2=77; _lat0=63.390675; _lon0=-91.86666666666666; _fe=6200000; _fn=3000000; ell="GRS80";} //Statistics Canada Lambert
     else {err="EPSG code "+w[0].substr(5)+" is not built in; give the projection by its parameters (TMERC, ALBERS or LCC)"; return false;}
+    if ((w[0].compare(0,5,"EPSG:")==0) && (code!=102001)){_epsg=code;}
+    _code=(code==102001)?"ESRI:102001":w[0];
   }
   else if ((w[0]=="TMERC") && (w.size()>=6)){_type=1; _lat0=atof(w[1].c_str()); _lon0=atof(w[2].c_str()); _k0=atof(w[3].c_str()); _fe=atof(w[4].c_str()); _fn=atof(w[5].c_str()); if (w.size()>6){ell=w[6];}}
   else if (((w[0]=="ALBERS") || (w[0]=="LCC")) && (w.size()>=7)){

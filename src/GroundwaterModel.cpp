@@ -157,6 +157,49 @@ double CGroundwaterModel::MeanRaster(const CGWRaster &R,const int ic,bool &ok) c
   }
   ok=(n>0); return ok?sum/n:0.0;
 }
+//////////////////////////////////////////////////////////////////
+/// \brief reads a :LandSurface or :BedrockSurface raster (ESRI ASCII, or GeoTIFF for .tif/.tiff) in the coordinates of
+/// :InputCRS (else longitude/latitude); stops on a read error or a raster left in longitude/latitude under :InputCRS
+//
+void CGroundwaterModel::ReadRaster(CGWRaster &R,const string &file,const optStruct &Options) const
+{
+  string err;
+  R.SetCRS(InCRS());
+  if (!R.Read(file,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+  istringstream notes(R.Note()); string note;
+  while (getline(notes,note)){if (note!=""){WriteWarning("CGroundwaterModel: "+note,Options.noisy);}}
+  double rb[4]; R.Extent(rb); CheckInputLonLat(file,rb,"raster");
+}
+//////////////////////////////////////////////////////////////////
+/// \brief a raster must give values for the active columns: none (a raster of another area, a wrong corner or
+/// projection, or NODATA over the whole model) stops the run with both extents; some missing gives a warning
+//
+void CGroundwaterModel::CheckRasterCover(const CGWRaster &R,const string &file,const string &cmd,const vector<int> &cols,const int nCov,
+                                         const string &fallback,const optStruct &Options) const
+{
+  const int nAct=(int)cols.size();
+  if ((nAct==0) || (nCov==nAct)){return;}
+  if (nCov>0){
+    WriteWarning("CGroundwaterModel: "+cmd+" raster "+file+" gives no value for "+to_string(nAct-nCov)+" of the "+to_string(nAct)+
+                 " active columns (outside the raster, or NODATA there); these take "+fallback,Options.noisy);
+    return;
+  }
+  double rb[4],mb[4]={1e300,1e300,-1e300,-1e300}; R.Extent(rb);
+  const CGWCRS *crs=InCRS();
+  for (size_t i=0;i<cols.size();i++){ //(the points the columns' means sample, in the raster's coordinates)
+    int ic=cols[i]; vector<gw_pt> pts; _grid.SamplePoints(ic,5,pts);
+    for (size_t k=0;k<pts.size();k++){
+      double X,Y,lon,lat,x,y; _grid.ToWorld(pts[k].x,pts[k].y,X,Y); _proj.Inverse(X,Y,lon,lat);
+      if (crs!=NULL){crs->Forward(lon,lat,x,y);} else {x=lon; y=lat;}
+      mb[0]=min(mb[0],x); mb[1]=min(mb[1],y); mb[2]=max(mb[2],x); mb[3]=max(mb[3],y);
+    }
+  }
+  ostringstream S; S<<setprecision(9)<<"CGroundwaterModel: "<<cmd<<" raster "<<file<<" gives no value for any of the "<<nAct<<" active columns: the raster covers x "
+    <<rb[0]<<" to "<<rb[2]<<", y "<<rb[1]<<" to "<<rb[3]<<", and the model's active columns lie at x "<<mb[0]<<" to "<<mb[2]<<", y "<<mb[1]<<" to "<<mb[3]
+    <<" ("<<((crs!=NULL)?"coordinates of :InputCRS":"longitude/latitude")<<"). Check that the file covers the model area, its corner coordinates and :InputCRS"
+    <<" (a raster that does overlap the model has only NODATA there)";
+  ExitGracefully(S.str().c_str(),BAD_DATA);
+}
 //cell address in the MODFLOW input files: DIS layer row column, DISV layer cell, DISU node
 string CGroundwaterModel::CellID(const int l,const int ic) const
 {
@@ -1229,16 +1272,18 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   }
   CGWRaster &dem=_dem;
   dem.SetCRS(InCRS());
-  if (_demFile!=""){ if (!dem.Read(_demFile,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);} double rb[4]; dem.Extent(rb); CheckInputLonLat(_demFile,rb,"raster"); }
+  if (_demFile!=""){ReadRaster(dem,_demFile,Options);}
   _land.assign(_ncpl,0.0);
+  vector<int> act; int nCov=0; //(active columns, and how many of them the DEM gives a value for)
   for (int ic=0;ic<_ncpl;ic++)
   {
     if (cover[ic]<_minCoverage*_grid.area[ic]){_colProfile[ic]=DOESNT_EXIST;}
     if (_colProfile[ic]==DOESNT_EXIST){continue;}
     bool ok=false;
-    if (dem.IsLoaded()){_land[ic]=MeanRaster(dem,ic,ok);}
+    if (dem.IsLoaded()){_land[ic]=MeanRaster(dem,ic,ok); act.push_back(ic); if (ok){nCov++;}}
     if (!ok){_land[ic]=elevW[ic]/cover[ic];}
   }
+  if (dem.IsLoaded()){CheckRasterCover(dem,_demFile,":LandSurface",act,nCov,"the area-weighted ELEVATION of their HRUs",Options);}
 }
 
 //////////////////////////////////////////////////////////////////
@@ -1246,10 +1291,10 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
 //
 void CGroundwaterModel::BuildVertical(const optStruct &Options)
 {
-  string err;
   CGWRaster bed;
   bed.SetCRS(InCRS());
-  if (_bedrockFile!=""){ if (!bed.Read(_bedrockFile,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);} double rb[4]; bed.Extent(rb); CheckInputLonLat(_bedrockFile,rb,"raster"); }
+  if (_bedrockFile!=""){ReadRaster(bed,_bedrockFile,Options);}
+  vector<int> act; int nCov=0; //(active columns, and how many of them the bedrock raster gives a value for)
   _nlay=1;
   for (size_t i=0;i<_aProfiles.size();i++){_nlay=max(_nlay,(int)_aProfiles[i].layers.size());}
 
@@ -1273,7 +1318,7 @@ void CGroundwaterModel::BuildVertical(const optStruct &Options)
       double top =SZPhysical()?land-colD[ic]:land-P.soil_zone_depth;
       double bedrock=land-P.default_bedrock_depth;
       bool ok=false;
-      if (bed.IsLoaded()){double b=MeanRaster(bed,ic,ok); if (ok){bedrock=b;}}
+      if (bed.IsLoaded()){double b=MeanRaster(bed,ic,ok); act.push_back(ic); if (ok){bedrock=b; nCov++;}}
       if (bedrock>top-GW_MIN_LAYER_THICK){_colProfile[ic]=DOESNT_EXIST; nThin++;} //bedrock at or above model top
       else
       {
@@ -1312,6 +1357,7 @@ void CGroundwaterModel::BuildVertical(const optStruct &Options)
     _top[ic]=0.0;
     for (int l=0;l<_nlay;l++){int n=UserNode(l,ic);_botm[n]=-(double)(l+1);_idomain[n]=0;_strt[n]=0.0;}
   }
+  if (bed.IsLoaded()){CheckRasterCover(bed,_bedrockFile,":BedrockSurface",act,nCov,"a bedrock at their profile's DEFAULT_BEDROCK_DEPTH below the land surface",Options);}
   if (_hotHeads.size()>0){ //hotstart: cell-by-cell heads from a previous run's solution.rvc
     int hr=(_gridType==GWGRID_REGULAR)?_nrow:1,hc=(_gridType==GWGRID_REGULAR)?_ncol:_ncpl;
     ExitGracefullyIf((_hotDims[0]!=_nlay) || (_hotDims[1]!=hr) || (_hotDims[2]!=hc) || ((int)_hotHeads.size()!=_nlay*_ncpl),

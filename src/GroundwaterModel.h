@@ -290,6 +290,8 @@ private:/*----------------------------------------------------*/
   void   ExtConnect       ();
   void   WriteGridCells(const optStruct &Options);
   double                 MeanRaster(const CGWRaster &R,const int ic,bool &ok) const;
+  void                   ReadRaster(CGWRaster &R,const string &file,const optStruct &Options) const;
+  void                   CheckRasterCover(const CGWRaster &R,const string &file,const string &cmd,const vector<int> &cols,const int nCov,const string &fallback,const optStruct &Options) const;
   ofstream               _HEADS;
   vector<double>         _sbRivLen;      ///< per subbasin: total river length on active cells [m]
   vector<double>         _sbLossCarry;   ///< per subbasin: river loss not yet supplied, taken in the next step [m3]

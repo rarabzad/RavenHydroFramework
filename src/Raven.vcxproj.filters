@@ -345,6 +345,9 @@
     <ClCompile Include="GWGeometry.cpp">
       <Filter>Source Files\Groundwater</Filter>
     </ClCompile>
+    <ClCompile Include="GWGeoTIFF.cpp">
+      <Filter>Source Files\Groundwater</Filter>
+    </ClCompile>
     <ClCompile Include="GWGrid.cpp">
       <Filter>Source Files\Groundwater</Filter>
     </ClCompile>
@@ -672,6 +675,12 @@
       <Filter>Header Files\Groundwater</Filter>
     </ClInclude>
     <ClInclude Include="GWGeometry.h">
+      <Filter>Header Files\Groundwater</Filter>
+    </ClInclude>
+    <ClInclude Include="GWGeoTIFF.h">
+      <Filter>Header Files\Groundwater</Filter>
+    </ClInclude>
+    <ClInclude Include="GWEPSGTable.h">
       <Filter>Header Files\Groundwater</Filter>
     </ClInclude>
     <ClInclude Include="GWGrid.h">

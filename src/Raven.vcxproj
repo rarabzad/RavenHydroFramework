@@ -740,6 +740,7 @@
     <ClCompile Include="GreenAmpt.cpp" />
     <ClCompile Include="GroundwaterModel.cpp" />
     <ClCompile Include="GWGeometry.cpp" />
+    <ClCompile Include="GWGeoTIFF.cpp" />
     <ClCompile Include="GWGrid.cpp" />
     <ClCompile Include="GWExternal.cpp" />
     <ClCompile Include="GWSoilZone.cpp" />
@@ -993,6 +994,8 @@
     <ClInclude Include="GracefulEndStandalone.h" />
     <ClInclude Include="GroundwaterModel.h" />
     <ClInclude Include="GWGeometry.h" />
+    <ClInclude Include="GWGeoTIFF.h" />
+    <ClInclude Include="GWEPSGTable.h" />
     <ClInclude Include="GWGrid.h" />
     <ClInclude Include="GWSoilZone.h" />
     <ClInclude Include="GWVadose.h" />
