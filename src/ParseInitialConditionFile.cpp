@@ -136,6 +136,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":GWRiverLossCarry"            )){code=54; }
     else if  (!strcmp(s[0],":GWSoilZoneColumns"           )){code=55; }
     else if  (!strcmp(s[0],":GWVadoseColumns"             )){code=57; }
+    else if  (!strcmp(s[0],":GWVadoseColumnTops"          )){code=56; }
     else if  (!strcmp(s[0],":GWSoilZoneLag"               )){code=58; }
     else if  (!strcmp(s[0],":GWVadoseClassColumns"        )){code=59; }
     else if  (!strcmp(s[0],":EndHRUStateVariableTable"    )){code=-2; }
@@ -1004,6 +1005,20 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       }
       break;
     }
+    case(56):  //----------------------------------------------
+    {/*:GWVadoseColumnTops  {HRU ID, cell (grid column number), depth class (1 without depth classes), column top [m], water above the
+         column's reference profile [m3]} x n
+       :EndGWVadoseColumnTops  (unsaturated columns, hotstart: matched on a restart, and the water of columns a run without them drops) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWVadoseColumnTops")){break;}
+        if (Len>=5){
+          vector<double> v; v.push_back(GWHotValue(s[3],":GWVadoseColumnTops",false)); v.push_back(GWHotValue(s[4],":GWVadoseColumnTops",false));
+          pModel->GetGroundwaterModel()->SetHotstartVadoseTop(s_to_ll(s[0]),s_to_i(s[1]),s_to_i(s[2]),v);
+        }
+      }
+      break;
+    }
     case(59):  //----------------------------------------------
     {/*:GWVadoseClassColumns  {HRU ID, cell (grid column number), depth class, classes of the cell, water table [m], contents of the
          nodes from the top} x n
@@ -1043,11 +1058,12 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       break;
     }
     case(53):  //----------------------------------------------
-    {/*:GWReservoirSeepage  {subbasin ID, volume [m3]} x n  :EndGWReservoirSeepage  (reservoir seepage in transit, hotstart) */
+    {/*:GWReservoirSeepage  {subbasin ID, volume [m3][, share of the lake's cells able to take it]} x n  :EndGWReservoirSeepage  (reservoir seepage in transit, hotstart) */
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWReservoirSeepage")){break;}
         if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartReservoirSeepage(s_to_ll(s[0]),GWHotValue(s[1],":GWReservoirSeepage",false));}
+        if (Len>=3){pModel->GetGroundwaterModel()->SetHotstartReservoirFraction(s_to_ll(s[0]),GWHotValue(s[2],":GWReservoirSeepage",true));}
       }
       break;
     }
@@ -1225,8 +1241,9 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
 
   // check quality of initial state variables
   //======================================================================
-  //(a coupled model without :SoilZone PHYSICAL adds groundwater seepage to its seepage target with no capacity limit:
-  //the lowest soil layer can legitimately hold more than its capacity, and a hotstart keeps that water as a continuous run does)
+  //(a coupled model without :SoilZone PHYSICAL adds groundwater seepage to its seepage target with no capacity limit, and
+  //groundwater discharge to the store of a :SurfaceWaterExchange: such a store can legitimately hold more than its capacity,
+  //and a hotstart keeps that water as a continuous run does)
   CGroundwaterModel *pGWm=((Options.modeltype==MODELTYPE_COUPLED) && (pModel->GetGroundwaterModel()!=NULL))?pModel->GetGroundwaterModel():NULL;
   CHydroUnit *pHRU;
   double *v=NULL;
@@ -1242,7 +1259,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     }
     for (int i=0; i<pModel->GetNumStateVars(); i++)
     {
-      if (i==iSeep){continue;}
+      if ((i==iSeep) || ((pGWm!=NULL) && pGWm->SWXStoreSV(k,i))){continue;}
       double maxv=max(pHRU->GetStateVarMax(i,v,Options,true),0.0); //ignores all variable maximum thresholds that are dependent upon model state
       if ((v[i]-maxv)>PRETTY_SMALL)// check for capacity
       {

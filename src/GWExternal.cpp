@@ -992,9 +992,16 @@ void CGroundwaterModel::ExtWritePackages(const optStruct &Options)
   }
   if (_evtCol.size()>0){ //water-table ET: rate = PET left unmet by Raven, set every step (model units)
     F.open((_mf6dir+"/raven.evt").c_str());
-    F<<"# water-table evapotranspiration from Raven: surface = model top, rate set every time step\nBEGIN OPTIONS\n  SAVE_FLOWS\nEND OPTIONS\n\n";
+    //surface: the model top; with :SoilZone PHYSICAL the ground above the soil zone, which lies on the model top (the column's
+    //overlap-weighted soil-zone thickness above it, 0 for HRUs without a soil zone): the extinction depth counts from the ground
+    vector<double> colD(_ncpl,0.0),colA(_ncpl,0.0);
+    if (SZPhysical()){
+      for (size_t li=0;li<_aLinks.size();li++){const gw_link &L=_aLinks[li]; colA[L.ic]+=L.area; if ((L.k<(int)_szOn.size()) && _szOn[L.k]){colD[L.ic]+=L.area*_szD[L.k];}}
+      for (int ic=0;ic<_ncpl;ic++){colD[ic]=(colA[ic]>0.0)?colD[ic]/colA[ic]:0.0;}
+    }
+    F<<"# water-table evapotranspiration from Raven: surface = "<<(SZPhysical()?"ground (model top + soil-zone thickness)":"model top")<<", rate set every time step\nBEGIN OPTIONS\n  SAVE_FLOWS\nEND OPTIONS\n\n";
     F<<"BEGIN DIMENSIONS\n  MAXBOUND "<<_evtCol.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(12);
-    for (size_t i=0;i<_evtCol.size();i++){int ic=_evtCol[i],n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<_extTopRaw[ic]<<" 0.0 "<<_aProfiles[_colProfile[ic]].extinction_depth*_extLf<<"\n";}
+    for (size_t i=0;i<_evtCol.size();i++){int ic=_evtCol[i],n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<(SZPhysical()?_extTopRaw[ic]+colD[ic]/_hf:_extTopRaw[ic])<<" 0.0 "<<_aProfiles[_colProfile[ic]].extinction_depth*_extLf<<"\n";}
     F<<"END PERIOD\n"; F.close();
   }
   if (_swxCol.size()>0){ //surface-water stores <-> aquifer: bed at the model top (:SoilZone PHYSICAL: at the ground); stage and conductance set every step

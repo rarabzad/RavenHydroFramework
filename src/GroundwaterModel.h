@@ -199,6 +199,9 @@ private:/*----------------------------------------------------*/
   vector<int>            _ghbNode,_ghbB,_chdNode,_chdB;
   double                *_welQ,*_welHcof,*_welRhs,*_ghbHead,*_ghbCond,*_ghbHcof,*_ghbRhs,*_chdHead,*_chdSim;
   int                    _welNcol,_ghbNcol,_chdNcol;
+  int                   *_chdNb,*_chdNl,*_chdIb; int _chdIbc; bool _chdPacked; ///< CHD_RAVEN's NBOUND and NODELIST, the model's IBOUND; IBOUND of a held cell; list without its switched-off entries
+  vector<int>            _chdAct;    ///< entries of _chdNode in CHD_RAVEN's list this step, in list order (all, unless some are switched off)
+  int                    _bndOffNow; long long _bndOffN; ///< head-boundary cells switched off (the step's head at or below the cell bottom): this step, run total of cell-steps
   double                 _Qwel_spec,_Qwel,_Qghb,_Qchd; ///< [m3/d]
   bool                   _steadyInit; double _ssRecharge; ///< steady-state first period requested (.rvg), recharge [mm/d]
   bool                   _doSteady;  ///< steady-state period in this run (off on hotstart; decided per run/member)
@@ -228,6 +231,11 @@ private:/*----------------------------------------------------*/
   vector<double>         _resUse,_resWs; vector<int> _resOff; ///< per RES entry: 1 if its cell can take seepage this step, else 0; per reservoir: weight of those cells, 1 if any cell cannot
   double                 _resUndelVol,_resUndelTot; ///< [m3] reservoir seepage MODFLOW did not deliver, returned to the reservoir's subbasin: this step, run total
   int                    _resUndelN;  ///< warnings about it
+  vector<double>         _resK0;      ///< per coupled reservoir: its own seepage constant (:SeepageParameters) [m3/s/m]
+  vector<double>         _resA;       ///< per coupled reservoir: share of its lake's linked area its entries cover (generated models: not on specified-head columns)
+  vector<double>         _resWk;      ///< per coupled reservoir: share (of its entries' weight) of the cells that could take seepage when Raven last computed it
+  double                 _resShortTot; int _resShortN; ///< [m3] run total of reservoir gains MODFLOW did not supply; warnings about them
+  map<long long,double>  _hotResFrac; ///< from .rvc :GWReservoirSeepage, by subbasin ID: _resWk of the seepage in transit
   vector<gw_swx>         _aSWX;      ///< surface-water exchanges
   vector<int>            _swxCol,_swxX; ///< per SWX entry: column, exchange index
   vector<vector<int> >   _swxLinks;  ///< per SWX entry: links (HRU,cell) of group HRUs in the column
@@ -481,6 +489,9 @@ private:/*----------------------------------------------------*/
   long long              _vzSub,_vzNewton; ///< substeps and Newton iterations of the columns (summary)
   map<long long,map<int,vector<double> > > _hotVz; ///< from .rvc :GWVadoseColumns: by HRU ID and cell: zbot, contents
   map<long long,map<int,map<int,vector<double> > > > _hotVzc; ///< from .rvc :GWVadoseClassColumns: by HRU ID, cell and class: classes of the cell, zbot, contents
+  map<long long,map<int,map<int,vector<double> > > > _hotVzt; ///< from .rvc :GWVadoseColumnTops: by HRU ID, cell and class (1 without classes): column top [m], water above its reference profile [m3]
+  double                 _vzChdV; int _vzChdN; ///< [m3] run total of the water of unsaturated columns ended on cells that are specified heads (existing models); columns ended
+  double                 _vzHotUnusedV; int _vzHotUnusedN; ///< [m3] water of hotstart column lines a run without columns does not use; lines
   void   VZSetup        ();                                    ///< materials of every exchange column (after SZBuildEntries)
   void   VZInit         ();                                    ///< columns from the initial heads or the hotstart
   void   VZStep         (const double &tstep);                 ///< the columns over the step (predictor heads), capillary rise
@@ -639,6 +650,7 @@ public:/*-------------------------------------------------------*/
   void   SetReservoirExchange (const bool b){_resExchange=b;}
   void   SetHotstartRechargeStore(const long long hru,const double &v){_hotRchStore[hru]=v;}
   void   SetHotstartReservoirSeepage(const long long sbid,const double &v){_hotResSeep[sbid]=v;}
+  void   SetHotstartReservoirFraction(const long long sbid,const double &v){_hotResFrac[sbid]=v;}
   void   SetHotstartRiverLossCarry(const long long sbid,const double &v){_hotRivCarry[sbid]=v;}
   void   SetHotstartSoilZoneColumn(const long long hru,const int cell,const vector<double> &phi){if (cell<0){return;} _hotSzCols[hru][cell]=phi;}
   void   Reinitialize         (const optStruct &Options); ///< fresh start for a new ensemble member
@@ -648,6 +660,7 @@ public:/*-------------------------------------------------------*/
   void   SetWellFlowRateSeries    (const long long id,CTimeSeries *pTS); ///< (also after Initialize: an ensemble member's extra .rvt)
   void   SetBoundaryHeadSeries(const string &name,CTimeSeries *pTS);
   int    SeepageTargetSV      (const int k) const; ///< state variable receiving HRU k's seepage (DOESNT_EXIST: HRU not coupled); usable before Initialize
+  bool   SWXStoreSV           (const int k,const int i) const; ///< state variable i of HRU k is the store of a :SurfaceWaterExchange; usable before Initialize
   void   SetSteadyStateInit   (const double &rch_mm_d){_steadyInit=true;_ssRecharge=rch_mm_d;}
   void   SetInitialHeads      (const string &mode,const double &value){_initMode=mode;_initValue=value;}
   void   ClearHotstartData    (); ///< before an ensemble member's .rvc is read: forget the previous member's values
@@ -691,6 +704,7 @@ public:/*-------------------------------------------------------*/
   void   SetHotstartSoilZoneLag(const long long hru,const int cell,const double q,const double debt){_hotLag[hru][cell]=q; _hotDebt[hru][cell]=debt;}
   void   SetHotstartVadose    (const long long hru,const int cell,const vector<double> &v){if (cell<=0){return;} _hotVz[hru][cell]=v;}
   void   SetHotstartVadoseClass(const long long hru,const int cell,const int cls,const vector<double> &v){if ((cell<=0) || (cls<=0)){return;} _hotVzc[hru][cell][cls]=v;}
+  void   SetHotstartVadoseTop (const long long hru,const int cell,const int cls,const vector<double> &v){if ((cell<=0) || (cls<=0)){return;} _hotVzt[hru][cell][cls]=v;}
   bool   UsesPhysicalSoilZone () const {return _szMode==1;}
   void   WarnIgnoredSoilZoneOptions(const string &given,const bool noisy) const;
   void   NoteSoilClassWithoutKsat(const void *soil,const string &tag){_szNoKsat[soil]=tag;}

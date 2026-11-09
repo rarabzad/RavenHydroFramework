@@ -635,6 +635,7 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
         const int e2=_linkSzx[li];                                                //step (existing models)
         const double share=(W>0.0)?_szxFw[e2]/W:L.area/Aall,F=neg?0.0:gwsz::SatFraction(_X[_reduced[TopNode(L.ic)]]*_hf,_szxCell[e2].zbs,_szxCell[e2].ds);
         _szxRej[e2]=V*share*F; rej+=_szxRej[e2]; _szRchCHD+=V/tstep*share*(1.0-F);
+        if ((_vzMode>0) && (e2<(int)_vzAbsQ.size())){_szRchCHD+=_vzAbsQ[e2];}     //(the water of its unsaturated columns, which ended: VZStep)
         continue;
       }
       if (_colCHDTop[L.ic]){continue;}

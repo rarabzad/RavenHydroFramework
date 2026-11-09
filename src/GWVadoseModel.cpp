@@ -276,6 +276,10 @@ void CGroundwaterModel::VZInit()
         if ((ct->second.size()<3) || ((int)std::floor(ct->second[0]+0.5)!=nK)){vcOther=true;}
       }
     }
+    //the column tops written with the lines (:GWVadoseColumnTops; files without them are not checked): a top that differs by
+    //more than 1 mm was written for other columns (another :SoilZoneSubgrid, ground or soil-zone thickness)
+    const map<int,vector<double> > *vt=NULL;
+    {map<long long,map<int,map<int,vector<double> > > >::const_iterator tt=_hotVzt.find(id); if (tt!=_hotVzt.end()){map<int,map<int,vector<double> > >::const_iterator ut=tt->second.find(ic+1); if (ut!=tt->second.end()){vt=&ut->second;}}}
     for (int i=_vzOff[e];i<_vzOff[e+1];i++){
       gwvz::vz_column &c=_vzcCol[i]; const double zb=_vzcZt[i];
       c=gwvz::vz_column(); c.ztop=zb; c.zbot=h;
@@ -285,6 +289,10 @@ void CGroundwaterModel::VZInit()
         map<int,vector<double> >::const_iterator ct=vc->find(i-_vzOff[e]+1);
         if ((ct!=vc->end()) && (ct->second.size()>=3) && ((int)std::floor(ct->second[0]+0.5)==nK)){v.assign(ct->second.begin()+1,ct->second.end()); have=true;}
         else if ((ct!=vc->end()) || vcOther){bad=true;}                         //(written with another number of classes for this cell)
+      }
+      if (have && (vt!=NULL)){
+        map<int,vector<double> >::const_iterator ct=vt->find(i-_vzOff[e]+1);
+        if ((ct!=vt->end()) && (ct->second.size()>=1) && (std::fabs(ct->second[0]-zb)>1e-3)){have=false; bad=true;}
       }
       if (have){
         gwvz::Build(c,S,zb,v[0],_vzN);                                            //zbot, then the contents top down
@@ -327,8 +335,8 @@ void CGroundwaterModel::VZInit()
   }
   _vzStore0=_vzStoreVol=VZStorage();
   if (nHot>0){WriteAdvisory("CGroundwaterModel: "+to_string(nHot)+" unsaturated columns read from the hotstart file",false);}
-  if (nBad>0){WriteWarning("CGroundwaterModel: "+to_string(nBad)+" unsaturated columns of the hotstart file do not match the columns (another :SoilZoneVadose node count, or "
-                           "another :SoilZoneVadoseClasses?); they start at rest (their reference profile)",false);}
+  if (nBad>0){WriteWarning("CGroundwaterModel: "+to_string(nBad)+" unsaturated columns of the hotstart file do not match the columns (another :SoilZoneVadose node count, "
+                           "another :SoilZoneVadoseClasses, or another column top: :SoilZoneSubgrid, ground or soil-zone thickness?); they start at rest (their reference profile)",false);}
   if (nSteady>0){WriteAdvisory("CGroundwaterModel: "+to_string(nSteady)+" unsaturated columns start at their steady profile for :SoilZoneVadoseInitialFlux "+ToStr(_vzQ0)+" mm/d "
                                "(the unsaturated share (1 - F) of it each column receives)",false);}
   if (nBack>0){WriteWarning("CGroundwaterModel: "+to_string(nBack)+" unsaturated columns cannot carry the flux of :SoilZoneVadoseInitialFlux "+ToStr(_vzQ0)+" mm/d (their layers "
@@ -368,7 +376,18 @@ void CGroundwaterModel::VZStep(const double &tstep)
       _vzUsed[e]=0.0;
       for (int j=0;j<n;j++){_vzCapL[e*n+j]=0.0; capLV[j]=0.0; capQL[j]=0.0;}
       for (int ii=_vzOff[e];ii<_vzOff[e+1];ii++){_vzcUse[ii]=0; _vzcF0[ii]=0.0; _vzcOut[ii]=0.0; _vzcRq[ii]=0.0;}
-      if (!(a>0.0) || _colCHDTop[L.ic]){continue;}                              //(a specified head this step: its recharge goes there)
+      if (!(a>0.0)){continue;}
+      if (_colCHDTop[L.ic]){ //a specified head this step (an existing model's own, known once MODFLOW has read the period): its recharge
+        //goes there (SZRecharge), and the link's unsaturated columns end, their water above their reference profiles to the
+        //specified head (as recharge onto it, _vzAbsQ); a column forms again, at rest, when the cell is no longer one
+        for (int ii=_vzOff[e];ii<_vzOff[e+1];ii++){
+          gwvz::vz_column &col=_vzcCol[ii]; if (!col.active){continue;}
+          const double R=gwvz::RelStorage(col,_vzStrat[e])*(a*_vzcA[ii]);       //[m3]
+          const double zt0=col.ztop; col=gwvz::vz_column(); col.ztop=zt0; col.zbot=zt0;
+          _vzAbsQ[e]+=R/tstep; _vzOutVol+=R; _vzChdV+=R; _vzChdN++;
+        }
+        continue;
+      }
       const gwvz::vz_strat &S=_vzStrat[e];
       const double h=_X[_reduced[TopNode(L.ic)]]*_hf,Lmin=VZ_LMIN;
       if (!(std::fabs(_X[_reduced[TopNode(L.ic)]])<1e29)){continue;}           //(HDRY is in the model's units: a top cell out of MODFLOW's

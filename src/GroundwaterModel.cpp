@@ -59,6 +59,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _evtRate=_evtHcof=_evtRhs=NULL; _evtNcol=0; _Qevt=0.0;
   _welQ=_welHcof=_welRhs=_ghbHead=_ghbCond=_ghbHcof=_ghbRhs=_chdHead=_chdSim=NULL;
   _welNcol=_ghbNcol=_chdNcol=0; _Qwel_spec=_Qwel=_Qghb=_Qchd=0.0;
+  _chdNb=_chdNl=_chdIb=NULL; _chdIbc=0; _chdPacked=false; _bndOffNow=0; _bndOffN=0;
   _steadyInit=false; _doSteady=false; _ssRecharge=0.0; _initMode="FROM_PROFILE"; _initValue=0.0;
   _hotDims[0]=_hotDims[1]=_hotDims[2]=0; _active=false;
   _rchStoreTot=0.0; _QrchCHD=0.0; _rivBedDepth=-1.0;
@@ -75,7 +76,8 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
   _szCapN=0; _szCapExcess=0.0; _szDropN=_szDropPlain=0; _szDropSteps=0; _szDropThis=false; _szxDropped.clear(); _szEsum=0.0; _szWhy=0; _szWhyE=-1; _szWhyV=_szWhyFa=_szWhyFb=0.0;
   _szNegCutQ=_szNegUnheldV=0.0; _negCutVol=_negUnheldVol=0.0; _negUnheldN=0; _negWarned=false; _Qgross=1.0; _QabsOther=0.0; _rchLostQ=_rchLostVol=0.0; _rchLostN=0;
-  _resUndelVol=_resUndelTot=0.0; _resUndelN=0; _resUnsent.clear(); _resUse.clear(); _resWs.clear(); _resOff.clear();
+  _resUndelVol=_resUndelTot=0.0; _resUndelN=0; _resUnsent.clear(); _resUse.clear(); _resWs.clear(); _resOff.clear(); _resShortTot=0.0; _resShortN=0;
+  _vzChdV=0.0; _vzChdN=0; _vzHotUnusedV=0.0; _vzHotUnusedN=0;
   _wetKeptIt=_wetKeptSteps=0; _farSlowN=0; _farWarned=false; _xPrevIt.clear(); _xStart.clear(); _keptCol.clear(); _stepEnd=""; _lastConverged=true;
   _summaryFile="";
 }
@@ -95,8 +97,13 @@ void CGroundwaterModel::ResetState()
   _bndCol.clear(); _evtCol.clear(); _colDomHRU.clear();
   _rivNode.clear(); _rivCol.clear(); _rivSB.clear(); _rivLen.clear(); _rivBed.clear();
   _welNode.clear(); _welWell.clear(); _welFrac.clear(); _ghbNode.clear(); _ghbB.clear(); _chdNode.clear(); _chdB.clear();
+  _chdNb=_chdNl=_chdIb=NULL; _chdIbc=0; _chdPacked=false; _chdAct.clear(); _bndOffNow=0; _bndOffN=0;
   _swxCol.clear(); _swxX.clear(); _swxLinks.clear(); _swxVl.clear(); _swxAppliedVol=0.0;
-  _resP.clear(); _resZbot.clear(); _resNode.clear(); _resR.clear(); _resW.clear();
+  for (size_t r=0;(r<_resP.size()) && (r<_resK0.size());r++){ //(a reservoir's seepage constant is scaled by the share of its lake that can
+    CReservoir *pRes=_pModel->GetSubBasin(_resP[r])->GetReservoir();      // take seepage: its own value for the next ensemble member)
+    if (pRes!=NULL){pRes->SetGWParameters(_resK0[r],pRes->GetLocalGWHead());}
+  }
+  _resP.clear(); _resZbot.clear(); _resNode.clear(); _resR.clear(); _resW.clear(); _resK0.clear(); _resA.clear(); _resWk.clear();
   _X=NULL; _active=false; _stepCount=0; _nNonConverged=0; _budgetLineOpen=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=_riverAppliedVol=_riverDeficitVol=0.0;
   _szOn.clear(); _szSV.clear(); _szLay.clear(); _szD.clear(); _szLam.clear(); _szRchV.clear(); _szRej.clear(); _szOvfV.clear(); _szNetV.clear(); _szW.clear();
@@ -115,7 +122,8 @@ void CGroundwaterModel::ResetState()
   //(every soil-zone, column and stop-rule member and run total: ensemble members start as the first did)
   _szCapN=0; _szCapExcess=0.0; _szDropN=_szDropPlain=0; _szDropSteps=0; _szDropThis=false; _szxDropped.clear(); _szEsum=0.0; _szWhy=0; _szWhyE=-1; _szWhyV=_szWhyFa=_szWhyFb=0.0;
   _szNegCutQ=_szNegUnheldV=0.0; _negCutVol=_negUnheldVol=0.0; _negUnheldN=0; _negWarned=false; _Qgross=1.0; _QabsOther=0.0; _rchLostQ=_rchLostVol=0.0; _rchLostN=0;
-  _resUndelVol=_resUndelTot=0.0; _resUndelN=0; _resUnsent.clear(); _resUse.clear(); _resWs.clear(); _resOff.clear();
+  _resUndelVol=_resUndelTot=0.0; _resUndelN=0; _resUnsent.clear(); _resUse.clear(); _resWs.clear(); _resOff.clear(); _resShortTot=0.0; _resShortN=0;
+  _vzChdV=0.0; _vzChdN=0; _vzHotUnusedV=0.0; _vzHotUnusedN=0;
   _wetKeptIt=_wetKeptSteps=0; _farSlowN=0; _farWarned=false; _xPrevIt.clear(); _xStart.clear(); _keptCol.clear(); _stepEnd=""; _lastConverged=true;
   _szxRs.clear(); _szxRq.clear(); _szxRqP.clear(); _szxRl.clear(); _szxRqc.clear(); _szxF0.clear(); _szxDrn.clear(); _szxKink.clear(); _szxNegCap.clear(); _vzUsed.clear(); _cellConv.clear(); _szResE=-1; _szExtra=0;
 }
@@ -651,9 +659,9 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
       string nm=to_string(_pModel->GetSubBasin(p)->GetID());
       if ((k==DOESNT_EXIST) || (_hruProfile[k]==DOESNT_EXIST)){WriteWarning("CGroundwaterModel: reservoir in subbasin "+nm+" has no coupled lake HRU (:HRUID with an AQUIFER_PROFILE): not coupled",false); continue;}
       if (pRes->GetSeepageConstant()<=0){WriteWarning("CGroundwaterModel: reservoir in subbasin "+nm+" has no :SeepageParameters: not coupled",false); continue;}
-      int r=(int)_resP.size(); double wsum=0; size_t n0=_resNode.size();
+      int r=(int)_resP.size(); double wsum=0,wall=0; size_t n0=_resNode.size();
       for (size_t j=0;j<_hruLinks[k].size();j++){
-        const gw_link &L=_aLinks[_hruLinks[k][j]]; if (_colCHDTop[L.ic]){continue;}
+        const gw_link &L=_aLinks[_hruLinks[k][j]]; wall+=L.area; if (_colCHDTop[L.ic]){continue;}
         _resNode.push_back(TopNode(L.ic)); _resR.push_back(r); _resW.push_back(L.area); wsum+=L.area;
       }
       if (wsum<=0){_resNode.resize(n0);_resR.resize(n0);_resW.resize(n0); continue;}
@@ -674,6 +682,11 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
                      "(no :InitialReservoirStage or :InitialReservoirFlow in the .rvc file, or a stage below it): Raven's first step fills it, a jump in Raven's water balance",false);
       }
       _resP.push_back(p); _resZbot.push_back(zbot);
+      //the lake's bed over specified-head columns takes no seepage: its seepage constant is scaled by the share left (each step
+      //also by the share of its cells that can take seepage), so the cells left get the seepage of their own share of the bed
+      _resK0.push_back(pRes->GetSeepageConstant()); _resA.push_back((wall>0.0)?wsum/wall:1.0);
+      map<long long,double>::const_iterator hf=_hotResFrac.find(_pModel->GetSubBasin(p)->GetID());
+      _resWk.push_back((hf!=_hotResFrac.end())?min(max(hf->second,0.0),1.0):1.0);
     }
   }
   _doSteady=_steadyInit;
@@ -691,6 +704,21 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
   _active=true;
   if (_doSteady){RunSteadyState();}
   if (SZPhysical()){SZInitColumns();} //before Raven's initial storage is taken (CModel::CalculateInitialWaterStorage)
+  if ((!_hotVz.empty() || !_hotVzc.empty()) && !(SZPhysical() && (_vzMode>0))){ //unsaturated-column water of the hotstart file a run without columns
+    _vzHotUnusedN=0; _vzHotUnusedV=0.0; bool vol=!_hotVzt.empty();                //  cannot hold: dropped, warned about and reported
+    for (map<long long,map<int,vector<double> > >::const_iterator it=_hotVz.begin();it!=_hotVz.end();it++){_vzHotUnusedN+=(int)it->second.size();}
+    for (map<long long,map<int,map<int,vector<double> > > >::const_iterator it=_hotVzc.begin();it!=_hotVzc.end();it++){
+      for (map<int,map<int,vector<double> > >::const_iterator jt=it->second.begin();jt!=it->second.end();jt++){_vzHotUnusedN+=(int)jt->second.size();}
+    }
+    for (map<long long,map<int,map<int,vector<double> > > >::const_iterator it=_hotVzt.begin();it!=_hotVzt.end();it++){
+      for (map<int,map<int,vector<double> > >::const_iterator jt=it->second.begin();jt!=it->second.end();jt++){
+        for (map<int,vector<double> >::const_iterator kt=jt->second.begin();kt!=jt->second.end();kt++){if (kt->second.size()>=2){_vzHotUnusedV+=kt->second[1];}}
+      }
+    }
+    WriteWarning("CGroundwaterModel: the hotstart file holds "+to_string(_vzHotUnusedN)+" unsaturated columns (:GWVadoseColumns or :GWVadoseClassColumns), but this run has none ("+
+                 string(SZPhysical()?":SoilZoneVadose NONE":"no :SoilZone PHYSICAL")+"): their water"+(vol?(", "+ToStr(_vzHotUnusedV)+" m3 above their reference profiles,"):string(""))+
+                 " is dropped (reported in the run totals of GWModelSummary.txt). Restart with the columns of the run that wrote the file to keep it",false);
+  }
   OpenOutputs(Options); GWPROF("OpenOutputs");
   WriteSummary(Options); GWPROF("WriteSummary");
   if (_writeNC){OpenNetCDF(Options); WriteNetCDF(0.0);}
@@ -723,7 +751,7 @@ double CGroundwaterModel::WaterTable(const int ic) const
 void CGroundwaterModel::ClearHotstartData()
 {
   _hotHeads.clear(); _hotDims[0]=_hotDims[1]=_hotDims[2]=0;
-  _hotRchStore.clear(); _hotResSeep.clear(); _hotRivCarry.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotVzc.clear(); _hotLag.clear(); _hotDebt.clear();
+  _hotRchStore.clear(); _hotResSeep.clear(); _hotResFrac.clear(); _hotRivCarry.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotVzc.clear(); _hotVzt.clear(); _hotLag.clear(); _hotDebt.clear();
   _initMode="FROM_PROFILE"; _initValue=0.0;
 }
 //////////////////////////////////////////////////////////////////
@@ -779,6 +807,21 @@ int CGroundwaterModel::SeepageTargetSV(const int k) const
     if (th<=0.0){iSV=_pModel->GetStateVarIndex(SURFACE_WATER);}
   }
   return iSV;
+}
+//////////////////////////////////////////////////////////////////
+/// \brief true when state variable i of HRU k is the store of one of the :SurfaceWaterExchange commands (its HRU group holds k,
+///  and k is coupled); groundwater discharge fills that store with no capacity limit, as it does the seepage target
+//
+bool CGroundwaterModel::SWXStoreSV(const int k,const int i) const
+{
+  if (_aSWX.empty() || (SeepageTargetSV(k)==DOESNT_EXIST)){return false;}
+  for (size_t x=0;x<_aSWX.size();x++){
+    int lay=0; sv_type typ=_pModel->GetStateVarInfo()->StringToSVType(_aSWX[x].sv,lay,false);
+    if ((typ==UNRECOGNIZED_SVTYPE) || (_pModel->GetStateVarIndex(typ,lay)!=i)){continue;}
+    const CHRUGroup *pG=_pModel->GetHRUGroup(_aSWX[x].group);
+    if ((pG!=NULL) && pG->IsInGroup(k)){return true;}
+  }
+  return false;
 }
 void CGroundwaterModel::ValidateInputs() const
 {
@@ -1534,12 +1577,14 @@ void CGroundwaterModel::BuildStresses()
     B.pHead=(it==_headTS.end())?NULL:it->second;
     vector<int> cols=SelectColumns(B.file);
     if (cols.size()==0){WriteWarning("CGroundwaterModel: boundary "+B.name+" selects no active cells",false);}
-    //the highest head the boundary has in the run: HEAD, or with a :BoundaryHead series its heads over the run's steps
-    //(HEAD where the series has no value), as SetBoundaryArrays applies them
-    double hp=B.head;
+    //the highest and lowest heads the boundary can have: HEAD and every value of its :BoundaryHead series (the whole series,
+    //not only the run's steps, so a restarted run gets the same cells; HEAD applies where the series has no value). Each
+    //cell whose bottom lies below the highest head is placed; on a step whose head is at or below a cell's bottom that
+    //cell is switched off (SetBoundaryArrays). LAYERS TOP: the top layer the head can reach and the layers below it down
+    //to the first one the lowest head reaches; each step holds the highest of them whose bottom lies below the step's head
+    double hp=B.head,hm=B.head;
     if (B.pHead!=NULL){
-      hp=-1e300; const int ns=max(1,(int)ceil(_tsDur/max(_tsDt,1e-9)-1e-6));
-      for (int s=0;s<ns;s++){double v=B.pHead->GetAvgValue(s*_tsDt,_tsDt); if ((v==RAV_BLANK_DATA) || !std::isfinite(v)){v=B.head;} hp=max(hp,v);}
+      for (int s=0;s<B.pHead->GetNumValues();s++){double v=B.pHead->GetValue(s); if ((v==RAV_BLANK_DATA) || !std::isfinite(v)){continue;} hp=max(hp,v); hm=min(hm,v);}
     }
     size_t nb=_chdNode.size()+_ghbNode.size(); double zmax=-1e300;
     for (size_t i=0;i<cols.size();i++){
@@ -1547,11 +1592,11 @@ void CGroundwaterModel::BuildStresses()
         int n=UserNode(l,cols[i]); if (_idomain[n]<=0){continue;}
         zmax=max(zmax,_botm[n]); if (_botm[n]>=hp){continue;}
         if (B.isCHD){_chdNode.push_back(n);_chdB.push_back((int)b);} else {_ghbNode.push_back(n);_ghbB.push_back((int)b);}
-        if (!B.allLayers){break;}
+        if (!B.allLayers && (_botm[n]<hm)){break;}
       }
     }
     if ((cols.size()>0) && (_chdNode.size()+_ghbNode.size()==nb)){
-      WriteWarning("CGroundwaterModel: boundary "+B.name+" has no cells: its head ("+ToStr(hp)+" m"+((B.pHead!=NULL)?", the highest of its :BoundaryHead series over the run":", HEAD")+
+      WriteWarning("CGroundwaterModel: boundary "+B.name+" has no cells: its head ("+ToStr(hp)+" m"+((B.pHead!=NULL)?", the highest of HEAD and its :BoundaryHead series":", HEAD")+
                    ") lies below the bottom of every cell it selects (highest "+ToStr(zmax)+" m); MODFLOW needs a boundary head above the cell bottom",false);
     }
   }
@@ -1836,8 +1881,8 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
     F<<"BEGIN OPTIONS\nEND OPTIONS\n\nBEGIN DIMENSIONS\n  MAXBOUND "<<_evtCol.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(10);
     for (size_t i=0;i<_evtCol.size();i++){
       int ic=_evtCol[i];
-      //surface: land, or with :SoilZone PHYSICAL the model top (soil-zone base): Raven evaporates the soil zone itself
-      F<<"  "<<CellID(0,ic)<<" "<<(SZPhysical()?_top[ic]:_land[ic])<<" 0.0 "<<_aProfiles[_colProfile[ic]].extinction_depth<<endl;
+      //surface: the land (also with :SoilZone PHYSICAL: the extinction depth counts from the ground, above the soil zone)
+      F<<"  "<<CellID(0,ic)<<" "<<_land[ic]<<" 0.0 "<<_aProfiles[_colProfile[ic]].extinction_depth<<endl;
     }
     F<<"END PERIOD\n"; F.close();
   }
@@ -2037,6 +2082,8 @@ void CGroundwaterModel::RefreshPointers()
     if (_mf6.HasVar(a)){_chdNcol=0; _chdHead=_mf6.GetDoublePtr(a);} else {_chdNcol=1; _chdHead=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"CHD_RAVEN","BOUND"));}
     _chdSim=_mf6.GetDoublePtr(_mf6.GetVarAddress(_mname,"CHD_RAVEN","SIMVALS"));
     ExitGracefullyIf((_chdHead==NULL) || (_chdSim==NULL),"CGroundwaterModel: cannot access MODFLOW 6 CHD arrays",RUNTIME_ERR);
+    _chdNb=_mf6.GetIntPtr(_mf6.GetVarAddress(_mname,"CHD_RAVEN","NBOUND")); _chdNl=_mf6.GetIntPtr(_mf6.GetVarAddress(_mname,"CHD_RAVEN","NODELIST"));
+    {string a2=_mf6.GetVarAddress(_mname,"","IBOUND"); _chdIb=_mf6.HasVar(a2)?_mf6.GetIntPtr(a2):NULL;}
   }
   if (_swxCol.size()>0){
     string a=_mf6.GetVarAddress(_mname,"SWX_RAVEN","STAGE");
@@ -2186,7 +2233,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     for (size_t i=0;i<_evtCol.size();i++){int ic=_evtCol[i]; _evtRate[i*es]=_work[ic]/MF6CellArea(ic)*_rf;} //(model units: an existing model's own cell area)
     if (SZPhysical()){_evtBase.assign(_evtCol.size(),0.0); for (size_t i=0;i<_evtCol.size();i++){_evtBase[i]=_evtRate[i*es];}}
   }
-  SetBoundaryArrays(tt.model_time,tstep);
+  SetBoundaryArrays(tt.model_time,tstep); _bndOffN+=_bndOffNow;
   //reservoirs: seepage Raven computed during the previous step's routing enters the aquifer now (one-step lag)
   if (_stepCount==2){ //(the stage Raven's first routing set: with no initial flow in the .rvc file the stage is 0 until
                       // then, and nothing before that routing depends on it)
@@ -2220,9 +2267,12 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     }
     double q=V/tstep*_resW[e]; //[m3/d] (+: into aquifer)
     _Qres_spec+=q;
-    const double ws=resWs[_resR[e]];
-    if (ws<=0.0){_resUnsent[e]=q; q=0.0;}                                        //(no cell can take it: booked at the read-back)
-    else if (resOff[_resR[e]]){q=V/tstep*_resW[e]*resUse[e]/ws;}
+    //the seepage was computed for the share wk of the lake's cells (the seepage constant scaled by it, at the read-back): each
+    //cell that can take seepage now gets its own part of it, the seepage of wk spread over the share wn of the cells able to
+    //take it now, at most its rate when computed (D = max(wn, wk)); the rest is booked at the read-back (returned or not supplied)
+    const int r=_resR[e]; const double wn=resOff[r]?resWs[r]:1.0,wk=(r<(int)_resWk.size())?_resWk[r]:1.0,D=max(wn,wk);
+    if (D<=0.0){_resUnsent[e]=q; q=0.0;}                                         //(no cell can take it: booked at the read-back)
+    else if (resOff[r] || (wk<1.0)){_resUnsent[e]=q*(1.0-wn/D); q=q*resUse[e]/D;}
     _resQ[e*max(_resNcol,1)]=q/_qf;                                              //(model units)
   }
   //surface-water stores: head = land surface + store depth; conductance limited so the largest possible
@@ -2375,7 +2425,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   }
   for (size_t e=0;e<_welNode.size();e++){gross+=fabs((_welHcof[e]*_X[_reduced[_welNode[e]]]-_welRhs[e])*_qf);}
   for (size_t e=0;e<_ghbNode.size();e++){gross+=fabs((_ghbHcof[e]*_X[_reduced[_ghbNode[e]]]-_ghbRhs[e])*_qf);}
-  for (size_t e=0;e<_chdNode.size();e++){gross+=fabs(_chdSim[e]);}
+  for (size_t i=0;i<_chdAct.size();i++){gross+=fabs(_chdSim[i]);}
   if (IsExternal()){ExtStreamFlows();}
   ComputeStressFlows();
   _Qres=0.0; _resShortVol=0.0; _resUndelVol=0.0;
@@ -2397,7 +2447,12 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     if (uns>0.0){U+=uns*tstep;}
     if (U>0.0){_sbLossCarry[_resP[_resR[e]]]-=U; _resUndelVol+=U;}
   }
-  _resUndelTot+=_resUndelVol;
+  _resUndelTot+=_resUndelVol; _resShortTot+=_resShortVol;
+  if ((_resShortVol>1e-6) && (++_resShortN<=10)){
+    WriteWarning("CGroundwaterModel: in the step ending "+_stepEnd+": "+ToStr(_resShortVol)+" m3 of reservoir gain was not supplied by MODFLOW (cells under the lake that "
+                 "were drying, specified heads or inactive); taken back from the water reaching the reservoir's subbasin and booked as 'reservoir gain not supplied by MODFLOW' (GWBudget.csv)"+
+                 ((_resShortN==10)?" (further such warnings suppressed)":""),false);
+  }
   if ((_resUndelVol>1e-6) && (++_resUndelN<=10)){
     WriteWarning("CGroundwaterModel: in the step ending "+_stepEnd+": "+ToStr(_resUndelVol)+" m3 of reservoir seepage was not delivered by MODFLOW (cells under the "
                  "lake that are specified heads or inactive); returned to the reservoir's subbasin and booked as 'reservoir seepage not delivered by MODFLOW' (GWBudget.csv)"+
@@ -2405,17 +2460,23 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   }
   for (size_t r=0;r<_resP.size();r++){ //local groundwater head seen by each reservoir during this step's routing
     //a lake above a water table deeper than its bed is disconnected: the seepage then depends on the bed, not on the
-    //water-table depth (as for MODFLOW's river boundary). The bed is the model top, unless the lake stands below it
-    //(a DEM that recorded a higher water surface): then the bed is taken at the lake level, so a deep water table
-    //gives no exchange rather than a false gain
+    //water-table depth (as for MODFLOW's river boundary). The bed is the ground: the model top, or with :SoilZone PHYSICAL
+    //the lake HRU's ground above its soil zone (as for surface stores, SWXDatum); unless the lake stands below it (a DEM
+    //that recorded a higher water surface): then the bed is taken at the lake level, so a deep water table gives no
+    //exchange rather than a false gain
     CReservoir *pRes=_pModel->GetSubBasin(_resP[r])->GetReservoir();
     double stage=pRes->GetResStage();
-    double h=0; for (size_t e=0;e<_resNode.size();e++){if (_resR[e]==(int)r){int ic=_resNode[e]%_ncpl; h+=_resW[e]*max(WaterTable(ic),min(_top[ic],stage));}}
+    const int kl=pRes->GetHRUIndex(); const bool szk=SZPhysical() && (kl>=0) && (kl<(int)_szOn.size()) && _szOn[kl];
+    double h=0; for (size_t e=0;e<_resNode.size();e++){if (_resR[e]==(int)r){int ic=_resNode[e]%_ncpl; const double zg=szk?SZBase(kl,ic)+_szD[kl]:_top[ic]; h+=_resW[e]*max(WaterTable(ic),min(zg,stage));}}
+    double F=(r<_resA.size())?_resA[r]:1.0,wsr=1.0;                             //(the share of the lake's bed that can take seepage)
     if ((r<_resOff.size()) && _resOff[r]){ //(cells that could not take seepage this step are left out: the head of the others;
-      h=0; for (size_t e=0;e<_resNode.size();e++){if ((_resR[e]==(int)r) && (_resUse[e]>0.0)){int ic=_resNode[e]%_ncpl; h+=_resW[e]*max(WaterTable(ic),min(_top[ic],stage));}}
+      h=0; for (size_t e=0;e<_resNode.size();e++){if ((_resR[e]==(int)r) && (_resUse[e]>0.0)){int ic=_resNode[e]%_ncpl; const double zg=szk?SZBase(kl,ic)+_szD[kl]:_top[ic]; h+=_resW[e]*max(WaterTable(ic),min(zg,stage));}}
       h=(_resWs[r]>0.0)?h/_resWs[r]:stage;                                       // none: the lake is disconnected, no seepage)
+      wsr=max(_resWs[r],0.0); F*=wsr;
     }
-    pRes->SetGWParameters(pRes->GetSeepageConstant(),h);
+    if (r<_resWk.size()){_resWk[r]=wsr;}
+    //(never 0: Raven's reservoir keeps its last seepage when the constant is 0; 1e-12 of it with the level at the stage is none)
+    pRes->SetGWParameters(((r<_resK0.size())?_resK0[r]:pRes->GetSeepageConstant())*max(F,1e-12),h);
   }
   _Qswx_in=_Qswx_out=0.0; _swxAppliedVol=0.0;
   _swxQ.assign(_swxCol.size(),0.0);
@@ -2658,15 +2719,43 @@ void CGroundwaterModel::SetBoundaryArrays(const double &t,const double &tstep)
     _welQ[e*max(_welNcol,1)]=rate*_welFrac[e];
     _Qwel_spec+=rate*_welFrac[e];
   }
+  //head boundaries: a cell whose bottom lies at or above the step's head is switched off for the step (it neither holds
+  //the water table nor feeds water): a GHB gets conductance 0, a CHD entry is left out of CHD_RAVEN's list (its cell is an
+  //ordinary active cell for the step). LAYERS TOP: only the highest placed layer whose bottom lies below the head
+  _bndOffNow=0;
+  int pb=-1,pic=-1; bool taken=false;
   for (size_t e=0;e<_ghbNode.size();e++){
-    const gw_boundary &B=_aBounds[_ghbB[e]];
+    const gw_boundary &B=_aBounds[_ghbB[e]]; const int n=_ghbNode[e];
     double h=B.head; if (B.pHead!=NULL){double v=B.pHead->GetAvgValue(t,tstep); if (v!=RAV_BLANK_DATA){h=v;}}
-    _ghbHead[e*max(_ghbNcol,1)]=max(h,_botm[_ghbNode[e]]+0.01); _ghbCond[e*max(_ghbNcol,1)]=B.cond;
+    if ((_ghbB[e]!=pb) || (n%_ncpl!=pic)){pb=_ghbB[e]; pic=n%_ncpl; taken=false;}
+    const bool on=(h>_botm[n]) && (B.allLayers || !taken); if (on){taken=true;}
+    if (!(h>_botm[n])){_bndOffNow++;}
+    _ghbHead[e*max(_ghbNcol,1)]=max(h,_botm[n]+0.01); _ghbCond[e*max(_ghbNcol,1)]=on?B.cond:0.0;
   }
-  for (size_t e=0;e<_chdNode.size();e++){
-    const gw_boundary &B=_aBounds[_chdB[e]];
-    double h=B.head; if (B.pHead!=NULL){double v=B.pHead->GetAvgValue(t,tstep); if (v!=RAV_BLANK_DATA){h=v;}}
-    _chdHead[e*max(_chdNcol,1)]=max(h,_botm[_chdNode[e]]+0.01);
+  if (_chdNode.size()>0){
+    vector<int> act; vector<double> hs(_chdNode.size(),0.0); vector<char> on(_chdNode.size(),0);
+    pb=-1; pic=-1; taken=false;
+    for (size_t e=0;e<_chdNode.size();e++){
+      const gw_boundary &B=_aBounds[_chdB[e]]; const int n=_chdNode[e];
+      double h=B.head; if (B.pHead!=NULL){double v=B.pHead->GetAvgValue(t,tstep); if (v!=RAV_BLANK_DATA){h=v;}}
+      if ((_chdB[e]!=pb) || (n%_ncpl!=pic)){pb=_chdB[e]; pic=n%_ncpl; taken=false;}
+      on[e]=(h>_botm[n]) && (B.allLayers || !taken); if (on[e]){taken=true; act.push_back((int)e);}
+      if (!(h>_botm[n])){_bndOffNow++;}
+      hs[e]=max(h,_botm[n]+0.01);
+    }
+    if ((act.size()==_chdNode.size()) && !_chdPacked){ //every entry held, MODFLOW's list as read from gwf.chd
+      for (size_t e=0;e<_chdNode.size();e++){_chdHead[e*max(_chdNcol,1)]=hs[e];}
+    }
+    else { //the list of the entries held this step: NODELIST (reduced node numbers, from 1), heads and NBOUND; IBOUND marks the
+      //held cells (MODFLOW's CHD sets it only when it reads a period) and makes the others ordinary active cells
+      ExitGracefullyIf((_chdNb==NULL) || (_chdNl==NULL) || (_chdIb==NULL),"CGroundwaterModel: cannot switch specified-head cells off: MODFLOW 6's CHD list or IBOUND is not accessible",RUNTIME_ERR);
+      if (_chdIbc==0){const int r0=_reduced[_chdNode[0]]; _chdIbc=((r0>=0) && (_chdIb[r0]<0))?_chdIb[r0]:-1;} //(MODFLOW's value of a held cell, read while its list is whole)
+      for (size_t i=0;i<act.size();i++){const int e=act[i]; _chdNl[i]=_reduced[_chdNode[e]]+1; _chdHead[i*max(_chdNcol,1)]=hs[e];}
+      *_chdNb=(int)act.size();
+      for (size_t e=0;e<_chdNode.size();e++){const int r=_reduced[_chdNode[e]]; if (r>=0){_chdIb[r]=on[e]?_chdIbc:1;}}
+      _chdPacked=(act.size()!=_chdNode.size());
+    }
+    _chdAct=act;
   }
 }
 //////////////////////////////////////////////////////////////////
@@ -2677,7 +2766,7 @@ void CGroundwaterModel::ComputeStressFlows()
   _Qwel=_Qghb=_Qchd=0.0;
   for (size_t e=0;e<_welNode.size();e++){_Qwel+=(_welHcof[e]*_X[_reduced[_welNode[e]]]-_welRhs[e])*_qf;}
   for (size_t e=0;e<_ghbNode.size();e++){_Qghb+=(_ghbHcof[e]*_X[_reduced[_ghbNode[e]]]-_ghbRhs[e])*_qf;}
-  for (size_t e=0;e<_chdNode.size();e++){_Qchd+=_chdSim[e];}
+  for (size_t i=0;i<_chdAct.size();i++){_Qchd+=_chdSim[i];}
 }
 //////////////////////////////////////////////////////////////////
 /// \brief steady-state first stress period with uniform recharge, solved before Raven's first step
@@ -2799,8 +2888,8 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
   }
   RVC<<":EndGWHeads"<<endl<<setprecision(12); //
   if (_resP.size()>0){ //reservoir seepage computed in the last step, not yet delivered to the aquifer
-    RVC<<":GWReservoirSeepage   # subbasin ID, seepage in transit [m3]"<<endl;
-    for (size_t r=0;r<_resP.size();r++){RVC<<"  "<<_pModel->GetSubBasin(_resP[r])->GetID()<<", "<<setprecision(15)<<_pModel->GetSubBasin(_resP[r])->GetReservoir()->GetReservoirGWLosses(1.0)<<endl;}
+    RVC<<":GWReservoirSeepage   # subbasin ID, seepage in transit [m3], share of the lake's cells able to take seepage when it was computed"<<endl;
+    for (size_t r=0;r<_resP.size();r++){RVC<<"  "<<_pModel->GetSubBasin(_resP[r])->GetID()<<", "<<setprecision(15)<<_pModel->GetSubBasin(_resP[r])->GetReservoir()->GetReservoirGWLosses(1.0)<<", "<<((r<_resWk.size())?_resWk[r]:1.0)<<endl;}
     RVC<<":EndGWReservoirSeepage"<<endl;
   }
   bool anyCarry=false; for (size_t p=0;p<_sbLossRemain.size();p++){if (_sbLossRemain[p]>0){anyCarry=true;}}
@@ -2838,6 +2927,16 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
         }
       }
       RVC<<(cls?":EndGWVadoseClassColumns":":EndGWVadoseColumns")<<endl;
+      //each column's top (matched on a restart: another :SoilZoneSubgrid or ground gives other tops) and its water
+      RVC<<":GWVadoseColumnTops   # HRU ID, cell (grid column number), depth class (1 without depth classes), column top [m], water above the column's reference profile [m3]"<<endl;
+      for (size_t e=0;e<_szxLink.size();e++){
+        const gw_link &L=_aLinks[_szxLink[e]]; const double a=_szColA[_szxCol[e]];
+        for (int i=_vzOff[e];i<_vzOff[e+1];i++){
+          const gwvz::vz_column &c=_vzcCol[i]; if (!c.active){continue;}
+          RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<", "<<i-_vzOff[e]+1<<setprecision(15)<<", "<<c.ztop<<", "<<gwvz::RelStorage(c,_vzStrat[e])*(a*_vzcA[i])<<endl;
+        }
+      }
+      RVC<<":EndGWVadoseColumnTops"<<endl;
     }
     if ((_szTiming==1) && (_szxQprev.size()==_szxLink.size())){ //LAGGED: the last step's exchange is the next step's source
       RVC<<":GWSoilZoneLag   # HRU ID, cell (grid column number), exchange of the last step into the aquifer [m3/d], debt the aquifer still repays [m3]"<<endl;
@@ -3177,6 +3276,11 @@ void CGroundwaterModel::AppendRunTotals()
   if (_ncWithheldN>0){S<<"  discharge withheld    : "<<_ncWithheldVol<<" m3 on "<<_ncWithheldN<<" unconverged steps (MODFLOW's negative residual, withheld from the discharge to Raven in proportion: seepage, river and surface-store gains; it stays in the aquifer, booked as MF6 balance error in GWBudget.csv)"<<endl;}
   if (_negCutVol>0.0){S<<"  negative recharge cut : "<<_negCutVol<<" m3 the top cells could not supply, taken back out of the soil zone (negative rejected recharge in GWBudget.csv)"<<endl;}
   if (_negUnheldVol>0.0){S<<"  negative recharge not held: "<<_negUnheldVol<<" m3 of that cut the soil zone did not hold when it was taken back (the HRU's soil zone held less, at the end of the step, than the cut: a process after the import moved it on before the coupled exchange): no store supplied it ('negative recharge the soil zone did not hold' in GWBudget.csv)"<<endl;}
+  if (_vzHotUnusedN>0){S<<"  hotstart columns unused: "<<_vzHotUnusedN<<" unsaturated columns of the hotstart file, "<<_vzHotUnusedV<<" m3 above their reference profiles, dropped (this run has no unsaturated columns)"<<endl;}
+  if (IsExternal() && (_vzMode>0) && SZPhysical()){S<<"  columns over specified heads: "<<_vzChdN<<" unsaturated columns ended on cells that were specified heads, their water ("<<_vzChdV<<" m3 above their reference profiles) to the specified heads (recharge onto CHD cells in GWBudget.csv)"<<endl;}
+  bool series=false; for (size_t b=0;b<_aBounds.size();b++){if (_aBounds[b].pHead!=NULL){series=true;}}
+  if (series){S<<"  head boundaries off   : "<<_bndOffN<<" cell-steps (a :BoundaryHead series at or below the cell bottom: GHB conductance 0, CHD cell not held)"<<endl;}
+  if (_resNode.size()>0){S<<"  reservoir gain not supplied: "<<_resShortTot<<" m3 (lake gains MODFLOW did not supply: cells under the lakes that were drying, specified heads or inactive; taken back from the reservoirs' subbasins; GWBudget.csv)"<<endl;}
   if (IsExternal() && (_resNode.size()>0)){S<<"  reservoir seepage not delivered: "<<_resUndelTot<<" m3 (cells under the lakes that were specified heads or inactive: returned to the reservoirs' subbasins; GWBudget.csv)"<<endl;}
   if (IsExternal() && !_mf6Newton){S<<"  recharge not applied  : "<<_rchLostVol<<" m3 (columns whose cells were all dry or whose highest active cell is a specified head, a model without NEWTON; GWBudget.csv; net: a negative recharge there, taken out of GROUNDWATER without MODFLOW supplying it, counts negative)"<<endl;}
   _summaryFile="";
