@@ -97,6 +97,25 @@ double CGroundwaterModel::SZBase(const int k,const int ic) const
   if (IsExternal()){return _top[ic];}                                            //an existing model: the soil zone lies on its top
   return _land[ic]-_szD[k];
 }
+//////////////////////////////////////////////////////////////////
+/// \brief bed and stage datum of surface-store exchange entry e (SWX_RAVEN) [model units]: the model top; with :SoilZone PHYSICAL
+///  the ground of the group's HRUs in the column (the soil zone lies between the model top and the ground), area-weighted:
+///  an HRU with a soil zone at its soil-zone base plus its thickness, one without at the model top (where its seepage leaves)
+//
+double CGroundwaterModel::SWXDatum(const size_t e) const
+{
+  const int ic=_swxCol[e];
+  const double zt=IsExternal()?_extTopRaw[ic]:_top[ic];
+  if (!SZPhysical() || (e>=_swxLinks.size())){return zt;}
+  double A=0.0,zA=0.0;
+  for (size_t j=0;j<_swxLinks[e].size();j++){
+    const gw_link &L=_aLinks[_swxLinks[e][j]];
+    const double g=((L.k<(int)_szOn.size()) && _szOn[L.k])?SZBase(L.k,ic)+_szD[L.k]:_top[ic];
+    A+=L.area; zA+=L.area*g;
+  }
+  if (A<=0.0){return zt;}
+  return zt+(zA/A-_top[ic])/_hf;
+}
 double CGroundwaterModel::SZCellKv(const int ic) const
 {
   if (IsExternal()){return _extKv[TopNode(ic)];}
@@ -661,7 +680,12 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
             double au=0.0,fu=0.0;
             for (int i=_vzOff[e];i<_vzOff[e+1];i++){if (!_vzcUse[i]){au+=_vzcA[i]; fu+=_vzcA[i]*VZClassF(e,i,_szxHc[e]);}}
             if (au>0.0){
-              if (neg){_Qcol[L.ic]+=V/tstep*share*au;}                            //(a negative recharge: not split by F)
+              if (neg){ //(a negative recharge: not split by F; at most what the top cell can still give after the classes with a
+                        // column, the capillary rise and the repayment took (_szxNegCap): the rest back to the soil zone, as on a link
+                        // without columns)
+                const double q=V/tstep*share*au,take=max(q,-_szxNegCap[e]);
+                _Qcol[L.ic]+=take; rj+=(q-take)*tstep; _szNegCutQ+=take-q;
+              }
               else {_Qcol[L.ic]+=V/tstep*share*(au-fu); rj+=V*share*fu;}
             }
           }
@@ -681,7 +705,10 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
         const double q=V/tstep*share,cap=(e>=0)?_szxNegCap[e]:1e300;           //[m3/d]
         const double take=max(q,-cap);
         _Qcol[L.ic]+=take;
-        if (e>=0){_szxRej[e]=(q-take)*tstep; rej+=_szxRej[e]; _szNegCutQ+=take-q;}
+        if (e>=0){
+          _szxRej[e]=(q-take)*tstep; rej+=_szxRej[e]; _szNegCutQ+=take-q;
+          if ((_vzMode>0) && (e<(int)_vzBackW.size()) && (_vzBackW[e]>0.0)){_szxRej[e]+=_vzBackW[e];} //rule (ii): the water of a column that vanished this
+        }                                                                        // step goes back to the soil zone (in rej already, above)
         else if (q<take){_Qcol[L.ic]+=q-take;}                                 //(no soil zone: unlimited)
         continue;
       }

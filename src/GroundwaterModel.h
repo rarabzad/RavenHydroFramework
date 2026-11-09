@@ -224,6 +224,10 @@ private:/*----------------------------------------------------*/
   double                *_resQ,*_resHcof,*_resRhs; int _resNcol;
   double                 _Qres_spec,_Qres,_resPendingVol; ///< [m3/d] seepage sent, delivered; [m3] seepage awaiting delivery
   double                 _resShortVol;                     ///< [m3] reservoir gain MODFLOW could not supply (drying cell), taken from the reach
+  vector<double>         _resUnsent;  ///< per RES entry: seepage of a reservoir with no cell able to take it this step (specified heads, inactive cells) [m3/d]
+  vector<double>         _resUse,_resWs; vector<int> _resOff; ///< per RES entry: 1 if its cell can take seepage this step, else 0; per reservoir: weight of those cells, 1 if any cell cannot
+  double                 _resUndelVol,_resUndelTot; ///< [m3] reservoir seepage MODFLOW did not deliver, returned to the reservoir's subbasin: this step, run total
+  int                    _resUndelN;  ///< warnings about it
   vector<gw_swx>         _aSWX;      ///< surface-water exchanges
   vector<int>            _swxCol,_swxX; ///< per SWX entry: column, exchange index
   vector<vector<int> >   _swxLinks;  ///< per SWX entry: links (HRU,cell) of group HRUs in the column
@@ -486,6 +490,7 @@ private:/*----------------------------------------------------*/
   void   SZSetup        ();                                    ///< after HRUs are known: layers, thickness, checks
   void   SZBuildEntries ();                                    ///< after links: SZX entries, conductances, bases
   double SZBase         (const int k,const int ic) const;      ///< soil-zone base of HRU k in column ic [m]
+  double SWXDatum       (const size_t e) const;                 ///< bed and stage datum of surface-store exchange entry e [model units]
   void   SZLinkFractions(const bool relax,const bool mf6conv=true); ///< _szxHc and _linkF from the current heads (hc iterated inside the step)
   void   SZRecharge     (const double &tstep,const bool write);///< _Qcol, _szRej, _szxRej from _szRchV and _linkF (write: RCH array too)
   void   SZLocalSolves  (const double &tstep,const bool steady);///< _szxLam, _szxQc, _szxCg per exchange column

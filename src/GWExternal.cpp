@@ -979,12 +979,18 @@ void CGroundwaterModel::ExtWritePackages(const optStruct &Options)
     for (size_t i=0;i<_evtCol.size();i++){int ic=_evtCol[i],n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<_extTopRaw[ic]<<" 0.0 "<<_aProfiles[_colProfile[ic]].extinction_depth*_extLf<<"\n";}
     F<<"END PERIOD\n"; F.close();
   }
-  if (_swxCol.size()>0){ //surface-water stores <-> aquifer: bed at the model top; stage and conductance set every step
+  if (_swxCol.size()>0){ //surface-water stores <-> aquifer: bed at the model top (:SoilZone PHYSICAL: at the ground); stage and conductance set every step
     F.open((_mf6dir+"/raven.swx").c_str());
-    F<<"# surface-water stores (wetlands, lakes) exchanging with the aquifer (:SurfaceWaterExchange): river-type boundary with its bed at the\n"
-       "# model top; stage = model top + store depth and conductance are set by Raven every step (model units)\nBEGIN OPTIONS\n  SAVE_FLOWS\nEND OPTIONS\n\n";
+    if (SZPhysical()){
+      F<<"# surface-water stores (wetlands, lakes) exchanging with the aquifer (:SurfaceWaterExchange): river-type boundary with its bed at the\n"
+         "# ground above the soil zone; stage = ground + store depth and conductance are set by Raven every step (model units)\nBEGIN OPTIONS\n  SAVE_FLOWS\nEND OPTIONS\n\n";
+    }
+    else {
+      F<<"# surface-water stores (wetlands, lakes) exchanging with the aquifer (:SurfaceWaterExchange): river-type boundary with its bed at the\n"
+         "# model top; stage = model top + store depth and conductance are set by Raven every step (model units)\nBEGIN OPTIONS\n  SAVE_FLOWS\nEND OPTIONS\n\n";
+    }
     F<<"BEGIN DIMENSIONS\n  MAXBOUND "<<_swxCol.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(12);
-    for (size_t e=0;e<_swxCol.size();e++){int ic=_swxCol[e],n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<_extTopRaw[ic]<<" 0.0 "<<_extTopRaw[ic]<<"\n";}
+    for (size_t e=0;e<_swxCol.size();e++){int ic=_swxCol[e],n=TopNode(ic); F<<"  "<<CellID(n/_ncpl,ic)<<" "<<SWXDatum(e)<<" 0.0 "<<SWXDatum(e)<<"\n";}
     F<<"END PERIOD\n"; F.close();
   }
   if (_resNode.size()>0){ //seepage of Raven reservoirs into the top active cells under their lake HRUs (:ReservoirExchange)
