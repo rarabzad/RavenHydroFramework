@@ -376,15 +376,15 @@ private:/*----------------------------------------------------*/
   vector<double>         _szW;           ///< per HRU: soil-zone water after the step [mm]
   double                 _szRatioMin,_szRatioMax; ///< range of S_y(top layer)/drainable porosity(bottom soil layer)
   ofstream               _SZOUT;
-  //-- soil zone (docs/design/soil_zone_columns_plan.md) --
-  int                    _vzMode;        ///< unsaturated column between the soil-zone base and the water table: 0 NONE (the basic soil zone), 1 RICHARDS,
+  //-- soil zone: unsaturated columns, exchange timing, column classes (docs/design/soil_zone_columns_plan.md) --
+  int                    _vzMode;        ///< unsaturated column between the soil-zone base and the water table: 0 NONE, 1 RICHARDS,
                                          ///<  2 KINEMATIC (gravity-only kinematic wave), 3 LAG (linear storage cascade)
   double                 _vzPar;         ///< parameter of the method (LAG: see SetSoilZoneVadose; 0 = default)
   int                    _vzClasses;     ///< unsaturated columns per exchange column, by depth class of its DEM samples (1: one, at the mean base)
   double                 _vzAcc;         ///< largest content change of a column in one substep [-]
   int                    _vzN;           ///< nodes of a column at most
   int                    _szCapRise;     ///< capillary rise into the soil zone: -1 default (on with RICHARDS), 0 off, 1 on
-  int                    _szTiming;      ///< 0 AFTER (the basic soil zone: the exchange after Raven's processes), 1 LAGGED (default: last step's exchange as a source)
+  int                    _szTiming;      ///< 0 AFTER (the exchange after Raven's processes), 1 LAGGED (default: last step's exchange as a source)
   int                    _szClasses;     ///< column classes per HRU for Raven's processes (1: the HRU mean)
   vector<vector<int> >   _szCls;         ///< per HRU: class of each of its columns this step (empty: one class)
   vector<vector<double> > _szClsW;       ///< per HRU: area weight of each class (sum 1)
@@ -522,7 +522,7 @@ private:/*----------------------------------------------------*/
   void   SZApply        (double **aPhinew,const double &tstep);///< final exchange, rejection and overflow to Raven
   double SZTrialShortfall(const double &tstep) const;          ///< shortfall [m3] the booked exchange would leave (SZApply without changing anything)
   void   SZWriteStep    (const double &t,const string &dstr);
-  //-- soil zone: the head-dependent rejection term, the kink drain, the
+  //-- soil zone interface: the head-dependent rejection term, the kink drain, the
   //   per-link convergence tests, negative recharge, drained columns, divergence and the MODFLOW side
   vector<double>         _szxRs;         ///< per SZX entry: slope s of the rejection's linear term s (hc - h) MODFLOW solves with [m2/d]
   vector<double>         _szxRq;         ///< per SZX entry: head-dependent rejected recharge of the link at its connection head [m3/d] (SZRejRate(hc))

@@ -451,8 +451,8 @@ namespace gwvz
   ///  exceeds what the column can pass with psi = 0 at its top (the profile for q then has positive pressure at the top
   ///  node and a top face that cannot carry q: Step would saturate the top and reject part of q), the column starts at
   ///  the backed-up steady state instead: the largest flux f < q whose profile's top face, at psi = 0 (Step's saturated
-  ///  top), carries f (bisection on f), with the top saturated; the top then rejects q - f, as InitSteadyKinematic does
-  ///. The discrete start is steady to the solver's tolerance in both cases. Returns the column's water
+  ///  top), carries f (bisection on f), with the top saturated; the top then rejects q - f, as InitSteadyKinematic does.
+  ///  The discrete start is steady to the solver's tolerance in both cases. Returns the column's water
   ///  above the reference [m]; *fw (optional) the flux into the water table [m/d] (q, or f when backed up)
   //
   double InitSteadyRichards(vz_column &c,const vz_strat &S,const double q,double *fw)

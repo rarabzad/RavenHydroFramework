@@ -69,9 +69,9 @@ void CAgeTracer::UpdateInitialConditions(const optStruct& Options)
 
   //the masses (volume x entry time) of a hotstart keep the datum of the run that wrote the file: the age clock is shifted
   //instead (SetInitialTimeOffset, SetModelTime; precipitation enters at the shifted time, CmvAdvection). Shifting the
-  //masses to this run's start made them negative (entry times before the start), which the advection's emptying limit
-  //(|rate| <= mass/dt) and CmvLatAdvection's negative-mass stop do not allow, and left the channel and reservoir masses
-  //on the old datum
+  //masses to this run's start would make them negative (entry times before the start), which the advection's emptying
+  //limit (|rate| <= mass/dt) and CmvLatAdvection's negative-mass stop do not allow, and would leave the channel and
+  //reservoir masses on the hotstart's datum
 }
 void   CAgeTracer::SetModelTime(const double &t){
   _model_time=t+_t_diff;          //(t: this run's model time)

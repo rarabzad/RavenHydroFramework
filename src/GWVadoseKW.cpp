@@ -34,7 +34,7 @@ namespace gwvz
       kw_par p; p.ths=std::max(m.ths,0.0); p.Ks=std::max(m.Ks,0.0); p.e=2.0*m.b+3.0;
       p.thr=std::max(p.ths-std::max(m.Sy,0.0),0.0);
       p.x0e=0.0; p.A=0.0; p.step=true;
-      if ((p.ths>0.0) && (p.ths-p.thr>0.0)){                     //(Sy = 0 gives x0 = 1 and A = Ks/0)
+      if ((p.ths>0.0) && (p.ths-p.thr>0.0)){                     //(Sy = 0 would give x0 = 1 and A = Ks/0)
         p.x0e=std::pow(p.thr/p.ths,p.e);
         const double d=1.0-p.x0e;
         if ((d>1e-12) && std::isfinite(p.x0e)){p.A=p.Ks/d; p.step=false;}

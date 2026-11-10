@@ -31,7 +31,9 @@ The `cmake` command can be configured with the following optional arguments (```
   meson >= 1.7, ninja and git are found, else `PREBUILT` (official release library, checked against pinned SHA-256)
   where MODFLOW releases one, else `OFF` with a warning. `PATH` uses `-DRAVEN_MF6_PATH=/path/to/libmf6.so`; offline:
   `-DRAVEN_MF6_ZIP=mf6.8.1_linux.zip` or `-DRAVEN_MF6_SOURCE_DIR=...`. With `OFF` the build is unchanged. `cmake --install`
-  and `cpack` give one folder with Raven, the library and its Fortran runtime.
+  and `cpack` give one folder with Raven, the library and its Fortran runtime. The coupling's manual, user guide,
+  examples and tests are in https://github.com/rarabzad/RavenHydroFramework-extra (branch `main`; clone it beside this
+  repository).
 
 So that the ```cmake``` command to build Raven as solely a dynamic library becomes:
 

@@ -275,7 +275,7 @@ int CGroundwaterModel::LocateWorld(const double X,const double Y) const
 }
 void CGroundwaterModel::CellCentreWorld(const int ic,double &X,double &Y) const
 {
-  if (_grid.uniform && (_grid.angle==0.0)){X=_x0+(ic%_ncol+0.5)*_cellSize; Y=_y0+(_nrow-1-ic/_ncol+0.5)*_cellSize; return;} //original arithmetic
+  if (_grid.uniform && (_grid.angle==0.0)){X=_x0+(ic%_ncol+0.5)*_cellSize; Y=_y0+(_nrow-1-ic/_ncol+0.5)*_cellSize; return;} //regular-grid arithmetic
   //(a rotated grid is uniform in its own frame only: its centres must be rotated back to the map)
   _grid.ToWorld(_grid.cx[ic],_grid.cy[ic],X,Y);
 }
@@ -1153,7 +1153,7 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
     }
   }
 
-  //-- grid (local frame: identity for unrotated grids, so a uniform regular grid reproduces the original arithmetic)
+  //-- grid (local frame: identity for unrotated grids, so a uniform regular grid keeps the regular-grid arithmetic)
   cs=_cellSize;
   ExitGracefullyIf(cs<=0,"CGroundwaterModel: :GridCellSize must be positive",BAD_DATA);
   _grid.ox=_grid.oy=0.0; _grid.angle=((_gridType==GWGRID_REGULAR) || (_gridType==GWGRID_QUADTREE))?_gridAngle:0.0;
@@ -1771,7 +1771,7 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
   F.open((d+"gwf.nam").c_str());
   //Newton without its UNDER_RELAXATION option: that option resets heads that fall below a cell bottom, and in MODFLOW 6.6
   //the Newton change of such a cell then repeats unchanged every iteration, so the step never converges (a drying aquitard of
-  //the Liard model failed on most days with 6.6.3); without it 6.6.3 and 6.8.1 converge in the same few iterations
+  //the Liard model fails on most days with 6.6.3); without it 6.6.3 and 6.8.1 converge in the same few iterations
   F<<"BEGIN OPTIONS\n  NEWTON\n"<<(_writeCBC?"  SAVE_FLOWS   # :WriteGWBudgetFile: every package's flows to gwf.cbc\n":"")<<"END OPTIONS\n\nBEGIN PACKAGES\n";
   F<<"  "<<((_disType==0)?"DIS6   gwf.dis ":(_disType==1)?"DISV6  gwf.disv":"DISU6  gwf.disu")<<"  DIS\n  NPF6  gwf.npf  NPF\n  STO6  gwf.sto  STO\n  IC6   gwf.ic   IC\n";
   F<<"  RCH6  gwf.rch  RCH_RAVEN\n  DRN6  gwf.drn  DRN_RAVEN\n";
@@ -1793,7 +1793,7 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
   if (_disType==0)
   {
     double X0,Y0; _grid.ToWorld(_grid.colX[0],_grid.rowY[_nrow-1],X0,Y0); //lower-left corner of the grid
-    bool orig=_grid.uniform && (_grid.angle==0.0); //unrotated uniform grid: the original arithmetic
+    bool orig=_grid.uniform && (_grid.angle==0.0); //unrotated uniform grid: the regular-grid arithmetic
     F<<"BEGIN OPTIONS\n  LENGTH_UNITS METERS\n  XORIGIN "<<(orig?_x0:X0)<<"\n  YORIGIN "<<(orig?_y0:Y0)<<"\n";
     if (_grid.angle!=0.0){F<<"  ANGROT "<<_grid.angle<<"\n";}
     F<<"END OPTIONS\n\n";
@@ -1998,7 +1998,20 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
   }
   if (_swxCol.size()>0){
     F.open((d+"gwf.swx").c_str());
-    F<<"# surface-water stores (wetlands, lakes) exchanging with the aquifer: river-type boundary with its bed at the\n# land surface; stage = land surface + store depth and conductance are set every step\n";
+    //the bed datum SWXDatum uses: the ground above the soil zone (:SoilZone PHYSICAL), else the model top, which is the land
+    //surface less SOIL_ZONE_DEPTH where a store's profile gives one
+    bool szd=false; for (size_t e=0;e<_swxCol.size();e++){const int ip=_colProfile[_swxCol[e]]; if ((ip>=0) && (_aProfiles[ip].soil_zone_depth>0.0)){szd=true;}}
+    if (SZPhysical()){
+      F<<"# surface-water stores (wetlands, lakes) exchanging with the aquifer: river-type boundary with its bed at the\n"
+         "# ground above the soil zone (soil-zone base + thickness; the model top under HRUs without a soil zone, area-weighted);\n"
+         "# stage = that ground + store depth and conductance are set every step\n";
+    }
+    else if (szd){
+      F<<"# surface-water stores (wetlands, lakes) exchanging with the aquifer: river-type boundary with its bed at the\n"
+         "# model top (the land surface less the profile's SOIL_ZONE_DEPTH); stage = model top + store depth and conductance are\n"
+         "# set every step\n";
+    }
+    else {F<<"# surface-water stores (wetlands, lakes) exchanging with the aquifer: river-type boundary with its bed at the\n# land surface; stage = land surface + store depth and conductance are set every step\n";}
     F<<"BEGIN OPTIONS\nEND OPTIONS\n\nBEGIN DIMENSIONS\n  MAXBOUND "<<_swxCol.size()<<"\nEND DIMENSIONS\n\nBEGIN PERIOD 1\n"<<setprecision(10);
     for (size_t e=0;e<_swxCol.size();e++){int ic=_swxCol[e]; F<<"  "<<CellID(0,ic)<<" "<<SWXDatum(e)<<" 0.0 "<<SWXDatum(e)<<endl;}
     F<<"END PERIOD\n"; F.close();
@@ -2388,7 +2401,8 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     double C=S.leakance*A, dhmax=sbar;                  //leakage is at most C*sbar (water table below the bed)
     //supply limit: the largest possible leakage, C*(bhead - cell bottom)*dt, may not exceed the water the stores
     //hold, so a store can never be over-drawn whatever the head does during the solve. (Groundwater reaching the
-    //surface under an empty store is still returned to Raven by the seepage drains at the model top.)
+    //surface under an empty store returns to Raven through the seepage drains at the model top; on soil-zone HRUs of
+    //:SoilZone PHYSICAL, which have no seepage drain, through the soil zone.)
     if (dhmax>1e-6){C=min(C,max(V,0.0)/(tstep*dhmax));}
     if ((V<=0.0) || (sbar<=0.0)){C=0.0;}
     int st=max(_swxNcol,1); _swxHead[e*st]=bhead; _swxCond[e*st]=C*_hf/_qf; _swxRbot[e*st]=zt; //bed set in memory: exactly equal to stage when the store is empty
@@ -2624,8 +2638,8 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   else if (IsExternal() && _extNoSto){_Qsto=0.0; _Qerr=resid();} //an existing model without a storage package is steady state: no storage flow
   else {_Qsto=0.0; _Qsto=-resid(); _Qerr=0.0; gross+=fabs(_Qsto);}             //(inferred storage)
   //gross flow through the aquifer: every entry's inflow and outflow apart (MODFLOW's TOTAL IN + TOTAL OUT), at least 1 m3/d;
-  //computed once, before the guard: the far-head test and GWBudget's "MF6 balance error [%]" (signed
-  //package totals cancelled: a well taking 1e4 m3/d resupplied by a specified head gave 1 m3/d)
+  //computed once, before the guard: the far-head test and GWBudget's "MF6 balance error [%]" (signed package totals
+  //would cancel: a well taking 1e4 m3/d resupplied by a specified head would give 1 m3/d)
   _Qgross=max(gross,1.0);
 
   { //far heads: an unconverged step that holds a head far outside the model's elevations (more than 10 times its relief, at
@@ -2683,9 +2697,10 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
 
   //-- :SoilZone PHYSICAL guard: water that MODFLOW's books do not back is not handed to Raven. Two sources: on an
   //   unconverged step, MODFLOW's residual (more outflow booked than its inflows and storage release supply; the soil
-  //   zone otherwise received flows far beyond its local solve, which overflowed: outflow 17 times the
-  //   iterated run's with an outer-iteration limit of 12); on any step, the soil-zone shortfall (water MODFLOW took from
-  //   columns that did not hold it, which it then discharged or returned as upflow with balanced books). All discharge to Raven (seepage, gains of enabled subbasins, surface-store gains, the exchange into the soil
+  //   zone would otherwise receive flows far beyond its local solve, which overflow: outflow 17 times the iterated
+  //   run's with an outer-iteration limit of 12); on any step, the soil-zone shortfall (water MODFLOW takes from
+  //   columns that do not hold it, which it then discharges or returns as upflow with balanced books). All discharge
+  //   to Raven (seepage, gains of enabled subbasins, surface-store gains, the exchange into the soil
   //   zone) is reduced in proportion; what it cannot cover (little discharge this step) stays in the aquifer
   //   (reported: MF6 balance error, soil-zone shortfall; the withheld volume in GWBudget.csv)
   _szWithheldV=_szWithheldG=_szWithheldS=0.0;
@@ -3061,7 +3076,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       RVC<<":GWSoilZoneLag   # HRU ID, cell (grid column number), exchange of the last step into the aquifer [m3/d], debt the aquifer still repays [m3]"<<endl;
       for (size_t e=0;e<_szxLink.size();e++){
         const gw_link &L=_aLinks[_szxLink[e]];
-        //over a specified head in the last step the exchange was exact, not a lagged source: a continued run does not apply it,
+        //over a specified head in the last step the exchange is exact, not a lagged source: a continued run does not apply it,
         //and a restarted existing model knows its specified heads only after the first step's lagged source
         const double q=_colCHDTop[L.ic]?0.0:_szxQprev[e];
         RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(17)<<", "<<q<<", "<<((e<_szxDebt.size())?_szxDebt[e]:0.0)<<endl;
@@ -3329,7 +3344,7 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
           if (cmax>0.0){S<<", columns "<<cmin<<" to "<<cmax<<" d at the start";}
           S<<" (no Newton iterations: the substeps of the run are in the run totals)"; //(the counts are 0 at the start)
         }
-        else {S<<"accuracy "<<_vzAcc<<"; "<<_vzSub<<" substeps and "<<_vzNewton<<" Newton iterations in all";}
+        else {S<<"accuracy "<<_vzAcc<<" (the substeps and Newton iterations of the run are in the run totals)";} //(the counts are 0 at the start)
         S
                                               <<endl;
         if (_vzQ0>0.0){S<<"  initial flux          : "<<_vzQ0<<" mm/d (steady start of the columns on a cold start)"<<endl;}
@@ -3429,8 +3444,9 @@ double CGroundwaterModel::FarDistance(const double x,const double zmin,const dou
 ///  iterate (only the iterate is changed: a column with no wet cell leaves MODFLOW's Newton matrix singular). Once per step,
 ///  and (rule b) once more on any later solve of that step that leaves the lowest cell more than 1 m below its bottom, and
 ///  after a singular solve (heads not finite); never in the last two outer iterations except for heads that are not finite.
-///  A column with an active confined cell is never drained (MODFLOW keeps its full transmissivity at any head; its dry convertible cells are left as they are). Only
-///  non-finite heads or the lowest cell are tested. Returns the number of columns set
+///  A column with an active confined cell is never drained (MODFLOW keeps its full transmissivity at any head; its dry
+///  convertible cells are left as they are). Only non-finite heads or the lowest cell are tested. Returns the number of
+///  columns set
 //
 int CGroundwaterModel::KeepColumnsWet(const int it)
 {

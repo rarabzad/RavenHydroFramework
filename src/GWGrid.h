@@ -32,7 +32,7 @@ public:
   double ox,oy,angle;               ///< local frame: world origin [m], rotation [deg, counterclockwise]
   //-- regular grids
   int    nrow,ncol;                 ///< row 0 is the northernmost row
-  bool   uniform;                   ///< regular grid with one cell size (reproduces the original arithmetic exactly)
+  bool   uniform;                   ///< regular grid with one cell size (coordinates by the regular-grid arithmetic exactly)
   double x0,y0,cs;                  ///< lower-left corner and cell size of a uniform grid (local frame)
   vector<double> colX,colW,rowY,rowH; ///< column west edge/width (west->east); row south edge/height (row 0 north)
   //-- every grid

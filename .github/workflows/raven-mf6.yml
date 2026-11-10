@@ -89,7 +89,7 @@ jobs:
           "$exe" -v
           # Raven itself loads the library on a tiny coupled model (RAVEN_MF6_LIB unset), and the Fortran runtime it
           # loads must be the copy beside it (Linux: ldd; macOS: DYLD_PRINT_LIBRARIES; Windows: the PATH folders that hold
-          # the compiler's libgfortran are hidden from the run);
+          # the compiler's libgfortran are hidden from the run)
           python cmake/RavenMF6InstallCheck.py "$bin" 6.8.1
 
       - name: Upload package

@@ -46,7 +46,7 @@ if(RAVEN_MF6_BUNDLE_SYSTEM STREQUAL "Linux" OR RAVEN_MF6_BUNDLE_SYSTEM STREQUAL 
 elseif(RAVEN_MF6_BUNDLE_SYSTEM STREQUAL "Darwin")
   # every runtime library the library needs, directly or through another runtime library (libgfortran.5.dylib needs
   # libquadmath.0.dylib and libgcc_s.1.1.dylib), with @rpath and @loader_path references resolved against the LC_RPATH
-  # entries of the referencing binary and of libmf6 (Homebrew's gcc links through @rpath);
+  # entries of the referencing binary and of libmf6 (Homebrew's gcc links through @rpath)
   if(NOT RAVEN_MF6_OTOOL)
     find_program(RAVEN_MF6_OTOOL NAMES otool llvm-otool)
   endif()

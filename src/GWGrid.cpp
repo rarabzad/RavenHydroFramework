@@ -186,7 +186,7 @@ void CGWGrid::MakeRegular(const double xa,const double ya,const double xb,const 
     }
   }
   Finish(false);
-  //exact rectangle bounds (the uniform case reproduces the original arithmetic)
+  //exact rectangle bounds (the uniform case gives the regular-grid arithmetic exactly)
   for (int r=0;r<nrow;r++){for (int c=0;c<ncol;c++){int ic=r*ncol+c; bx0[ic]=colX[c]; by0[ic]=rowY[r]; bx1[ic]=colX[c]+colW[c]; by1[ic]=rowY[r]+rowH[r];}}
 }
 
@@ -584,7 +584,7 @@ double CGWGrid::ClipArea(const gw_ring &r,const int ic) const
 void CGWGrid::SamplePoints(const int ic,const int n,vector<gw_pt> &pts) const
 {
   pts.clear(); gw_pt p;
-  if (uniform){ //identical to the original raster sampling
+  if (uniform){ //the regular-grid sampling: origin + (index + offset) * cell size
     for (int i=0;i<n;i++){for (int j=0;j<n;j++){
       p.x=x0+(ic%ncol+(i+0.5)/n)*cs; p.y=y0+(nrow-1-ic/ncol+(j+0.5)/n)*cs; pts.push_back(p);}}
     return;

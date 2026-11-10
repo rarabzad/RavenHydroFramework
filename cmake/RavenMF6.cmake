@@ -46,7 +46,7 @@ set(_RMF6_DIR "${CMAKE_CURRENT_LIST_DIR}")
 
 # RPATH of the Raven executable: $ORIGIN (macOS @loader_path) so that a moved install finds what lies beside it, used in
 # the build tree too (no relink at install), plus the folders of linked libraries outside the system folders (netCDF from
-# conda or spack), without which a build-tree Raven would no longer start.
+# conda or spack), without which a build-tree Raven cannot start.
 function(raven_mf6_rpath target)
   if(APPLE)
     set(_origin "@loader_path")
@@ -154,7 +154,7 @@ endif()
 # stop (explicit mode) or fall back to OFF with a warning (default)
 macro(_rmf6_giveup)
   # the message may come in up to four quoted pieces, joined piece by piece: a ';' inside the text is kept (string(CONCAT
-  # ${ARGV}) split the text at every ';' and dropped it)
+  # ${ARGV}) would split the text at every ';' and drop it)
   set(_rmf6_msg "${ARGV0}")
   if(${ARGC} GREATER 1)
     string(APPEND _rmf6_msg "${ARGV1}")
@@ -197,7 +197,8 @@ function(_rmf6_meson_version file out)
   set(${out} "${_v}" PARENT_SCOPE)
 endfunction()
 
-# target architecture: on Windows the generator platform (-A ARM64), else the compiler's, else the processor (); elsewhere a single CMAKE_OSX_ARCHITECTURES entry, else CMAKE_SYSTEM_PROCESSOR
+# target architecture: on Windows the generator platform (-A ARM64), else the compiler's, else the processor; elsewhere
+# a single CMAKE_OSX_ARCHITECTURES entry, else CMAKE_SYSTEM_PROCESSOR
 function(_rmf6_target_arch out)
   set(_a "")
   if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -399,7 +400,7 @@ if(NOT RAVEN_MF6_MODE)
   set(_rmf6_tools_found ${_rmf6_tools_ok})        # (the fallback warning names the network, not the tools)
   if(_rmf6_tools_ok)
     _rmf6_git_reachable(_rmf6_git_ok _rmf6_git_why)
-    if(NOT _rmf6_git_ok)                           # offline: fall back now, not at build time
+    if(NOT _rmf6_git_ok)                           # offline: fall back at configure time, not at build time
       set(_rmf6_tools_ok FALSE)
       set(_rmf6_tools_why "${_rmf6_git_why}")
       message(WARNING "RAVEN_MF6: the default cannot build MODFLOW 6 from source: ${_rmf6_git_why}. "
@@ -493,7 +494,8 @@ if(RAVEN_MF6_MODE STREQUAL "PREBUILT")
   endif()
   set(_zip "")
   if(NOT "${RAVEN_MF6_ZIP}" STREQUAL "")
-    # a zip on disk: stamped by its own SHA256 (a replaced zip, or another with the same name, is unpacked again) and compared with the expected SHA256 at EVERY configure
+    # a zip on disk: stamped by its own SHA256 (a replaced zip, or another with the same name, is unpacked again) and
+    # compared with the expected SHA256 at EVERY configure
     if(NOT EXISTS "${RAVEN_MF6_ZIP}" OR IS_DIRECTORY "${RAVEN_MF6_ZIP}")
       _rmf6_giveup("RAVEN_MF6_ZIP=${RAVEN_MF6_ZIP} does not exist (or is not a file)")
     endif()

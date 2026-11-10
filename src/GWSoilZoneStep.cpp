@@ -6,7 +6,7 @@
   :SoilZone PHYSICAL, before Raven's processes of a step (soil_zone_columns_plan.md sections 3 and 4):
   - :SoilZoneExchangeTiming LAGGED: the columns' exchange of the last step is given to them (and to Raven's soil-zone
     layers) before Raven's processes, so that evaporation and percolation see the water that rises in; it is taken
-    back out of the columns when the exchange begins, and the step's exchange is booked as before (MODFLOW's flow).
+    back out of the columns when the exchange begins, and the step's exchange is booked as MODFLOW's flow.
   - :SoilZoneClasses K: the columns of each HRU are grouped into up to K classes by wetness; Raven's processes run once
     per class with the class's soil water (Solvers.cpp), and each class's result goes to its own columns.
   ----------------------------------------------------------------*/

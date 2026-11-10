@@ -347,7 +347,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     }
     else if (!strcmp(s[0],":SoilZoneExchangeTiming"))
     {/*:SoilZoneExchangeTiming AFTER | LAGGED  (default LAGGED: the last step's exchange is a source before Raven's
-       processes and only its change follows; AFTER: the exchange follows the processes, as in the basic soil zone) */
+       processes and only its change follows; AFTER: the whole exchange follows the processes) */
       if ((Len<2) || (strcmp(s[1],"AFTER") && strcmp(s[1],"LAGGED"))){GWImproperFormat(s,Options);}
       else {pGW->SetSoilZoneTiming(strcmp(s[1],"LAGGED")?0:1); szOpts+=" :SoilZoneExchangeTiming";}
     }
@@ -478,7 +478,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     else if (!strcmp(s[0],":NameFile")         || !strcmp(s[0],":GWRiverConnection") || !strcmp(s[0],":Drains") ||
              !strcmp(s[0],":ETProperties")     || !strcmp(s[0],":RavenCBCUnitNumber")|| !strcmp(s[0],":Recharge") ||
              !strcmp(s[0],":RechargeOptionCode")|| !strcmp(s[0],":NumNodes")         || !strcmp(s[0],":NumDrains"))
-    { //commands of the earlier MODFLOW-USG coupling (preserved, outside the build, in legacy/mfusg/)
+    { //commands of Raven's MODFLOW-USG coupling (Raven 4.15 and earlier): refused, naming the MODFLOW 6 commands
       ExitGracefully(("ParseGWFile: "+string(s[0])+" belongs to the MODFLOW-USG coupling of Raven 4.15 and earlier, which this version "
                       "replaces with MODFLOW 6. To couple an existing MODFLOW 6 model use :MF6Simulation (an :OverlapWeights "
                       "table in the same format is accepted); see the manual chapter \"Coupling an existing MODFLOW 6 model\"").c_str(),BAD_DATA);

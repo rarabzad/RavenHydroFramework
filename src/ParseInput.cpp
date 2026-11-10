@@ -3018,7 +3018,7 @@ bool ParseMainInputFile (CModel     *&pModel,
       if(Options.noisy) { cout <<"Recharge process"<<endl; }
       if(Len<4) { ImproperFormatWarning(":Recharge",p,Options.noisy); break; }
       recharge_type   rech_type =RECHARGE_FROMFILE;
-      //(obsolete MODFLOW-USG recharge classes removed)
+      //(RECHARGE_DATA and RECHARGE_FLUX, MODFLOW-USG recharge classes, are refused below)
       int rech_typ=1;
 
       if     (!strcmp(s[1],"RECHARGE_CONSTANT"        )) { rech_type=RECHARGE_CONSTANT; }

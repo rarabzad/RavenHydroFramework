@@ -66,11 +66,10 @@ namespace gwvz
   ///  (qtop_applied - qbot) dt to round-off, qbot >= 0. The column takes any inflow qtop >= 0 (a full node passes on what
   ///  it receives, the last one into the water table: the capillary fringe, where th_eq is close to ths and the nodes have
   ///  no room, is crossed at once), so rejected = 0 on an active column; an upward demand qtop < 0 is rejected entirely
-  ///  (capillary rise of LAG comes from the water table, steady); an inactive column rejects qtop and returns no qbot
-  ///.
+  ///  (capillary rise of LAG comes from the water table, steady); an inactive column rejects qtop and returns no qbot.
   ///  Exact exponential solution per node and substep with piecewise-constant inflow (the mean outflow of the node above in
   ///  the same substep): substeps no longer than the shortest residence time, at most 50; their number is computed in
-  ///  double and clamped before the cast (a tiny residence time, N = 200 or LAG 1e-6, overflowed the int)
+  ///  double and clamped before the cast (a tiny residence time, N = 200 or LAG 1e-6, would overflow the int)
   //
   double StepLag(vz_column &c,const vz_strat &S,const double dt,const double qtop,double &rejected,vz_step_info *info,const double par)
   {

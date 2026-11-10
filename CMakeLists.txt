@@ -19,7 +19,7 @@ PROJECT(Raven CXX)
 
 # Single-configuration generators (Unix Makefiles, Ninja) ignore "cmake --build --config Release": without a build type
 # Raven would be compiled without optimisation (about 3 times slower). Default: Release; -DCMAKE_BUILD_TYPE=... overrides
-# it. Multi-configuration generators (Visual Studio, Xcode, Ninja Multi-Config) choose with --config as before.
+# it. Multi-configuration generators (Visual Studio, Xcode, Ninja Multi-Config) take the configuration from --config.
 get_property(_raven_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(NOT _raven_multi_config AND NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type: Release (default), Debug, RelWithDebInfo or MinSizeRel" FORCE)

@@ -31,7 +31,7 @@ static const double SZ_WSREL=0.1; ///< wrong-sign exemption of the per-link boun
 static const double SZ_WSH  =1.0; ///< ... or at least this many head tolerances times the link's K
 
 //////////////////////////////////////////////////////////////////
-/// \brief soil-zone layers of every coupled HRU, thickness, and the checks of the plan (section 3)
+/// \brief soil-zone layers of every coupled HRU, thickness, and the checks of the soil-zone set-up
 //
 void CGroundwaterModel::SZSetup()
 {
@@ -233,8 +233,8 @@ void CGroundwaterModel::SZBuildEntries()
     }
     else {for (size_t q=0;q<_cellDem[ic].size();q++){cell.zbs.push_back(_cellDem[ic][q]-_szD[L.k]);}}
     //no base below the top cell's bottom + 1 mm, the lowest level MODFLOW's drains of the link can have (SZSetArrays): in
-    //the 1 mm band below it the local solve's upflow and the drain MODFLOW gets differed (rough suite x43, e511: booked flows
-    //68 % short)
+    //the 1 mm band below it the local solve's upflow and the drain MODFLOW gets would differ (in a rough-terrain case the
+    //booked flows would be 68 % short)
     {const double zf=_botm[TopNode(ic)]+1e-3; for (size_t q=0;q<cell.zbs.size();q++){cell.zbs[q]=max(cell.zbs[q],zf);}}
     std::sort(cell.zbs.begin(),cell.zbs.end());
     cell.ds=P.seep_smooth_depth; cell.D=_szD[L.k]; cell.C=C;
@@ -616,7 +616,7 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
     //a negative recharge (Raven's processes take water out of GROUNDWATER, e.g. PERC_GR4JEXCH with GR4J_X2 > 0) is not split
     //by the saturated fraction: all of it is taken from MODFLOW (the top cell's recharge; on a column link the column's share,
     //VZStep), nothing is rejected for saturation. MODFLOW's recharge would take it out of the top cell whatever the cell holds
-    //(a cell drained by it fell to heads of -1e4 m and the run stopped), so on an exchange link it is at
+    //(a cell drained by it can fall to heads of -1e4 m and stop the run), so on an exchange link it is at
     //most what the top cell can still give this step (_szxNegCap, SZNegCaps); the rest is taken back out of the soil zone,
     //as a negative rejected recharge (SZApply). HRUs without a soil zone keep the plain recharge
     const bool neg=(V<0.0);
@@ -751,7 +751,7 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     if (!steady){
       phi.assign(_szColPhi.begin()+c*n,_szColPhi.begin()+(c+1)*n);
       {double shR=0.0; gwsz::Apply(_szLay[k],phi,_szxRej[e]/a*MM_PER_METER,shR);} //rejected recharge back to the column (negative: the cut
-                                                                                 // taken back out, as SZApply does; Fill ignored it)
+                                                                                 // taken back out, as SZApply does)
       if ((e<_szxLagD.size()) && (_szxLagD[e]!=0.0)){                            //LAGGED: the part of the source not taken back
         if (_szxLagD[e]>0.0){gwsz::Fill(_szLay[k],phi,_szxLagD[e]);} else {double sh=0.0; gwsz::Apply(_szLay[k],phi,_szxLagD[e],sh);}
       }
@@ -802,8 +802,8 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     //Where the soil drains to the aquifer (q >= 0) the slope is limited so that the flow never exceeds the column's free
     //water over the step down to the cell bottom, as the river and store exchanges are limited. Where water rises into
     //the soil (q < 0) a linear boundary would reverse when the head falls below Hg and drain columns without free water
-    //(water created), and a slope small enough to prevent that pumps water up from below the contact
-    //: the line is given to MODFLOW as a drain instead (SZSetArrays), which stops at Hg, and the secant
+    //(water created), and a slope small enough to prevent that pumps water up from below the contact: the line is
+    //given to MODFLOW as a drain instead (SZSetArrays), which stops at Hg, and the secant
     //floor keeps Hg at or above the end of the contact.
     //(Iterated, the converged flow is the local solve's, which respects both limits.)
     //the rejected recharge's linear term s (hc - h) (SZSetArrays): the slope of the head-dependent rejection at the connection
@@ -817,8 +817,8 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
     _szxOne[e]=0;
     if (!steady && ((_szMaxIter==0) || (SZFreezeAt()<1) || _szCapUpd)){
       //down to the lowest head the cell can reach: the bottom of the column's lowest active cell (under NEWTON the head of a
-      //dried top cell falls below its bottom: MODFLOW took 8453 m3/d from a column limited down to the top cell's bottom
-      //only)
+      //dried top cell falls below its bottom, and a column limited down to the top cell's bottom only can lose thousands
+      //of m3/d more than it holds)
       double avail=gwsz::StackFreeWater(_szLay[k],phi)/MM_PER_METER*a/tstep;           //[m3/d]
       double zlow=_botm[TopNode(L.ic)];
       for (int l=_nlay-1;l>=0;l--){const int nd=UserNode(l,L.ic); if (_idomain[nd]>0){zlow=_botm[nd]; break;}}
@@ -834,7 +834,7 @@ void CGroundwaterModel::SZLocalSolves(const double &tstep,const bool steady)
       double cap=max(avail-ts-q,0.0)/max(h-zlow,1e-3);
       if (q>=0.0){Cg=max(min(Cg,cap),1e-9*cell.C);}
       else if (Cg>cap){ //only where the line could take more than the column holds: one-sided, if at least 10 MODFLOW
-                        //solves follow; with fewer MODFLOW did not settle on the changed boundary, and the line stays,
+                        //solves follow; with fewer MODFLOW does not settle on the changed boundary, and the line stays,
                         //as limited as the secant floor allows (a reversal can then still overdraw)
         //(not in a cell dry at the head of linearization: a drain there is inactive at that head, MODFLOW's first Newton
         //iterate sees no boundary and its head runs away)
@@ -900,7 +900,7 @@ void CGroundwaterModel::SZSetArrays(const bool steady)
       //the level where the contact ends, and a column without free water gives nothing either, so the exchange has a kink
       //there, across which a line overshoots (it reverses into flow out of the column, which holds none) and the iteration
       //cycles (test S2); a column with free water drains below the line's zero, and keeps the line (a drain there would turn
-      //the exchange's slope: the Liard link of exemption (i) crept for 100 updates). MODFLOW gets the exchange as a drain
+      //the exchange's slope: the Liard link of exemption (i) would creep for 100 updates). MODFLOW gets the exchange as a drain
       //ending at the line's zero, at least
       //the cell bottom + 1 mm (no sample base lies below that level, SZBuildEntries), steepened there to carry the exchange
       //at the head of linearization (at most to the larger of Cg and the link conductance). Its onset is smoothed (DDRN)
@@ -969,8 +969,8 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   //the last outer iterations (a tenth, at least 2) are left to MODFLOW on the boundary it has: an update just before
   //the limit would leave MODFLOW's final solve unconverged, and its residual would be water created or lost. The
   //update after iteration SZFreezeAt() and the last one the update budget allows make their boundary supply-limited,
-  //as in explicit mode. Once frozen nothing changes any more (a supply-limited update after the freeze left too few
-  //solves for MODFLOW to absorb it when MODFLOW could not converge). When MODFLOW does not converge in
+  //as in explicit mode. Once frozen nothing changes (a supply-limited update after the freeze would leave too few
+  //solves for MODFLOW to absorb it when MODFLOW cannot converge). When MODFLOW does not converge in
   //the iterations after the first ones, the last update can be an earlier, unlimited one; with a low outer-iteration
   //limit its boundary can then take more from a column than it holds (reported as soil-zone shortfall, like MODFLOW's
   //own residual on such steps)
@@ -986,7 +986,7 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   if (!mf6conv && (iter>nEarly)){return false;}                               //let MODFLOW converge first
   if (!mf6conv && SZDivergedIterate()){return false;} //no update from a diverged iterate: its local solves give absurd boundaries
                                                       //(GHB heads of 1e45 m, exchanges of -5e49 m3/d) from which MODFLOW does not
-                                                      //recover, whereas on the boundary it has MODFLOW alone does
+                                                      //recover, whereas on the boundary it has MODFLOW alone does)
   //state MODFLOW just solved with: kept if this update shows the interface has converged, so that MODFLOW's budget
   //(computed from the arrays it solved with) and the flows Raven books stay exactly consistent
   _szEsum=0.0;
@@ -1003,9 +1003,9 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   //differs from the fraction at the current head must be within the head tolerance as well (at a converged interface
   //hc = h), in head units: over the larger of the link's conductance (as the exchange it misses, SZLocalSolves) and the
   //column's storage over the step (Sy a / dt), either of which takes up such a flow. The exchange does not see the
-  //connection where the soil water stands at the water table (every sample's level at its aquifer side), and the
-  //interface then passed as converged with the fraction of an earlier iterate (rough-terrain suite: 91 % of a link's
-  //recharge rejected with the water table below every base point of its cell)
+  //connection where the soil water stands at the water table (every sample's level at its aquifer side), and without
+  //this test the interface could pass as converged with the fraction of an earlier iterate (in a rough-terrain case 91 %
+  //of a link's recharge rejected with the water table below every base point of its cell)
   if (!steady){
     for (size_t e=0;e<_szxLink.size();e++){
       if (!SZRejFollows((int)e)){continue;}
@@ -1019,26 +1019,26 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
     //nor may the boundary MODFLOW solved with (the exchange's line, drain or rate, and the rejection's linear term, from
     //MODFLOW's HCOF and RHS as the booking reads them) differ at the current head from what it stands for: the local
     //solve's exchange there plus the change of the rejected recharge from the connection head it was built at. The tests
-    //above compare successive local solves only; a line linearized where the exchange was steep (just above the soil-zone
-    //base) and continued below it, where the exchange no longer depends on the head, passed as converged although at the
-    //head MODFLOW returned it carried several times the local solve's flow (existing-model round trips of test_vz_lag L5
-    //and test_vz_kinematic K6: generated and existing model stopped on different sides of that kink); and the rejection's
-    //term s (hc - h), solved with a chord s from an earlier iterate, carried 50 m3/d into a cell whose head had fallen
-    //1.3 m below hc, where the rejection is 0 at both heads. Per link, in head units:
+    //above compare successive local solves only; a line linearized where the exchange is steep (just above the soil-zone
+    //base) and continued below it, where the exchange does not depend on the head, would pass as converged although at the
+    //head MODFLOW returns it carries several times the local solve's flow (existing-model round trips of test_vz_lag L5
+    //and test_vz_kinematic K6: generated and existing model stop on different sides of that kink); and the rejection's
+    //term s (hc - h), solved with a chord s from an earlier iterate, can carry 50 m3/d into a cell whose head has fallen
+    //1.3 m below hc, where the rejection is 0 at both heads (rough suite x43 LAG). Per link, in head units:
     //the difference E over the larger of the link's conductance and the column's storage over the step (as the tests
     //above) must be below the head tolerance. Two parts that no update removes are left out, and only they:
     // - a line link (not a drain) whose local solves' exchange rises with the head (upflow falling as the head rises: the secant through
     //   the last two local solves has the wrong sign for a boundary line, whose conductance cannot be negative), the
     //   head having moved by more than the head tolerance between them with the connection held (below): the line's
     //   error from that slope (the exchange part of E; the rejection's part is still tested), up to B = max(10 % of the
-    //   link's flow, the head tolerance times K); beyond B it is tested. The previous per-link test stalled the Liard run
-    //   on such a link (MODFLOW's head crept 3 mm per update for 100 updates, 7 % of the link's flow). Its exchange part
+    //   link's flow, the head tolerance times K); beyond B it is tested. A per-link test without the exemption stalls the
+    //   Liard run on such a link (MODFLOW's head creeps 3 mm per update for 100 updates, 7 % of the link's flow). Its exchange part
     //   stays in the summed test (_szEsum, held to the flow test's tolerance), and the connection test below allows it
     //   the same B (the connection's lag is that drift);
     // - on a link MODFLOW has as a drain (the kink drain: _szxDrn) whose head is within 1 mm of the level of the drain
     //   MODFLOW solved with (and within that drain's smoothing depth): MODFLOW's smoothing of the drain's onset (DDRN)
     //   takes the difference between the unsmoothed drain and the smoothed one there, which no update removes (rough
-    //   suite e106: the interface stalled on 3 to 4 steps). Only that difference, computed from MODFLOW's own drain
+    //   suite e106: the interface would stall on 3 to 4 steps). Only that difference, computed from MODFLOW's own drain
     //   factor, is left out: the booked flow then differs from the local solve's by at most the drain's conductance
     //   (at most C) times 1 mm (up to all of a small flow).
     //Drains are held to the column's supply by SZSolvedShortfall
@@ -1068,8 +1068,7 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
           if ((hm>el) && (hm-el<min(dep,1e-3)+1e-9)){E-=(_szdHcof[e]*hx-_szdRhs[e])*_qf+cd*(hm-el);} //(smoothed - unsmoothed flow into the aquifer)
           //(a drain raised to the cell bottom + 1 mm with its conductance at its limit max(C_g, C) carries all the upflow
           //the local solve gives: no sample base lies below that level (SZBuildEntries), and a sample gives upflow only where the
-          //head is above its base, at most C (h - base) in all. The exemption of the upflow beyond cd (h - bottom), needed
-          //while the bases could lie in the 1 mm below MODFLOW's lowest drain, is gone)
+          //head is above its base, at most C (h - base) in all; so no upflow beyond cd (h - bottom) needs an exemption)
         }
         const double K=max(_szxCell[e].C,max(SZCellSy(L.ic),0.01)*_szColA[_szxCol[e]]/_szTstep);       //[m2/d]
         if (!(K>0.0)){continue;}
@@ -1079,8 +1078,8 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
         //solve uses the connection this update just set, which may be extrapolated, so the secant is the slope of q(h; h)
         //up to the current solve's connection lag (on an accepted step within the head tolerance times C, the lag test of
         //SZLocalSolves); with
-        //MODFLOW's head barely moving, the sign came from the change of the connection alone (Liard step 352: the head moved
-        //1.6e-5 m, hc0 3.2 cm above it, secant -4.5e7 m2/d, 47 % of the link's flow left out). The
+        //MODFLOW's head barely moving, the sign would come from the change of the connection alone (on a Liard step: the head
+        //moving 1.6e-5 m, hc0 3.2 cm above it, secant -4.5e7 m2/d, 47 % of the link's flow left out). The
         //part left out is bounded per link: up to SZ_WSREL (10 %) of the link's flow (at least the head tolerance times
         //K), beyond which it is tested as on any other link; the connection test below allows the same B
         double Ex=0.0,sec=0.0;                                                                           //[m3/d] (Ex: exempt)
@@ -1092,7 +1091,7 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
         const double Et=E-Ex;
         //the connection MODFLOW solved with (hc0, not the one this update moved on to, which a plain update sets to the
         //head) must give the exchange of a converged connection (hc = h) at the current head within the head tolerance,
-        //as in SZLocalSolves (hc0 1.3 m from MODFLOW's head on a converged step); on every link (on a
+        //as in SZLocalSolves (otherwise hc0 can be 1.3 m from MODFLOW's head on a converged step); on every link (on a
         //wrong-sign link the lag is that drift: there beyond the same bound B)
         if ((fabs(hc0[e]-hm)>1e-12) && (_szxCell[e].C>0.0)){
           double F1,a1,a2,a3;
@@ -1118,7 +1117,7 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   //nor may the boundary MODFLOW solved with take, at its current heads, more out of a column than the column holds (a
   //line steeper than the column can feed, continued below its zero level, reverses into flow out of a column without free
   //water when MODFLOW's head ends a little below where it was linearized: within the head tolerance, but with a
-  //conductance of 1e4 m2/d that is water the soil zone does not have; rough suite: up to 10 m3 on a step that passed). The
+  //conductance of 1e4 m2/d that is water the soil zone does not have; rough suite: up to 10 m3 on a step judged converged otherwise). The
   //next update linearizes at the current head, where the line carries the local solve's flow
   if (conv && !steady){ //(with the rejected recharge booked at convergence)
     int es=-1; const double sf=SZSolvedShortfall(_szTstep,rej0,&es);
@@ -1128,9 +1127,9 @@ bool CGroundwaterModel::SZIterate(double **aPhinew,const int iter,const bool mf6
   //times the head tolerance) where the saturated fraction differs between them: at a converged interface hc = h, and the
   //fraction of hc is what GWSoilExchange.csv reports and what splits the water-table ET. The tests above are of flows, and
   //where none depends on the connection (an empty soil zone, no recharge to reject, columns giving nothing back) they pass
-  //whatever hc is: a regula falsi bracket formed after an early iterate had raised a cell's head 7.5 m stayed while the
-  //head fell back (Illinois halved the stale end's residual until the bracket collapsed onto it), and the interface
-  //converged with hc 2.5 m above the head, a saturated fraction of 0.52 reported over a water table below every base
+  //whatever hc is: a regula falsi bracket formed after an early iterate raised a cell's head 7.5 m can stay while the
+  //head falls back (Illinois halves the stale end's residual until the bracket collapses onto it), and the interface
+  //would converge with hc 2.5 m above the head, a saturated fraction of 0.52 reported over a water table below every base
   //sample (rough suite R20, LAG with :SoilZoneVadoseClasses 3). Such a link's bracket is dropped, so that the next update
   //is the plain one. (Otherwise converged connections lag the head by far less than d_s: by 1 to 2 cm on the instrumented
   //R20 runs; the quick rough suite, all methods, one and three classes, has no other run this test changes). The link's
@@ -1238,9 +1237,9 @@ void CGroundwaterModel::SZApply(double **aPhinew,const double &tstep)
     int nc=SZNCols(k),o=_szColOff[k];
     //negative recharge not held: the cut a column did not hold is taken out of the HRU's other columns (the same Raven
     //soil store; the rest column and those over specified heads included), in proportion to their water; only what the
-    //whole HRU's soil zone cannot supply is booked, and nothing when it holds more than that (no
-    //round-off booked). The soil zone then holds less, at the end of the step, than the cut: a
-    //process after the import (e.g. after PERC_GR4JEXCH) moved the water on before the coupled exchange
+    //whole HRU's soil zone cannot supply is booked, and nothing when it holds more than that (no round-off booked).
+    //The soil zone then holds less, at the end of the step, than the cut: a process after the import (e.g. after
+    //PERC_GR4JEXCH) has moved the water on before the coupled exchange
     if (nuV>0.0){
       double Wt=0.0; for (int c=0;c<nc;c++){double w=0.0; for (int j=0;j<n;j++){w+=max(_szColPhi[(o+c)*n+j],0.0);} Wt+=w/MM_PER_METER*_szColA[o+c];}
       const double f=(Wt>0.0)?nuV/Wt:1.0;
@@ -1344,9 +1343,9 @@ double CGroundwaterModel::SZSolvedShortfall(const double &tstep,const vector<dou
 ///  a link whose top-cell head (the only heads the local solves read) lies far outside the model's elevations (the divergence
 ///  margin of the stop after the solve: 10 times the relief, at least 1 km) and is not where the link's connection head of
 ///  the last update or the last step was: more than the margin from it, and on the other side of the model or more than the
-///  margin further outside (position-based). The local solves at such heads gave MODFLOW absurd boundaries (GHB heads of
-///  1e45 m) from which it did not recover; a far head a converged state legitimately holds (an
-///  over-pumped confined cell) does not skip the updates
+///  margin further outside (position-based). The local solves at such heads give MODFLOW absurd boundaries (GHB heads of
+///  1e45 m) from which it does not recover; a far head a converged state legitimately holds (an over-pumped confined
+///  cell) does not skip the updates
 //
 bool CGroundwaterModel::SZDivergedIterate() const
 {

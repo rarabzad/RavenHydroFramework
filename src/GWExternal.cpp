@@ -596,7 +596,7 @@ void CGroundwaterModel::ExtProbe()
     }
     _mf6Newton=nw;
     //without NEWTON a top cell that dries leaves MODFLOW's solve (HDRY), and the recharge, the soil-zone exchange and the
-    //columns over it lose their cell (rough-terrain suite: such runs stopped or misbehaved): required
+    //columns over it lose their cell (in the rough-terrain suite such runs stop or misbehave): required
     ExitGracefullyIf(SZPhysical() && !nw,("CGroundwaterModel: :SoilZone PHYSICAL needs an existing model that uses the Newton-Raphson formulation: add NEWTON to "
       "the OPTIONS of "+_mf6dir+"/"+_extNamFile+" (MODFLOW 6 then also needs LINEAR_ACCELERATION BICGSTAB in its IMS file)").c_str(),BAD_DATA);
     if (uo && nu){
@@ -673,8 +673,9 @@ void CGroundwaterModel::ExtProbe()
     _extKv.assign(nuser,0.0); _extSy.assign(nuser,sy0);
     int nlow=0,nact=0;
     for (int n=0;n<nuser;n++){int r=_reduced[n]; if (r<0){continue;} _extKv[n]=kk[r]*_hf*_extTf; if (sy!=NULL){_extSy[n]=sy[r]; nact++; if (!(sy[r]>=0.01)){nlow++;}}}
-    if (nlow>0){ //(SY is the model's data, kept: e.g. ICONVERT 0 cells, whose SY MODFLOW does not use, often hold 0; all of them 0
-                 // included, decided so that such models' outputs stay unchanged)
+    if (nlow>0){ //(SY is the model's data, kept as given also where it is 0, as ICONVERT 0 cells often hold it, and floored at
+                 // 0.01 where Raven uses it: a 0 cannot be told from an intended small value, and MODFLOW stores only S_s b in
+                 // a confined cell, which a small S_y matches better than an assumed 0.2)
       WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: the existing model's specific yield (STO SY) is below 0.01 in "+to_string(nlow)+" of its "+
                    to_string(nact)+" active cells (cells with ICONVERT 0 often hold SY 0, which MODFLOW does not use): 0.01 is used there for the soil-zone"
                    " release limits and the unsaturated columns; give SY in the model's STO package if the water table there has a larger specific yield",false);

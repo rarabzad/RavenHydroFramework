@@ -191,7 +191,7 @@ namespace gwsz
                                                       //as every sample's level is then its base, at or below its aquifer side)
     //Brent's method on the bracket [lo,hi] (g(lo)<=0<=g(hi)): inverse quadratic / secant steps on the smooth pieces of
     //g, bisection whenever they would leave the bracket or converge too slowly; about 6-10 evaluations instead of the
-    //50 of a plain bisection, to the same ~1e-13 relative tolerance (result-neutral speed-up, soil zone §7)
+    //50 of a plain bisection, to the same ~1e-13 relative tolerance
     {
       double a=lo,b=hi,fa=glo,fb=ghi;
       if (fa==0.0){b=a; fb=fa;}
