@@ -249,6 +249,8 @@ private:/*----------------------------------------------------*/
   void                   OpenNetCDF(const optStruct &Options);
   void                   WriteNetCDF(const double &t);
   vector<char>           _colCHDTop; ///< per column: top active cell is a specified-head (CHD) cell
+  vector<char>           _colCHDSw;  ///< per column (generated models): its specified-head cells all follow a :BoundaryHead series; _colCHDTop holds on the steps one of them is held
+  bool                   _chdSwAny,_resSw; ///< some column is such a column; some lake lies over one (its seepage on their held steps is returned, as in an existing model)
   vector<double>         _hruRchArea;///< per HRU: linked area excluding CHD-topped columns [m2]
   double                 _QrchCHD;   ///< [m3/d] recharge of HRUs lying entirely on CHD cells (passes to the CHD boundary)
   string                 EndDate(const double &t) const;
@@ -595,7 +597,11 @@ private:/*----------------------------------------------------*/
   void BuildLinks     ();
   void BuildRivers    ();
   void BuildStresses  ();
+  double _gridEst; string _gridWhat; ///< cells per layer of the grid being built (estimated before it is built) and the command that sets it
   void SetBoundaryArrays(const double &t,const double &tstep);
+  int  CHDEntriesOn(const double &t,const double &tstep,vector<char> &on,vector<double> *hs) const;
+  bool ResUndelivered() const {return (_resNode.size()>0) && (IsExternal() || _resSw);} ///< seepage the cells under a lake cannot take is returned and booked
+  void UpdateSwitchedCHDTop(const double &t,const double &tstep);
   void RunSteadyState ();
   void ComputeStressFlows();
   vector<int> SelectColumns(const string &file) const;

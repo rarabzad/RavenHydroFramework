@@ -7,7 +7,9 @@
 ----------------------------------------------------------------*/
 #include "GroundwaterModel.h"
 #include <set>
+#include <new>
 //optional stage timing for large grids: set RAVEN_GW_PROFILE=1
+static const double GW_MAX_CELLS_PER_LAYER=5.0e6; ///< largest grid Raven builds [cells per layer]: refused before it is built (estimated) and after
 static const double SZ_FAR_RESID=0.01; ///< largest MODFLOW residual [-] of the gross aquifer flow with which an unconverged step holding a head far
                                        ///< outside the model is carried on
 static double gw_prof_t0=-1;
@@ -59,7 +61,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _evtRate=_evtHcof=_evtRhs=NULL; _evtNcol=0; _Qevt=0.0;
   _welQ=_welHcof=_welRhs=_ghbHead=_ghbCond=_ghbHcof=_ghbRhs=_chdHead=_chdSim=NULL;
   _welNcol=_ghbNcol=_chdNcol=0; _Qwel_spec=_Qwel=_Qghb=_Qchd=0.0;
-  _chdNb=_chdNl=_chdIb=NULL; _chdIbc=0; _chdPacked=false; _bndOffNow=0; _bndOffN=0;
+  _chdNb=_chdNl=_chdIb=NULL; _chdIbc=0; _chdPacked=false; _bndOffNow=0; _bndOffN=0; _chdSwAny=_resSw=false; _gridEst=0.0;
   _steadyInit=false; _doSteady=false; _ssRecharge=0.0; _initMode="FROM_PROFILE"; _initValue=0.0;
   _hotDims[0]=_hotDims[1]=_hotDims[2]=0; _active=false;
   _rchStoreTot=0.0; _QrchCHD=0.0; _rivBedDepth=-1.0;
@@ -583,6 +585,8 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
   for (map<string,CTimeSeries*>::iterator it=_headTS.begin();it!=_headTS.end();it++){ //(before BuildStresses: the boundaries are placed with the
     it->second->Initialize(Options.julian_start_day,Options.julian_start_year,Options.duration,Options.timestep,false,Options.calendar); // series' heads)
   }
+  _gridEst=0.0; _gridWhat=":GridCellSize";
+  try { //a grid within the size limit can still need more memory than the computer has: a stop, not a crash (to the model's files)
   if (IsExternal()){ExtBuild(Options); GWPROF("ExtBuild");}
   else {
   BuildGeometry(Options); GWPROF("BuildGeometry");
@@ -600,10 +604,15 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
     it->second->Initialize(Options.julian_start_day,Options.julian_start_year,Options.duration,Options.timestep,false,Options.calendar);
   }
   //MODFLOW ignores recharge on specified-head cells: recharge is spread over each HRU's other cells
-  _colCHDTop.assign(_ncpl,0);
+  _colCHDTop.assign(_ncpl,0); _colCHDSw.assign(_ncpl,0); _chdSwAny=false; _resSw=false;
   for (size_t e=0;e<_chdNode.size();e++){int ic=_chdNode[e]%_ncpl; bool top=true;
     for (int l=0;l<_chdNode[e]/_ncpl;l++){if (_idomain[UserNode(l,ic)]>0){top=false;}} if (top){_colCHDTop[ic]=1;}}
-  _hruRchArea.assign(_pModel->GetNumHRUs(),0.0);
+  if (!IsExternal() && !_chdNode.empty()){ //a column whose specified-head cells all follow a :BoundaryHead series holds no cell on the
+    vector<char> fixedC(_ncpl,0);          //steps the series switches all of them off: its recharge, soil-zone, store and lake entries
+    for (size_t e=0;e<_chdNode.size();e++){if (_aBounds[_chdB[e]].pHead==NULL){fixedC[_chdNode[e]%_ncpl]=1;}} //are built as for an
+    for (int ic=0;ic<_ncpl;ic++){if (_colCHDTop[ic] && !fixedC[ic]){_colCHDSw[ic]=1; _colCHDTop[ic]=0; _chdSwAny=true;}} //ordinary column, and it
+  }                                                                                                       //is a specified-head column
+  _hruRchArea.assign(_pModel->GetNumHRUs(),0.0);                                                          //on the other steps only
   for (size_t li=0;li<_aLinks.size();li++){if (!_colCHDTop[_aLinks[li].ic]){_hruRchArea[_aLinks[li].k]+=_aLinks[li].area;}}
   if (SZPhysical()){SZBuildEntries();}
   //surface-water store <-> aquifer exchanges: one head-dependent cell per column holding group HRUs
@@ -689,6 +698,8 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
       _resWk.push_back((hf!=_hotResFrac.end())?min(max(hf->second,0.0),1.0):1.0);
     }
   }
+  for (size_t e=0;e<_resNode.size();e++){if (_chdSwAny && _colCHDSw[_resNode[e]%_ncpl]){_resSw=true;}}
+  UpdateSwitchedCHDTop(0.0,Options.timestep); //(the first step's specified-head columns, once every entry is built)
   _doSteady=_steadyInit;
   if (_doSteady && (_hotHeads.size()>0)){
     WriteAdvisory("CGroundwaterModel: hotstart heads found in .rvc; steady-state initialization skipped",Options.noisy);
@@ -699,6 +710,18 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
   else {
   WriteMF6Files(Options); GWPROF("WriteMF6Files");
   WriteGridCells(Options); GWPROF("WriteGridCells");
+  }
+  }
+  catch (std::bad_alloc &){ //the grid and the overlaps are freed first: the stop itself needs memory to write its message
+    const double ncpl=max(_gridEst,(double)_ncpl); const bool ref=(_gridWhat==":GridRefinement");
+    _grid=CGWGrid(); vector<map<int,double> >().swap(_hruCells); vector<gw_link>().swap(_aLinks); vector<vector<int> >().swap(_hruLinks);
+    vector<double>().swap(_botm); vector<double>().swap(_strt); vector<int>().swap(_idomain); vector<int>().swap(_reduced);
+    vector<vector<double> >().swap(_cellDem); vector<double>().swap(_szColPhi);
+    ostringstream S;
+    if (IsExternal()){S<<"CGroundwaterModel: not enough memory to couple the existing model ("<<setprecision(3)<<ncpl<<" cells per layer)";}
+    else {S<<"CGroundwaterModel: not enough memory to build the groundwater model (about "<<setprecision(3)<<ncpl
+      <<" cells per layer, from "<<(ref?":GridRefinement":":GridCellSize")<<"): give a larger :GridCellSize or larger :GridRefinement sizes, in metres as plain numbers";}
+    ExitGracefully(S.str().c_str(),BAD_DATA);
   }
   ConnectEngine(); GWPROF("ConnectEngine");
   _active=true;
@@ -1098,9 +1121,10 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
         double x,y; _grid.ToLocal(prj[k][r][n].x,prj[k][r][n].y,x,y); prj[k][r][n].x=x; prj[k][r][n].y=y;
         minx=min(minx,x);maxx=max(maxx,x);miny=min(miny,y);maxy=max(maxy,y);}}}
   }
+  const double maxCells=GW_MAX_CELLS_PER_LAYER; //(one limit, checked before any grid is built and again after)
   if (_gridType!=GWGRID_FILE){ //a cell size far too small for the HRUs' extent (given in km, or split by a thousands separator) would exhaust the memory
-    const double maxCells=1.0e7;
     double nc=ceil((maxx-minx)/cs)+1.0,nr=ceil((maxy-miny)/cs)+1.0;
+    _gridEst=nc*nr;
     if (nc*nr>maxCells){
       ostringstream S; S<<"CGroundwaterModel: :GridCellSize "<<cs<<" m gives about "<<setprecision(3)<<nc*nr<<" cells per layer over the HRUs' extent ("
         <<setprecision(4)<<(maxx-minx)/1000.0<<" km by "<<(maxy-miny)/1000.0<<" km), more than "<<maxCells<<": give the cell size in metres as a plain number "
@@ -1138,9 +1162,10 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
         ncr[a]+=max(1.0,ceil(cs/target-1e-9));
       }
     }
-    if (ncr[0]*ncr[1]>1.0e7){
+    _gridEst=ncr[0]*ncr[1]; _gridWhat=":GridRefinement";
+    if (ncr[0]*ncr[1]>maxCells){
       ostringstream S; S<<"CGroundwaterModel: the :GridRefinement sizes give a regular grid of about "<<setprecision(3)<<ncr[0]*ncr[1]<<" cells per layer ("
-        <<setprecision(9)<<ncr[0]<<" columns by "<<ncr[1]<<" rows), more than 1e+07: give larger refinement sizes in metres as plain numbers, "
+        <<setprecision(9)<<ncr[0]<<" columns by "<<ncr[1]<<" rows), more than "<<setprecision(3)<<maxCells<<": give larger refinement sizes in metres as plain numbers, "
         <<"or use :GridType QUADTREE or HRU_MESH, which refine only around the features";
       ExitGracefully(S.str().c_str(),BAD_DATA);
     }
@@ -1149,12 +1174,28 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   else if (_gridType==GWGRID_QUADTREE){
     double smin=cs; for (size_t i=0;i<ref.size();i++){smin=min(smin,ref[i].size);}
     int lev=(_qtMaxLevel>=0)?_qtMaxLevel:max(0,(int)ceil(log(cs/smin)/log(2.0)-1e-9));
-    _grid.MakeQuadtree(minx,miny,maxx,maxy,cs,ref,lev);
+    //the refined grid's size, estimated before it is built (a refinement size given in km, or split by a thousands
+    //separator, asks for millions of cells); the build itself also stops at the limit
+    const double est=CGWGrid::EstimateQuadtreeCells(minx,miny,maxx,maxy,cs,ref,lev,2.0*maxCells); //(counted up to twice the limit)
+    if (!ref.empty()){_gridEst=est; _gridWhat=":GridRefinement";}
+    //the estimate is within about a third of the cells built (it counts the squares split but not exactly the 2:1
+    //balance), so it refuses only a grid clearly beyond the limit; one nearer is built, and the build stops at the limit
+    const double QT_MARGIN=1.5;
+    bool built=(est<=QT_MARGIN*maxCells) && _grid.MakeQuadtree(minx,miny,maxx,maxy,cs,ref,lev,maxCells);
+    if (!built){
+      ostringstream S; S<<"CGroundwaterModel: the :GridRefinement sizes (smallest "<<setprecision(4)<<smin<<" m, "<<lev<<" levels below the :GridCellSize "<<cs
+        <<" m) give a quadtree grid of "<<setprecision(3);
+      if      (est>2.0*maxCells)       {S<<"more than "<<2.0*maxCells<<" cells per layer (estimated), more than "<<maxCells;}
+      else if (est>QT_MARGIN*maxCells) {S<<"about "<<est<<" cells per layer (estimated), more than "<<maxCells;}
+      else                             {S<<"more than "<<maxCells<<" cells per layer (the build stopped there)";}
+      S<<": give larger refinement sizes in metres as plain numbers (for example 500, not 0.5 or 1,000), or a :QuadtreeMaxLevel";
+      ExitGracefully(S.str().c_str(),BAD_DATA);
+    }
   }
   else if (_gridType==GWGRID_HRUMESH){
     vector<vector<gw_ring> > rr; for (size_t i=0;i<_aqHRUs.size();i++){rr.push_back(prj[_aqHRUs[i]]);}
     vector<gw_pt> seeds; MeshSeeds(rr,ref,minx-cs,miny-cs,maxx+cs,maxy+cs,seeds);
-    ExitGracefullyIf(seeds.size()>5000000,"CGroundwaterModel: HRU mesh exceeds 5 million cells per layer; increase :GridCellSize",BAD_DATA);
+    ExitGracefullyIf(seeds.size()>maxCells,"CGroundwaterModel: HRU mesh exceeds 5 million cells per layer; increase :GridCellSize",BAD_DATA);
     _grid.MakeVoronoi(seeds,minx-cs,miny-cs,maxx+cs,maxy+cs);
     for (int i=0;i<_grid.ncpl;i++){ //every seed lies in the box, so every cell must be a proper polygon
       ExitGracefullyIf(_grid.poly[i].size()<3,"CGroundwaterModel: HRU mesh produced a degenerate cell (internal error; please report the input)",RUNTIME_ERR);
@@ -1182,7 +1223,7 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
     _grid.MakeFromPolygons(cells);
   }
   _ncpl=_grid.ncpl; _nrow=_grid.nrow; _ncol=_grid.ncol; _x0=_grid.x0; _y0=_grid.y0;
-  ExitGracefullyIf(_ncpl>5000000,"CGroundwaterModel: grid exceeds 5 million cells per layer; increase :GridCellSize",BAD_DATA);
+  ExitGracefullyIf(_ncpl>maxCells,"CGroundwaterModel: grid exceeds 5 million cells per layer; increase :GridCellSize",BAD_DATA);
 
   //-- intersection of every HRU ring with every cell it may touch
   _hruCells.assign(nHRUs,map<int,double>());
@@ -1577,14 +1618,17 @@ void CGroundwaterModel::BuildStresses()
     B.pHead=(it==_headTS.end())?NULL:it->second;
     vector<int> cols=SelectColumns(B.file);
     if (cols.size()==0){WriteWarning("CGroundwaterModel: boundary "+B.name+" selects no active cells",false);}
-    //the highest and lowest heads the boundary can have: HEAD and every value of its :BoundaryHead series (the whole series,
-    //not only the run's steps, so a restarted run gets the same cells; HEAD applies where the series has no value). Each
-    //cell whose bottom lies below the highest head is placed; on a step whose head is at or below a cell's bottom that
-    //cell is switched off (SetBoundaryArrays). LAYERS TOP: the top layer the head can reach and the layers below it down
-    //to the first one the lowest head reaches; each step holds the highest of them whose bottom lies below the step's head
+    //the highest and lowest heads the boundary can have: HEAD without a series; with a :BoundaryHead series every value of
+    //it (the whole series, not only the run's steps, so a restarted run gets the same cells), and HEAD as well only when the
+    //series has blank values (HEAD applies there). Each cell whose bottom lies below the highest head is placed; on a step
+    //whose head is at or below a cell's bottom that cell is switched off (SetBoundaryArrays). LAYERS TOP: the top layer the
+    //head can reach and the layers below it down to the first one the lowest head reaches; each step holds the highest of
+    //them whose bottom lies below the step's head
     double hp=B.head,hm=B.head;
     if (B.pHead!=NULL){
-      for (int s=0;s<B.pHead->GetNumValues();s++){double v=B.pHead->GetValue(s); if ((v==RAV_BLANK_DATA) || !std::isfinite(v)){continue;} hp=max(hp,v); hm=min(hm,v);}
+      double sp=-1e300,sm=1e300; bool blank=false;
+      for (int s=0;s<B.pHead->GetNumValues();s++){double v=B.pHead->GetValue(s); if ((v==RAV_BLANK_DATA) || !std::isfinite(v)){blank=true; continue;} sp=max(sp,v); sm=min(sm,v);}
+      if (sp>=sm){hp=blank?max(sp,B.head):sp; hm=blank?min(sm,B.head):sm;}
     }
     size_t nb=_chdNode.size()+_ghbNode.size(); double zmax=-1e300;
     for (size_t i=0;i<cols.size();i++){
@@ -1596,7 +1640,7 @@ void CGroundwaterModel::BuildStresses()
       }
     }
     if ((cols.size()>0) && (_chdNode.size()+_ghbNode.size()==nb)){
-      WriteWarning("CGroundwaterModel: boundary "+B.name+" has no cells: its head ("+ToStr(hp)+" m"+((B.pHead!=NULL)?", the highest of HEAD and its :BoundaryHead series":", HEAD")+
+      WriteWarning("CGroundwaterModel: boundary "+B.name+" has no cells: its head ("+ToStr(hp)+" m"+((B.pHead!=NULL)?", the highest value of its :BoundaryHead series, and of HEAD where the series is blank":", HEAD")+
                    ") lies below the bottom of every cell it selects (highest "+ToStr(zmax)+" m); MODFLOW needs a boundary head above the cell bottom",false);
     }
   }
@@ -1840,7 +1884,7 @@ void CGroundwaterModel::WriteMF6Files(const optStruct &Options)
     WriteArray(F,"POROSITY",Por,aC,aL); F<<"END GRIDDATA\n"; F.close();
   }
   F.open((d+"gwf.ic").c_str());
-  F<<"BEGIN GRIDDATA\n"; WriteArray(F,"STRT",_strt,aC,aL,"1.0",SZPhysical()?17:10); F<<"END GRIDDATA\n"; F.close(); //(full precision with the soil zone, as its hotstart)
+  F<<"BEGIN GRIDDATA\n"; WriteArray(F,"STRT",_strt,aC,aL,"1.0",(SZPhysical() || (_hotHeads.size()>0))?17:10); F<<"END GRIDDATA\n"; F.close(); //(full precision with the soil zone and from a hotstart, as written)
 
   //-- recharge and seepage-face drains on the top cell of every linked column
   F.open((d+"gwf.rch").c_str());
@@ -2144,6 +2188,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     RefreshPointers();
     ExtUpdateCHDTop();
   }
+  else {UpdateSwitchedCHDTop(tt.model_time,tstep);}
   if (SZPhysical()){ //soil-zone water after Raven's processes this step: start of every local solve
     //Raven's changes are shared among the columns (gwsz::Distribute); the recharge (end-of-step GROUNDWATER, which only
     //SOIL[M-1] fills) leaves the columns first, as the process takes it (by area for PERC_CONSTANT, else from free water
@@ -2733,16 +2778,9 @@ void CGroundwaterModel::SetBoundaryArrays(const double &t,const double &tstep)
     _ghbHead[e*max(_ghbNcol,1)]=max(h,_botm[n]+0.01); _ghbCond[e*max(_ghbNcol,1)]=on?B.cond:0.0;
   }
   if (_chdNode.size()>0){
-    vector<int> act; vector<double> hs(_chdNode.size(),0.0); vector<char> on(_chdNode.size(),0);
-    pb=-1; pic=-1; taken=false;
-    for (size_t e=0;e<_chdNode.size();e++){
-      const gw_boundary &B=_aBounds[_chdB[e]]; const int n=_chdNode[e];
-      double h=B.head; if (B.pHead!=NULL){double v=B.pHead->GetAvgValue(t,tstep); if (v!=RAV_BLANK_DATA){h=v;}}
-      if ((_chdB[e]!=pb) || (n%_ncpl!=pic)){pb=_chdB[e]; pic=n%_ncpl; taken=false;}
-      on[e]=(h>_botm[n]) && (B.allLayers || !taken); if (on[e]){taken=true; act.push_back((int)e);}
-      if (!(h>_botm[n])){_bndOffNow++;}
-      hs[e]=max(h,_botm[n]+0.01);
-    }
+    vector<int> act; vector<double> hs; vector<char> on;
+    _bndOffNow+=CHDEntriesOn(t,tstep,on,&hs);
+    for (size_t e=0;e<_chdNode.size();e++){if (on[e]){act.push_back((int)e);}}
     if ((act.size()==_chdNode.size()) && !_chdPacked){ //every entry held, MODFLOW's list as read from gwf.chd
       for (size_t e=0;e<_chdNode.size();e++){_chdHead[e*max(_chdNcol,1)]=hs[e];}
     }
@@ -2757,6 +2795,40 @@ void CGroundwaterModel::SetBoundaryArrays(const double &t,const double &tstep)
     }
     _chdAct=act;
   }
+}
+//////////////////////////////////////////////////////////////////
+/// \brief the specified-head entries held in the step starting at t (on), their heads (hs, at least 0.01 m above the cell
+///  bottom); returns the number of entries whose cell bottom lies at or above the step's head
+//
+int CGroundwaterModel::CHDEntriesOn(const double &t,const double &tstep,vector<char> &on,vector<double> *hs) const
+{
+  on.assign(_chdNode.size(),0); if (hs!=NULL){hs->assign(_chdNode.size(),0.0);}
+  int pb=-1,pic=-1,noff=0; bool taken=false;
+  for (size_t e=0;e<_chdNode.size();e++){
+    const gw_boundary &B=_aBounds[_chdB[e]]; const int n=_chdNode[e];
+    double h=B.head; if (B.pHead!=NULL){double v=B.pHead->GetAvgValue(t,tstep); if (v!=RAV_BLANK_DATA){h=v;}}
+    if ((_chdB[e]!=pb) || (n%_ncpl!=pic)){pb=_chdB[e]; pic=n%_ncpl; taken=false;}
+    on[e]=(h>_botm[n]) && (B.allLayers || !taken); if (on[e]){taken=true;}
+    if (!(h>_botm[n])){noff++;}
+    if (hs!=NULL){(*hs)[e]=max(h,_botm[n]+0.01);}
+  }
+  return noff;
+}
+//////////////////////////////////////////////////////////////////
+/// \brief generated models: a column whose specified-head cells all follow a :BoundaryHead series is a specified-head
+///  column (_colCHDTop) on the steps one of its cells is held, an ordinary column on the others (the HRUs' recharge areas
+///  follow, as for an existing model's specified heads)
+//
+void CGroundwaterModel::UpdateSwitchedCHDTop(const double &t,const double &tstep)
+{
+  if (IsExternal() || !_chdSwAny || (_colCHDSw.size()!=(size_t)_ncpl)){return;}
+  vector<char> on; CHDEntriesOn(t,tstep,on,NULL);
+  vector<char> held(_ncpl,0); for (size_t e=0;e<_chdNode.size();e++){if (on[e]){held[_chdNode[e]%_ncpl]=1;}}
+  bool changed=false;
+  for (int ic=0;ic<_ncpl;ic++){if (_colCHDSw[ic] && (held[ic]!=_colCHDTop[ic])){_colCHDTop[ic]=held[ic]; changed=true;}}
+  if (!changed){return;}
+  _hruRchArea.assign(_pModel->GetNumHRUs(),0.0);
+  for (size_t li=0;li<_aLinks.size();li++){if (!_colCHDTop[_aLinks[li].ic]){_hruRchArea[_aLinks[li].k]+=_aLinks[li].area;}}
 }
 //////////////////////////////////////////////////////////////////
 /// \brief flows of wells and head boundaries after a solve (positive into the aquifer) [m3/d]
@@ -2776,7 +2848,7 @@ void CGroundwaterModel::RunSteadyState()
   if (!_mf6.PrepareTimeStep(1.0)){ExitGracefully(("CGroundwaterModel: "+_mf6.GetLastError()).c_str(),RUNTIME_ERR);}
   RefreshPointers();
   for (size_t i=0;i<_bndCol.size();i++){_rchBound[i]=_ssRecharge/MM_PER_METER*_colCover[_bndCol[i]]/_grid.area[_bndCol[i]];}
-  SetBoundaryArrays(0.0,1.0);
+  SetBoundaryArrays(0.0,1.0); _bndOffN+=_bndOffNow; //(the steady-state period counts in the run total of cells switched off)
   //keep the starting heads: a steady state that does not converge is a worse start than they are
   int nx=0; for (size_t i=0;i<_reduced.size();i++){if (_reduced[i]>=0){nx++;}}
   vector<double> x0; if (_X!=NULL){x0.assign(_X,_X+nx);}
@@ -2877,25 +2949,26 @@ double CGroundwaterModel::GetObservationWellHead(const long long id) const
 void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
 {
   if ((!_active) || (_X==NULL)){return;}
-  //(12 significant digits; 17 with :SoilZone PHYSICAL, whose restart then starts from MODFLOW's heads as they were, as the
-  //starting heads Raven writes for MODFLOW, raven.ic and the generated model's STRT)
-  const int hp=SZPhysical()?17:12;
+  //every value with 17 significant digits, as the HRU states before it: a restart starts from the states as they were
+  const std::ios::fmtflags f0=RVC.flags(); const std::streamsize p0=RVC.precision();
+  RVC.unsetf(std::ios::floatfield);
+  const int hp=17;
   if ((_gridType==GWGRID_REGULAR) || (IsExternal() && (_disType==0))){RVC<<":GWHeads "<<_nlay<<" "<<_nrow<<" "<<_ncol<<endl<<setprecision(hp);}
   else {RVC<<":GWHeads "<<_nlay<<" 1 "<<_ncpl<<endl<<setprecision(hp);} //unstructured: one row of cells
   for (int n=0;n<_nlay*_ncpl;n++){
     double h=(_reduced[n]>=0)?_X[_reduced[n]]:_strt[n];
     RVC<<((n%10==0)?"  ":" ")<<h; if ((n%10==9) || (n==_nlay*_ncpl-1)){RVC<<endl;}
   }
-  RVC<<":EndGWHeads"<<endl<<setprecision(12); //
+  RVC<<":EndGWHeads"<<endl;
   if (_resP.size()>0){ //reservoir seepage computed in the last step, not yet delivered to the aquifer
     RVC<<":GWReservoirSeepage   # subbasin ID, seepage in transit [m3], share of the lake's cells able to take seepage when it was computed"<<endl;
-    for (size_t r=0;r<_resP.size();r++){RVC<<"  "<<_pModel->GetSubBasin(_resP[r])->GetID()<<", "<<setprecision(15)<<_pModel->GetSubBasin(_resP[r])->GetReservoir()->GetReservoirGWLosses(1.0)<<", "<<((r<_resWk.size())?_resWk[r]:1.0)<<endl;}
+    for (size_t r=0;r<_resP.size();r++){RVC<<"  "<<_pModel->GetSubBasin(_resP[r])->GetID()<<", "<<setprecision(17)<<_pModel->GetSubBasin(_resP[r])->GetReservoir()->GetReservoirGWLosses(1.0)<<", "<<((r<_resWk.size())?_resWk[r]:1.0)<<endl;}
     RVC<<":EndGWReservoirSeepage"<<endl;
   }
   bool anyCarry=false; for (size_t p=0;p<_sbLossRemain.size();p++){if (_sbLossRemain[p]>0){anyCarry=true;}}
   if (anyCarry){ //river loss not yet supplied at the end of the run
     RVC<<":GWRiverLossCarry   # subbasin ID, river loss to be taken from the river in the next step [m3]"<<endl;
-    for (size_t p=0;p<_sbLossRemain.size();p++){if (_sbLossRemain[p]>0){RVC<<"  "<<_pModel->GetSubBasin((int)p)->GetID()<<", "<<setprecision(15)<<_sbLossRemain[p]<<endl;}}
+    for (size_t p=0;p<_sbLossRemain.size();p++){if (_sbLossRemain[p]>0){RVC<<"  "<<_pModel->GetSubBasin((int)p)->GetID()<<", "<<setprecision(17)<<_sbLossRemain[p]<<endl;}}
     RVC<<":EndGWRiverLossCarry"<<endl;
   }
   if (SZPhysical() && _szColInit){ //water of the soil-zone columns (Raven's SOIL[m] holds only their mean)
@@ -2904,7 +2977,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       int k=_aqHRUs[i]; if (!_szOn[k]){continue;}
       const vector<int> cell=SZColumnCells(k);
       for (int c=0;c<SZNCols(k);c++){
-        RVC<<"  "<<_pModel->GetHydroUnit(k)->GetHRUID()<<", "<<cell[c]<<setprecision(15);
+        RVC<<"  "<<_pModel->GetHydroUnit(k)->GetHRUID()<<", "<<cell[c]<<setprecision(17);
         for (int j=0;j<_szNLayers;j++){RVC<<", "<<_szColPhi[(_szColOff[k]+c)*_szNLayers+j];}
         RVC<<endl;
       }
@@ -2921,7 +2994,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
           const gwvz::vz_column &c=_vzcCol[i]; if (!c.active){continue;}
           RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1;
           if (cls){RVC<<", "<<i-_vzOff[e]+1<<", "<<_vzOff[e+1]-_vzOff[e];}
-          RVC<<setprecision(15)<<", "<<c.zbot;
+          RVC<<setprecision(17)<<", "<<c.zbot;
           for (size_t q=0;q<c.th.size();q++){RVC<<", "<<c.th[q];}
           RVC<<endl;
         }
@@ -2933,7 +3006,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
         const gw_link &L=_aLinks[_szxLink[e]]; const double a=_szColA[_szxCol[e]];
         for (int i=_vzOff[e];i<_vzOff[e+1];i++){
           const gwvz::vz_column &c=_vzcCol[i]; if (!c.active){continue;}
-          RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<", "<<i-_vzOff[e]+1<<setprecision(15)<<", "<<c.ztop<<", "<<gwvz::RelStorage(c,_vzStrat[e])*(a*_vzcA[i])<<endl;
+          RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<", "<<i-_vzOff[e]+1<<setprecision(17)<<", "<<c.ztop<<", "<<gwvz::RelStorage(c,_vzStrat[e])*(a*_vzcA[i])<<endl;
         }
       }
       RVC<<":EndGWVadoseColumnTops"<<endl;
@@ -2945,7 +3018,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
         //over a specified head in the last step the exchange was exact, not a lagged source: a continued run does not apply it,
         //and a restarted existing model knows its specified heads only after the first step's lagged source
         const double q=_colCHDTop[L.ic]?0.0:_szxQprev[e];
-        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(15)<<", "<<q<<", "<<((e<_szxDebt.size())?_szxDebt[e]:0.0)<<endl;
+        RVC<<"  "<<_pModel->GetHydroUnit(L.k)->GetHRUID()<<", "<<L.ic+1<<setprecision(17)<<", "<<q<<", "<<((e<_szxDebt.size())?_szxDebt[e]:0.0)<<endl;
       }
       RVC<<":EndGWSoilZoneLag"<<endl;
     }
@@ -2956,6 +3029,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
     for (size_t i=0;i<_aqHRUs.size();i++){RVC<<"  "<<_pModel->GetHydroUnit(_aqHRUs[i])->GetHRUID()<<", "<<_rchStore[_aqHRUs[i]]<<endl;}
     RVC<<":EndGWRechargeStore"<<endl;
   }
+  RVC.flags(f0); RVC.precision(p0);
 }
 
 //////////////////////////////////////////////////////////////////
@@ -3005,7 +3079,7 @@ void CGroundwaterModel::FinishBudgetLine()
     if (SZPhysical() && (_szTiming==1)){_BUDGET<<","<<_szDebtVol<<","<<_szRepayQ*_szTstep;}
     if (SZPhysical() && SZChdColumns()){_BUDGET<<","<<_QszCHD_in<<","<<_QszCHD_out;}
     if (IsExternal() && !_mf6Newton){_BUDGET<<","<<_rchLostQ;}
-    if (IsExternal() && (_resNode.size()>0)){_BUDGET<<","<<_resUndelVol;}
+    if (ResUndelivered()){_BUDGET<<","<<_resUndelVol;}
     _BUDGET<<endl;
   }
   if (_budgetLineOpen){_szMovedV=0.0;} //(called before the first step too: a hotstart sync then counts in step 1)
@@ -3058,7 +3132,7 @@ void CGroundwaterModel::OpenOutputs(const optStruct &Options)
          <<((SZPhysical() && (_szTiming==1))?",lagged-exchange debt [m3],lagged-exchange repayment [m3]":"")
          <<((SZPhysical() && SZChdColumns())?",soil zone to specified heads [m3/d],specified heads to soil zone [m3/d]":"")
          <<((IsExternal() && !_mf6Newton)?",recharge not applied by MODFLOW [m3/d]":"")
-         <<((IsExternal() && (_resNode.size()>0))?",reservoir seepage not delivered by MODFLOW [m3]":"")<<endl;
+         <<(ResUndelivered()?",reservoir seepage not delivered by MODFLOW [m3]":"")<<endl;
   if (SZPhysical()){
     _SZOUT.open(FilenamePrepare("GWSoilExchange.csv",Options).c_str());
     ExitGracefullyIf(_SZOUT.fail(),"CGroundwaterModel: cannot open GWSoilExchange.csv",FILE_OPEN_ERR);
@@ -3277,11 +3351,11 @@ void CGroundwaterModel::AppendRunTotals()
   if (_negCutVol>0.0){S<<"  negative recharge cut : "<<_negCutVol<<" m3 the top cells could not supply, taken back out of the soil zone (negative rejected recharge in GWBudget.csv)"<<endl;}
   if (_negUnheldVol>0.0){S<<"  negative recharge not held: "<<_negUnheldVol<<" m3 of that cut the soil zone did not hold when it was taken back (the HRU's soil zone held less, at the end of the step, than the cut: a process after the import moved it on before the coupled exchange): no store supplied it ('negative recharge the soil zone did not hold' in GWBudget.csv)"<<endl;}
   if (_vzHotUnusedN>0){S<<"  hotstart columns unused: "<<_vzHotUnusedN<<" unsaturated columns of the hotstart file, "<<_vzHotUnusedV<<" m3 above their reference profiles, dropped (this run has no unsaturated columns)"<<endl;}
-  if (IsExternal() && (_vzMode>0) && SZPhysical()){S<<"  columns over specified heads: "<<_vzChdN<<" unsaturated columns ended on cells that were specified heads, their water ("<<_vzChdV<<" m3 above their reference profiles) to the specified heads (recharge onto CHD cells in GWBudget.csv)"<<endl;}
+  if ((IsExternal() || _chdSwAny) && (_vzMode>0) && SZPhysical()){S<<"  columns over specified heads: "<<_vzChdN<<" unsaturated columns ended on cells that were specified heads, their water ("<<_vzChdV<<" m3 above their reference profiles) to the specified heads (recharge onto CHD cells in GWBudget.csv)"<<endl;}
   bool series=false; for (size_t b=0;b<_aBounds.size();b++){if (_aBounds[b].pHead!=NULL){series=true;}}
   if (series){S<<"  head boundaries off   : "<<_bndOffN<<" cell-steps (a :BoundaryHead series at or below the cell bottom: GHB conductance 0, CHD cell not held)"<<endl;}
   if (_resNode.size()>0){S<<"  reservoir gain not supplied: "<<_resShortTot<<" m3 (lake gains MODFLOW did not supply: cells under the lakes that were drying, specified heads or inactive; taken back from the reservoirs' subbasins; GWBudget.csv)"<<endl;}
-  if (IsExternal() && (_resNode.size()>0)){S<<"  reservoir seepage not delivered: "<<_resUndelTot<<" m3 (cells under the lakes that were specified heads or inactive: returned to the reservoirs' subbasins; GWBudget.csv)"<<endl;}
+  if (ResUndelivered()){S<<"  reservoir seepage not delivered: "<<_resUndelTot<<" m3 (cells under the lakes that were specified heads or inactive: returned to the reservoirs' subbasins; GWBudget.csv)"<<endl;}
   if (IsExternal() && !_mf6Newton){S<<"  recharge not applied  : "<<_rchLostVol<<" m3 (columns whose cells were all dry or whose highest active cell is a specified head, a model without NEWTON; GWBudget.csv; net: a negative recharge there, taken out of GROUNDWATER without MODFLOW supplying it, counts negative)"<<endl;}
   _summaryFile="";
 }

@@ -165,7 +165,7 @@ void CGroundwaterModel::SZLagApply(double **aPhinew,double **aPhi,const double &
     bool any=false;
     for (size_t jj=0;jj<_szxOfHRU[k].size();jj++){
       const int e=_szxOfHRU[k][jj],c=_szxCol[e]; const double a=_szColA[c];
-      if (!(a>0.0) || (_szxQprev[e]==0.0) || _colCHDTop[_aLinks[_szxLink[e]].ic]){continue;} //(over a specified head the exchange is exact:
+      if (!(a>0.0) || (_szxQprev[e]==0.0)){continue;}                          //(over a specified head in the last step the exchange was exact:
       for (int j=0;j<n;j++){phi[j]=_szColPhi[c*n+j];}                                       // no lag, as for the CHD entries)
       double dV=-_szxQprev[e]*tstep/a*MM_PER_METER;                             //[mm] into the column
       if (dV>0.0){

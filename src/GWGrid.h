@@ -50,8 +50,10 @@ public:
 
   void   MakeRegular (const double xa,const double ya,const double xb,const double yb,const double cellsize,
                       const vector<gw_refine> &ref);
-  void   MakeQuadtree(const double xa,const double ya,const double xb,const double yb,const double cellsize,
-                      const vector<gw_refine> &ref,const int maxLevel);
+  bool   MakeQuadtree(const double xa,const double ya,const double xb,const double yb,const double cellsize,
+                      const vector<gw_refine> &ref,const int maxLevel,const double maxCells=0.0); ///< false: refinement stopped above maxCells leaves (> 0), no grid
+  static double EstimateQuadtreeCells(const double xa,const double ya,const double xb,const double yb,const double cellsize,
+                      const vector<gw_refine> &ref,const int maxLevel,const double limit=0.0); ///< cells per layer a quadtree grid will have, estimated before it is built (counting stops above limit > 0)
   void   MakeVoronoi (const vector<gw_pt> &seeds,const double xa,const double ya,const double xb,const double yb);
   void   MakeFromPolygons(const vector<gw_ring> &cells);
 

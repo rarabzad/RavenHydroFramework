@@ -1442,9 +1442,11 @@ void CModel::WriteMajorOutput(const time_struct &tt, string solfile, bool final)
     }
     RVC<<endl;
     //Data----------------------------
+    const bool fullPrec=(_pGWModel!=NULL) && (_pGWModel->IsActive()); //coupled run: full precision, so a restart continues exactly
     for (k=0;k<_nHydroUnits;k++)
     {
       RVC<<std::fixed; RVC.precision(5);
+      if (fullPrec){RVC.unsetf(std::ios::floatfield); RVC.precision(17);}
       RVC<<"  "<<_pHydroUnits[k]->GetHRUID()<<",";
       for (i=mini;i<maxi;i++)
       {
@@ -1453,15 +1455,19 @@ void CModel::WriteMajorOutput(const time_struct &tt, string solfile, bool final)
       }
       RVC<<endl;
     }
+    if (fullPrec){RVC<<std::fixed; RVC.precision(5);}
     RVC<<":EndHRUStateVariableTable"<<endl;
   }
   //By basin------------------------
+  const bool fullPrecB=(_pGWModel!=NULL) && (_pGWModel->IsActive()); //coupled run: full precision (channel and reservoir states)
+  if (fullPrecB){RVC.unsetf(std::ios::floatfield); RVC.precision(17);}
   RVC<<":BasinStateVariables"<<endl;
   for (int p=0;p<_nSubBasins;p++){
     RVC<<"  :BasinIndex "<<_pSubBasins[p]->GetID()<<",";
     _pSubBasins[p]->WriteToSolutionFile(RVC);
   }
   RVC<<":EndBasinStateVariables"<<endl;
+  if (fullPrecB){RVC<<std::fixed; RVC.precision(5);}
 
   _pTransModel->WriteMajorOutput(RVC);
   if ((_pGWModel!=NULL) && (_pGWModel->IsActive())){_pGWModel->WriteHotstart(RVC);} //groundwater heads for hotstart

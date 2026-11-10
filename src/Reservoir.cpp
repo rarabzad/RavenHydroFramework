@@ -1885,7 +1885,8 @@ double  CReservoir::RouteWater(const double &Qin_old,
 //
 void CReservoir::WriteToSolutionFile (ofstream &RVC) const
 {
-  std::streamsize prec=RVC.precision(12); //full precision: a restart continues the reservoir exactly
+  std::streamsize prec=RVC.precision(); //full precision: a restart continues the reservoir exactly (12 decimals, or the
+  if ((RVC.flags() & std::ios::floatfield)==std::ios::fixed){RVC.precision(12);} // stream's own significant digits)
   RVC<<"    :ResFlow, "<<_Qout<<","<<_Qout_last<<endl;
   RVC<<"    :ResStage, "<<_stage<<","<<_stage_last<<endl;
   if((_DAadjust_last!=0.0) || (_DAadjust!=0.0)){

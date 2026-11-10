@@ -344,7 +344,12 @@ void CGroundwaterModel::SZInitColumns()
     if (hot>0){
       for (int c=0;c<nc;c++){for (int j=0;j<n;j++){_szColPhi[(o+c)*n+j]=hc[c][j];}}
       _szInitHot++;
-      _szColInit=true; double ovf=SZSyncColumns(k,&tg[0]); //hotstart columns and the .rvc soil water normally agree; any difference is shared
+      _szColInit=true;
+      bool same=true; //(a file written at full precision: the .rvc soil water is the columns' mean, and the columns continue as they were)
+      {double sw=0.0; for (int c=0;c<nc;c++){sw+=_szColA[o+c];}
+       for (int j=0;j<n;j++){double v=0.0; for (int c=0;c<nc;c++){v+=_szColA[o+c]*_szColPhi[(o+c)*n+j];} if ((sw>0.0) && (fabs(v/sw-tg[j])>1e-9)){same=false;}}}
+      if (same){continue;}
+      double ovf=SZSyncColumns(k,&tg[0]); //hotstart columns and the .rvc soil water normally agree; any difference is shared
       double sw=0.0; for (int c=0;c<nc;c++){sw+=_szColA[o+c];}
       for (int j=0;j<n;j++){
         double v=0.0; for (int c=0;c<nc;c++){v+=_szColA[o+c]*_szColPhi[(o+c)*n+j];}
@@ -1268,7 +1273,8 @@ void CGroundwaterModel::SZApply(double **aPhinew,const double &tstep)
     ovfV+=_szSyncOvf[k];                                                         //(sent to SURFACE_WATER when the exchange began)
     _szOvfVol+=ovfV; _szOvfV[k]=ovfV; _szNetV[k]=netV;
   }
-  _szxQprev=_szxQ;                                                               //(the LAGGED source of the next step)
+  _szxQprev=_szxQ;                                                               //(the LAGGED source of the next step; none from a link over
+  for (size_t e=0;e<_szxQprev.size();e++){if (_colCHDTop[_aLinks[_szxLink[e]].ic]){_szxQprev[e]=0.0;}} // a specified head this step, whose exchange is exact, as the hotstart writes)
   for (size_t e=0;e<_szxRepay.size() && e<_szxDebt.size();e++){_szxDebt[e]=max(_szxDebt[e]-_szxRepay[e]*tstep,0.0);}
   _negCutVol+=_szNegCutQ*tstep; _negUnheldVol+=_szNegUnheldV;
   if ((_szNegUnheldV>1e-6) && (++_negUnheldN<=10)){

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <algorithm>
 #include <map>
+#include <unordered_set>
 #include <iomanip>
 
 namespace
@@ -211,8 +212,68 @@ namespace
     }
   }
 }
-void CGWGrid::MakeQuadtree(const double xa,const double ya,const double xb,const double yb,const double cellsize,
-                           const vector<gw_refine> &ref,const int maxLevel)
+//cells per layer of the quadtree grid MakeQuadtree builds, estimated before it is built: level by level, the squares that
+//split are those a feature with a smaller size touches (padded by half that size, as MakeQuadtree tests them), counted
+//once however many features touch them (lines in pieces of a quarter square, each piece's padded box; polygons also by
+//their inside, row by row); each split adds 3 leaves, and the 2:1 balance about a fifth more. Counting stops once the
+//estimate passes limit (> 0)
+double CGWGrid::EstimateQuadtreeCells(const double xa,const double ya,const double xb,const double yb,const double cellsize,
+                                      const vector<gw_refine> &ref,const int maxLevel,const double limit)
+{
+  const double cs=cellsize,X0=floor(xa/cs)*cs,Y0=floor(ya/cs)*cs;
+  const double nc=max(1.0,ceil((xb-X0)/cs)),nr=max(1.0,ceil((yb-Y0)/cs));
+  const double BAL=1.2;
+  double leaves=nc*nr;
+  std::unordered_set<unsigned long long> S;
+  double q=cs;
+  for (int j=0;j<maxLevel;j++,q*=0.5){
+    S.clear();
+    const double nx=nc*pow(2.0,j),ny=nr*pow(2.0,j);
+    for (size_t f=0;f<ref.size();f++){
+      const gw_refine &F=ref[f];
+      if (!(F.size>0.0) || !(F.size<q*0.999)){continue;}                            //(this feature splits no square of this size)
+      const double pad=0.5*F.size; const gw_ring &g=F.geom; const size_t m=g.size();
+      std::vector<double> bx; //boxes x0,y0,x1,y1
+      if ((F.kind==0) || (m==1)){for (size_t k=0;k<m;k++){bx.push_back(g[k].x); bx.push_back(g[k].y); bx.push_back(g[k].x); bx.push_back(g[k].y);}}
+      else {
+        const size_t ns=(F.kind==2)?m:m-1;
+        for (size_t k=0;k<ns;k++){
+          const gw_pt &A=g[k],&B=g[(k+1)%m]; const double L=sqrt((B.x-A.x)*(B.x-A.x)+(B.y-A.y)*(B.y-A.y));
+          const int np=max(1,(int)ceil(L/(0.25*q)));
+          for (int p=0;p<np;p++){
+            const double s0=(double)p/np,s1=(double)(p+1)/np;
+            const double x0=A.x+s0*(B.x-A.x),y0=A.y+s0*(B.y-A.y),x1=A.x+s1*(B.x-A.x),y1=A.y+s1*(B.y-A.y);
+            bx.push_back(min(x0,x1)); bx.push_back(min(y0,y1)); bx.push_back(max(x0,x1)); bx.push_back(max(y0,y1));
+          }
+        }
+      }
+      for (size_t b=0;b+3<bx.size();b+=4){
+        const double i0=max(0.0,floor((bx[b]-pad-X0)/q)),i1=min(nx-1.0,floor((bx[b+2]+pad-X0)/q));
+        const double k0=max(0.0,floor((bx[b+1]-pad-Y0)/q)),k1=min(ny-1.0,floor((bx[b+3]+pad-Y0)/q));
+        for (double ix=i0;ix<=i1;ix++){for (double iy=k0;iy<=k1;iy++){S.insert(((unsigned long long)ix<<32)|(unsigned long long)iy);}}
+        if ((limit>0.0) && (BAL*(leaves+3.0*S.size())>limit)){return BAL*(leaves+3.0*S.size());}
+      }
+      if ((F.kind==2) && (m>=3)){ //the inside: the squares whose centre lies in the polygon, row by row
+        double y0=1e300,y1=-1e300; for (size_t k=0;k<m;k++){y0=min(y0,g[k].y); y1=max(y1,g[k].y);}
+        for (double iy=max(0.0,floor((y0-Y0)/q));iy<=min(ny-1.0,floor((y1-Y0)/q));iy++){
+          const double yc=Y0+(iy+0.5)*q; std::vector<double> xs;
+          for (size_t k=0;k<m;k++){const gw_pt &A=g[k],&B=g[(k+1)%m]; if ((A.y>yc)!=(B.y>yc)){xs.push_back(A.x+(yc-A.y)/(B.y-A.y)*(B.x-A.x));}}
+          std::sort(xs.begin(),xs.end());
+          for (size_t r=0;r+1<xs.size();r+=2){
+            const double i0=max(0.0,ceil((xs[r]-X0)/q-0.5)),i1=min(nx-1.0,floor((xs[r+1]-X0)/q-0.5));
+            for (double ix=i0;ix<=i1;ix++){S.insert(((unsigned long long)ix<<32)|(unsigned long long)iy);}
+          }
+          if ((limit>0.0) && (BAL*(leaves+3.0*S.size())>limit)){return BAL*(leaves+3.0*S.size());}
+        }
+      }
+    }
+    leaves+=3.0*S.size();
+    if (S.empty()){break;}
+  }
+  return BAL*leaves;
+}
+bool CGWGrid::MakeQuadtree(const double xa,const double ya,const double xb,const double yb,const double cellsize,
+                           const vector<gw_refine> &ref,const int maxLevel,const double maxCells)
 {
   type=GWGRID_QUADTREE; cs=cellsize; uniform=false;
   x0=floor(xa/cs)*cs; y0=floor(ya/cs)*cs;
@@ -239,6 +300,7 @@ void CGWGrid::MakeQuadtree(const double xa,const double ya,const double xb,const
   vector<vector<int> > cand(Q.size());
   vector<int> all(F.size()); for (size_t f=0;f<F.size();f++){all[f]=(int)f;}
   vector<int> stack; for (int i=0;i<nroot;i++){stack.push_back(i); cand[i]=all;}
+  double nleaf=nroot; //(each split adds 3 leaves: refinement stops beyond maxCells, before the grid exhausts the memory)
   while (!stack.empty()){
     int n=stack.back(); stack.pop_back();
     vector<int> C; C.swap(cand[n]);
@@ -251,6 +313,7 @@ void CGWGrid::MakeQuadtree(const double xa,const double ya,const double xb,const
       if (FeatureTouches(F[f],qa-pad,qb-pad,qc+pad,qd+pad)){target=min(target,F[f].size); touch.push_back(f);}
     }
     if (target<Q[n].s*0.999){
+      nleaf+=3.0; if ((maxCells>0.0) && (nleaf>maxCells)){ncpl=(int)min(nleaf,2.0e9); poly.clear(); return false;}
       QSplit(Q,n); if (cand.size()<Q.size()){cand.resize(Q.size());}
       for (int k=0;k<4;k++){stack.push_back(Q[n].child[k]); cand[Q[n].child[k]]=touch;}
     }
@@ -270,7 +333,10 @@ void CGWGrid::MakeQuadtree(const double xa,const double ya,const double xb,const
         if ((px[k]<x0) || (py[k]<y0) || (px[k]>=dom_x1) || (py[k]>=dom_y1)){continue;}
         int rc=(int)floor((px[k]-x0)/cs),rr=nr-1-(int)floor((py[k]-y0)/cs);
         int m=QFind(Q,rr*nc+rc,px[k],py[k]);
-        if (Q[m].level<Q[n].level-1){QSplit(Q,m); changed=true;}
+        if (Q[m].level<Q[n].level-1){
+          nleaf+=3.0; if ((maxCells>0.0) && (nleaf>maxCells)){ncpl=(int)min(nleaf,2.0e9); poly.clear(); return false;}
+          QSplit(Q,m); changed=true;
+        }
       }
     }
   }
@@ -305,6 +371,7 @@ void CGWGrid::MakeQuadtree(const double xa,const double ya,const double xb,const
   nbr.assign(ncpl,vector<gw_nbr>());
   Finish(false);
   for (int ic=0;ic<ncpl;ic++){const qnode &q=Q[leaves[ic]]; bx0[ic]=q.x; by0[ic]=q.y; bx1[ic]=q.x+q.s; by1[ic]=q.y+q.s; rect[ic]=1;}
+  return true;
 }
 
 //-- Voronoi mesh by half-plane clipping; every edge remembers the neighbouring seed that produced it -------------
