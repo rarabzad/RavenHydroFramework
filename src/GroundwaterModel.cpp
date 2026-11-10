@@ -749,6 +749,20 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
     _doSteady=false; //decided per run: the user's setting is kept for later ensemble members
   }
   CheckDryStart(Options);
+  if (_hotHeads.empty() && (_iGW!=DOESNT_EXIST)){ //cold start: GROUNDWATER is a pass-through store, emptied at the start of the
+    int nG=0; double vG=0.0;                        //  first step before any exchange, so an initial value never reaches MODFLOW
+    for (int k=0;k<_pModel->GetNumHRUs();k++){
+      const CHydroUnit *pHRU=_pModel->GetHydroUnit(k);
+      if (!pHRU->IsEnabled() || (pHRU->GetStateVarValue(_iGW)==0.0)){continue;}
+      nG++; vG+=pHRU->GetStateVarValue(_iGW)/MM_PER_METER*pHRU->GetArea()*M2_PER_KM2;
+    }
+    if (nG>0){
+      WriteWarning("CGroundwaterModel: the initial conditions set GROUNDWATER in "+to_string(nG)+" HRUs ("+ToStr(vG)+" m3 in all) and the .rvc holds no "
+                   "hotstart heads (:GWHeads): GROUNDWATER is a pass-through store emptied at the start of the first step, so MODFLOW never receives "
+                   "this water. Raven's balance books it as leaving Raven in the first step; GWBudget.csv does not show it. Set GROUNDWATER to 0 "
+                   "(or start from the solution.rvc of a coupled run)",Options.noisy);
+    }
+  }
   if (IsExternal()){ExtWritePackages(Options); GWPROF("ExtWritePackages"); if (_owTable.empty()){WriteGridCells(Options); GWPROF("WriteGridCells");}}
   else {
   WriteMF6Files(Options); GWPROF("WriteMF6Files");

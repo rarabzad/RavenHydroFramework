@@ -172,6 +172,10 @@ private:/*------------------------------------------------------*/
   vector<vector<double> > _initResState;              ///< reservoir dynamic state at the first initialization
   vector<double>          _initQlatLast;              ///< last lateral inflow at the first initialization [m3/s]
   double             _initWater;  ///< initial water in system [mm]
+  double        _gwPassOut,_gwPassIn; ///< coupled run: water in the GROUNDWATER pass-through store at the end of the last step
+                                      ///< (positive, negative part) [mm over the watershed]: it leaves Raven's storage when the
+                                      ///< store is emptied at the start of the next step, and is booked then (IncrementCumOutflow)
+  void   GWPassThrough(double &pos,double &neg) const;
 
   //Output
   CCustomOutput**_pCustomOutputs; ///< Array of pointers to custom output objects [size:_nCustomOutputs]

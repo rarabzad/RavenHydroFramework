@@ -447,6 +447,10 @@ void CModel::CalculateInitialWaterStorage(const optStruct &Options)
   _initWater+=GetTotalChannelStorage();
   _initWater+=GetTotalReservoirStorage();
   _initWater+=GetTotalRivuletStorage();
+  //coupled run: the GROUNDWATER pass-through store as read (a hotstart holds the last step's recharge there) is booked when
+  //the first step empties it (IncrementCumOutflow)
+  _gwPassOut=_gwPassIn=0.0;
+  if (Options.modeltype==MODELTYPE_COUPLED){GWPassThrough(_gwPassOut,_gwPassIn);}
   // \todo [fix]: this fixes a mass balance bug in reservoir simulations, but there is certainly a more proper way to do it
   // I think somehow this is being double counted in the delta V calculations in the first timestep
   for(int p=0;p<_nSubBasins;p++){

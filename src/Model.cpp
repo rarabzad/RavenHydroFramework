@@ -128,6 +128,7 @@ CModel::CModel(const int        nsoillayers,
   _aFlowLatBal      =NULL;
   _CumulInput       =0.0;
   _CumulOutput      =0.0;
+  _gwPassOut=_gwPassIn=0.0;
   _initWater        =0.0;
 
   _UTM_zone=-1;
@@ -2582,7 +2583,7 @@ void CModel::IncrementCumulInput(const optStruct &Options, const time_struct &tt
     for(int k=0;k<_nHydroUnits;k++) {
       double GW=_pHydroUnits[k]->GetStateVarValue(iGW);
       area=_pHydroUnits[k]->GetArea();
-      if (GW<0){_CumulInput-=GW*area/_WatershedArea;} //negative recharge
+      if ((GW<0) && (Options.modeltype!=MODELTYPE_COUPLED)){_CumulInput-=GW*area/_WatershedArea;} //negative recharge
     }
     if ((Options.modeltype==MODELTYPE_COUPLED) && (_pGWModel!=NULL)){ //groundwater discharge returned to Raven stores
       _CumulInput+=_pGWModel->GetStepReturnVolume()/(_WatershedArea*M2_PER_KM2)*MM_PER_METER;
@@ -2632,7 +2633,17 @@ void CModel::IncrementCumOutflow(const optStruct &Options, const time_struct &tt
     }
   }
   //lost to groundwater
-  if(Options.modeltype!=MODELTYPE_SURFACE) {
+  if (Options.modeltype==MODELTYPE_COUPLED) {
+    //Raven-MODFLOW 6: GROUNDWATER is a pass-through store emptied at the start of every step (MassEnergyBalance), after the
+    //coupling handed its contents to MODFLOW. Its water is part of Raven's storage (WatershedStorage.csv) at the end of the
+    //step, so it is booked as leaving (positive) or entering (negative recharge) Raven when the store is emptied: the
+    //contents at the end of the last step, here, then the store's present contents are kept for the next step. Booking it
+    //in the step it arrives would count it twice, as storage and as outflow.
+    _CumulOutput+=_gwPassOut;
+    _CumulInput +=_gwPassIn;
+    GWPassThrough(_gwPassOut,_gwPassIn);
+  }
+  else if(Options.modeltype!=MODELTYPE_SURFACE) {
     int iGW=GetStateVarIndex(GROUNDWATER);
     for(int k=0;k<_nHydroUnits;k++) {
       double GW=_pHydroUnits[k]->GetStateVarValue(iGW);
@@ -2644,6 +2655,21 @@ void CModel::IncrementCumOutflow(const optStruct &Options, const time_struct &tt
     }*/
   }
   _pTransModel->IncrementCumulOutput(Options);
+}
+//////////////////////////////////////////////////////////////////
+/// \brief water in the GROUNDWATER store now, area-weighted over the watershed [mm]: its positive part (pos) and the
+///  magnitude of its negative part (neg, a negative recharge)
+//
+void CModel::GWPassThrough(double &pos,double &neg) const
+{
+  pos=neg=0.0;
+  const int iGW=GetStateVarIndex(GROUNDWATER);
+  if (iGW==DOESNT_EXIST){return;}
+  for(int k=0;k<_nHydroUnits;k++){
+    if (!_pHydroUnits[k]->IsEnabled()){continue;} //(as Raven's storage: a disabled HRU keeps its states and is not counted)
+    const double GW=_pHydroUnits[k]->GetStateVarValue(iGW)*_pHydroUnits[k]->GetArea()/_WatershedArea;
+    if (GW>0){pos+=GW;} else {neg-=GW;}
+  }
 }
 double TransitionFunc(const double &tscale,const transition_function fun, const double params[3])
 {
