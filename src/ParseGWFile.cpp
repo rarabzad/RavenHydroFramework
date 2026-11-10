@@ -7,6 +7,7 @@
 ----------------------------------------------------------------*/
 #include "RavenInclude.h"
 #include "GWGrid.h"
+#include "GWUtil.h"
 #include "Model.h"
 #include "ParseLib.h"
 #include "GroundwaterModel.h"
@@ -62,8 +63,8 @@ static void GWImproperFormat(char **s,const optStruct &Options)
 //separates tokens, so 2,000.0 is read as the two tokens 2 and 000.0)
 static double GWNumber(const string &cmd,const char *tok,const optStruct &Options)
 {
-  char *e=NULL; double v=strtod(tok,&e);
-  if ((e==tok) || (*e!='\0') || !std::isfinite(v)){
+  double v=0.0;
+  if (!gwutil::StrictNumber(tok,v)){
     ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": '"+string(tok)+"' is not a number (give a plain number "
                     "in the units of the manual, without units or thousands separators)").c_str(),BAD_DATA);
   }

@@ -13,6 +13,7 @@
 #include <sstream>
 #include <iomanip>
 #include <cstdlib>
+#include <cmath>
 #include <sys/stat.h>
 #ifdef _WIN32
   #include <direct.h>
@@ -63,5 +64,13 @@ namespace gwutil
     }
   }
   inline std::string ToStr(double v){std::ostringstream s; s<<v; return s.str();}
+  /// a number read strictly: true when the whole token is a finite decimal number (no units, no thousands separators,
+  /// no hexadecimal; a comma separates tokens, so 2,000.0 arrives as the two tokens 2 and 000.0)
+  inline bool StrictNumber(const char *tok,double &v)
+  {
+    for (const char *c=tok;*c!='\0';c++){if ((*c=='x') || (*c=='X')){v=0.0; return false;}}
+    char *e=NULL; v=strtod(tok,&e);
+    return (e!=tok) && (*e=='\0') && std::isfinite(v);
+  }
 }
 #endif

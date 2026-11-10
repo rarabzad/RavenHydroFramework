@@ -11,6 +11,7 @@
 #include "EnergyTransport.h"
 #include "IsotopeTransport.h"
 #include "AgeTracers.h"
+#include "GWUtil.h"
 
 void SetInitialStateVar(CModel *&pModel,const int SVind,const sv_type typ,const int m,const int k,const double &val);
 //////////////////////////////////////////////////////////////////
@@ -19,9 +20,9 @@ void SetInitialStateVar(CModel *&pModel,const int SVind,const sv_type typ,const 
 //
 static double GWHotValue(const char *s,const char *block,const bool water)
 {
-  const double v=s_to_d(s);
-  if (!std::isfinite(v) || (water && (v<-1e-6))){
-    ExitGracefully(("ParseInitialConditionsFile: "+string(block)+": the value "+string(s)+(std::isfinite(v)?" is negative (a water amount)":" is not a finite number")+
+  double v=0.0; const bool num=gwutil::StrictNumber(s,v);
+  if (!num || (water && (v<-1e-6))){
+    ExitGracefully(("ParseInitialConditionsFile: "+string(block)+": the value "+string(s)+(num?" is negative (a water amount)":" is not a finite number")+
                     "; is the .rvc file damaged?").c_str(),BAD_DATA);
   }
   return v;
@@ -956,12 +957,26 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     }
     case(50):  //----------------------------------------------
     {/*:InitialGWHeads [FROM_PROFILE | DEPTH_BELOW_SURFACE value | ELEVATION value] */
+      for (int i=1;i<Len;i++){char *h=strchr(s[i],'#'); if (h!=NULL){if (h==s[i]){Len=i;} else {*h='\0'; Len=i+1;} break;}} //(a trailing comment)
       if (Len<2){ExitGracefully(("improper format of groundwater command "+string(s[0])).c_str(),BAD_DATA); break;}
       string mode=s[1];
       ExitGracefullyIf((mode!="FROM_PROFILE") && (mode!="DEPTH_BELOW_SURFACE") && (mode!="ELEVATION"),
         "ParseInitialConditionsFile: :InitialGWHeads must be FROM_PROFILE, DEPTH_BELOW_SURFACE or ELEVATION",BAD_DATA);
       ExitGracefullyIf((mode!="FROM_PROFILE") && (Len<3),"ParseInitialConditionsFile: :InitialGWHeads needs a value",BAD_DATA);
-      pModel->GetGroundwaterModel()->SetInitialHeads(mode,(Len>=3)?s_to_d(s[2]):0.0);
+      //the value is read strictly, as the .rvg's numbers: the whole token a number, and no surplus token (a decimal comma
+      //splits 98,5 into 98 and 5)
+      double v=0.0;
+      ExitGracefullyIf((mode=="FROM_PROFILE") && (Len>2),("ParseInitialConditionsFile: command :InitialGWHeads in "+Options.rvc_filename+
+                       " has the surplus value '"+string(s[(Len>2)?2:0])+"' (FROM_PROFILE takes no value)").c_str(),BAD_DATA);
+      if ((Len>=3) && !gwutil::StrictNumber(s[2],v)){
+        ExitGracefully(("ParseInitialConditionsFile: command :InitialGWHeads in "+Options.rvc_filename+": '"+string(s[2])+"' is not a number (give a plain number "
+                        "in metres, without units or thousands separators)").c_str(),BAD_DATA);
+      }
+      if (Len>3){
+        ExitGracefully(("ParseInitialConditionsFile: command :InitialGWHeads in "+Options.rvc_filename+" has the surplus value '"+string(s[3])+
+                        "' (a comma separates values: write 98.5, not 98,5)").c_str(),BAD_DATA);
+      }
+      pModel->GetGroundwaterModel()->SetInitialHeads(mode,v);
       break;
     }
     case(51):  //----------------------------------------------
