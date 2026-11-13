@@ -607,6 +607,17 @@ bool CGWCRS::Parse(const string &spec0,string &err)
   }
   else {err="coordinate system must be EPSG:code, TMERC lat0 lon0 k0 FE FN, ALBERS lat1 lat2 lat0 lon0 FE FN or LCC lat1 lat2 lat0 lon0 FE FN"; return false;}
   if (ell=="GRS80"){_f=1.0/298.257222101;} else if (ell=="WGS84"){_f=1.0/298.257223563;} else {err="ellipsoid must be WGS84 or GRS80, not '"+w0[w.size()-1]+"'"; return false;}
+  //a conic projection needs a cone: standard parallels symmetric about the equator (lat1 = -lat2, both 0 included) give
+  //none (as PROJ refuses them), and a Lambert conformal parallel at a pole none either
+  const string pname=(_type==2)?"ALBERS":"LCC",pars=" (standard parallels lat1 "+gwutil::ToStr(_lat1)+", lat2 "+gwutil::ToStr(_lat2)+")";
+  if ((_type>=2) && (fabs(_lat1+_lat2)<1e-10)){
+    err=pname+pars+": the standard parallels lie symmetric about the equator, which defines no cone; give two parallels on the same side of the equator";
+    return false;
+  }
+  if ((_type==3) && ((fabs(fabs(_lat1)-90.0)<1e-10) || (fabs(fabs(_lat2)-90.0)<1e-10))){
+    err=pname+pars+": a standard parallel at a pole defines no Lambert conformal cone; give parallels between the poles";
+    return false;
+  }
   _a=6378137.0; _e2=_f*(2-_f); _e=sqrt(_e2);
   _lat0*=D2R; _lon0*=D2R; _lat1*=D2R; _lat2*=D2R;
   if (_type==1){
@@ -624,6 +635,10 @@ bool CGWCRS::Parse(const string &spec0,string &err)
   else {
     double m1=M(_lat1),m2=M(_lat2),t1=T(_lat1),t2=T(_lat2),t0=T(_lat0);
     _nc=(fabs(_lat1-_lat2)>1e-12)?(log(m1)-log(m2))/(log(t1)-log(t2)):sin(_lat1); _F=m1/(_nc*pow(t1,_nc)); _rho0=_a*_F*pow(t0,_nc);
+  }
+  if ((_type>=2) && !(std::isfinite(_nc) && (_nc!=0.0) && std::isfinite(_rho0) && std::isfinite((_type==2)?_C:_F))){
+    err=pname+pars+" and origin latitude "+gwutil::ToStr(_lat0/D2R)+": these parameters give no usable projection (its cone constants are not finite numbers)";
+    return false;
   }
   return true;
 }

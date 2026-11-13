@@ -70,6 +70,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _resExchange=false; _resQ=_resHcof=_resRhs=NULL; _resNcol=0; _Qres_spec=_Qres=_resPendingVol=_resShortVol=0.0;
   _cacheHit=false; _geomSeconds=0.0; _writeNC=false; _writeCBC=false; _ncid=-1; _ncTime=_ncHead=-1; _ncRec=0; _nstp=0; _stepCount=0; _jday0=0; _jyear0=0; _calendar=0; _tsDur=_tsDt=0.0;
   _Qriv_in=_Qriv_out=_riverAppliedVol=_riverDeficitVol=0.0; _budgetLineOpen=false; _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0; _sbOverN=0;
+  _rivTakeDt=_rivTakePrevDt=_rivTakePrevBook=_hotRivTakeDt=0.0;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
@@ -110,6 +111,7 @@ void CGroundwaterModel::ResetState()
   _X=NULL; _active=false; _stepCount=0; _nNonConverged=0; _budgetLineOpen=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=_riverAppliedVol=_riverDeficitVol=0.0;
   _sbInTake.clear(); _sbOutTake.clear(); _sbOutTakePrev.clear(); _sbQoutDeliv.clear(); _sbQoutRec.clear(); _sbAddBack.clear(); _sbOverN=0; _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0;
+  _rivTakeDt=_rivTakePrevDt=_rivTakePrevBook=0.0;
   _szOn.clear(); _szSV.clear(); _szLay.clear(); _szD.clear(); _szLam.clear(); _szRchV.clear(); _szRej.clear(); _szOvfV.clear(); _szNetV.clear(); _szW.clear();
   _linkF.clear(); _cellDem.clear(); _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _colCoverNS.clear(); _szxOfHRU.clear();
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szxOne.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
@@ -851,12 +853,13 @@ double CGroundwaterModel::WaterTable(const int ic) const
 void CGroundwaterModel::ClearHotstartData()
 {
   _hotHeads.clear(); _hotDims[0]=_hotDims[1]=_hotDims[2]=0;
-  _hotRchStore.clear(); _hotResSeep.clear(); _hotResFrac.clear(); _hotRivCarry.clear(); _hotRivTake.clear(); _hotQoutRec.clear(); _hotXStart.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotVzc.clear(); _hotVzt.clear(); _hotVzMethod=""; _hotLag.clear(); _hotDebt.clear();
+  _hotRchStore.clear(); _hotResSeep.clear(); _hotResFrac.clear(); _hotRivCarry.clear(); _hotRivTake.clear(); _hotQoutRec.clear(); _hotXStart.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotVzc.clear(); _hotVzt.clear(); _hotVzMethod=""; _hotLag.clear(); _hotDebt.clear(); _hotRivTakeDt=0.0;
   _initMode="FROM_PROFILE"; _initValue=0.0;
 }
 //////////////////////////////////////////////////////////////////
-/// \brief well-rate and boundary-head series of the .rvt file. An EnKF member's :ExtraRVTFilename is read after the model
-///  was built (CalculateInitialWaterStorage): the series it gives replace the ones linked, are initialised and linked here
+/// \brief well-rate and boundary-head series of the .rvt file. An EnKF member's :ExtraRVTFilename is read before the
+///  member's model is built (CEnKFEnsemble::UpdateModel), so its series replace the stored ones and Initialize links them;
+///  a series given while the model is active is initialised and linked here
 //
 void CGroundwaterModel::SetWellFlowRateSeries(const long long id,CTimeSeries *pTS)
 {
@@ -1225,7 +1228,8 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
     }
     ExitGracefullyIf(nl==0,"CGroundwaterModel: :GridRefinement LAKES found no reservoir whose lake HRU has a polygon in :HRUGeometry (:Reservoir ... :HRUID)",BAD_DATA);
   }
-  if ((_gridType==GWGRID_REGULAR) && !ref.empty()){ //columns x rows of the refined regular grid (before its 2:1 smoothing), before it is built
+  if ((_gridType==GWGRID_REGULAR) && !ref.empty()){ //columns x rows of the refined regular grid, before it is built: first before its 2:1
+                                                    //smoothing (cheap; the smoothing only adds cells), then with it (the count built)
     double ncr[2]={0,0};
     for (int a=0;a<2;a++){
       double a0=floor(((a==0)?minx:miny)/cs)*cs; int n=max(1,(int)ceil((((a==0)?maxx:maxy)-a0)/cs));
@@ -1239,6 +1243,7 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
         ncr[a]+=max(1.0,ceil(cs/target-1e-9));
       }
     }
+    if (ncr[0]*ncr[1]<=maxCells){CGWGrid::RegularAxisCounts(minx,miny,maxx,maxy,cs,ref,ncr[0],ncr[1]);}
     _gridEst=ncr[0]*ncr[1]; _gridWhat=":GridRefinement";
     if (ncr[0]*ncr[1]>maxCells){
       ostringstream S; S<<"CGroundwaterModel: the :GridRefinement sizes give a regular grid of about "<<setprecision(3)<<ncr[0]*ncr[1]<<" cells per layer ("
@@ -1333,7 +1338,11 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
     _grid.MakeFromPolygons(cells);
   }
   _ncpl=_grid.ncpl; _nrow=_grid.nrow; _ncol=_grid.ncol; _x0=_grid.x0; _y0=_grid.y0;
-  ExitGracefullyIf(_ncpl>maxCells,"CGroundwaterModel: grid exceeds 5 million cells per layer; increase :GridCellSize",BAD_DATA);
+  if (_ncpl>maxCells){
+    ExitGracefully(((_gridWhat==":GridRefinement")?
+      "CGroundwaterModel: the :GridRefinement sizes give a grid of "+to_string(_ncpl)+" cells per layer, more than 5 million: give larger refinement sizes in metres as plain numbers, or use :GridType QUADTREE or HRU_MESH, which refine only around the features":
+      "CGroundwaterModel: the grid has "+to_string(_ncpl)+" cells per layer, more than 5 million; increase :GridCellSize").c_str(),BAD_DATA);
+  }
 
   //-- intersection of every HRU ring with every cell it may touch
   _hruCells.assign(nHRUs,map<int,double>());
@@ -1732,6 +1741,7 @@ void CGroundwaterModel::BuildStresses()
     }
     O.node=best;
   }
+  map<int,int> chdOwner; //(the specified-head boundary that holds each CHD cell: MODFLOW holds a cell at one head only)
   for (size_t b=0;b<_aBounds.size();b++)
   {
     gw_boundary &B=_aBounds[b];
@@ -1756,7 +1766,17 @@ void CGroundwaterModel::BuildStresses()
       for (int l=0;l<_nlay;l++){ //MODFLOW requires boundary heads above the cell bottom: skip layers the head never rises above
         int n=UserNode(l,cols[i]); if (_idomain[n]<=0){continue;}
         zmax=max(zmax,_botm[n]); if (_botm[n]>=hp){continue;}
-        if (B.isCHD){_chdNode.push_back(n);_chdB.push_back((int)b);} else {_ghbNode.push_back(n);_ghbB.push_back((int)b);}
+        if (B.isCHD){
+          map<int,int>::const_iterator ot=chdOwner.find(n);
+          if (ot!=chdOwner.end()){
+            double X,Y,lon,lat; CellCentreWorld(cols[i],X,Y); _proj.Inverse(X,Y,lon,lat);
+            ExitGracefully(("CGroundwaterModel: :SpecifiedHeadBoundary "+B.name+" and :SpecifiedHeadBoundary "+_aBounds[ot->second].name+" both select the cell in layer "+
+                            to_string(l+1)+" of grid column "+to_string(cols[i]+1)+" (centre at longitude "+ToStr(lon)+", latitude "+ToStr(lat)+"); MODFLOW holds a cell "
+                            "at one specified head only: remove the cell from one of the two boundaries' files (general-head boundaries may share cells)").c_str(),BAD_DATA);
+          }
+          chdOwner[n]=(int)b; _chdNode.push_back(n);_chdB.push_back((int)b);
+        }
+        else {_ghbNode.push_back(n);_ghbB.push_back((int)b);}
         if (!B.allLayers && (_botm[n]<hm)){break;}
       }
     }
@@ -3122,7 +3142,7 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
   }
   bool anyTake=false; for (size_t p=0;p<_sbOutTake.size();p++){if ((_sbInTake[p]>0) || (_sbOutTake[p]>0)){anyTake=true;}}
   if (anyTake){ //river loss taken from reach inflows and outflows in the last step: Raven's channel storage and balance book half of it in the next step
-    RVC<<":GWRiverTake   # subbasin ID, river loss taken from the reach's inflow and from its outflow in the last step [m3], the reach's outflow after Raven's routing [m3/s]"<<endl;
+    RVC<<":GWRiverTake "<<setprecision(17)<<_rivTakeDt<<"   # the time step of the takes [d]; subbasin ID, river loss taken from the reach's inflow and from its outflow in the last step [m3], the reach's outflow after Raven's routing [m3/s]"<<endl;
     for (size_t p=0;p<_sbOutTake.size();p++){
       if ((_sbInTake[p]>0) || (_sbOutTake[p]>0)){
         RVC<<"  "<<_pModel->GetSubBasin((int)p)->GetID()<<", "<<setprecision(17)<<_sbInTake[p]<<", "<<_sbOutTake[p];
@@ -3203,6 +3223,12 @@ void CGroundwaterModel::ApplyRiverExchange(double *aRouted,const double &tstep)
 {
   _riverAppliedVol=0.0; _riverDeficitVol=0.0;
   _rivTakePrev=_rivTake; _rivTake=0.0; //(the takes of the last step: booked by Raven half in that step and half in this one)
+  _rivTakePrevDt=(_rivTakeDt>0.0)?_rivTakeDt:tstep; _rivTakeDt=tstep;
+  //the second half of the last step's takes, as Raven's channel storage and outflow book it in this step: a take lowered the
+  //start-of-step inflow or outflow by take/(its step), which this step's trapezoid integrates over this step (only a restart
+  //with another :TimeStep has another step; InitRiverTakes carries the rest)
+  _rivTakePrevBook=0.5*_rivTakePrev;
+  if (_rivTakePrevDt!=tstep){_rivTakePrevBook*=tstep/_rivTakePrevDt;}
   for (size_t p=0;p<_sbOutTake.size();p++){_sbOutTakePrev[p]=_sbOutTake[p]; _sbOutTake[p]=0.0; _sbInTake[p]=0.0;}
   for (size_t p=0;p<_sbGain.size();p++){
     _sbLossRemain[p]=0.0;
@@ -3254,7 +3280,7 @@ void CGroundwaterModel::BeginReachRouting(const int p,const double &tstep)
   }
   _sbAddBack[p]=1;
   _sbQoutDeliv[p]=q[n-1];                                                      //(the delivered outflow, restored exactly after routing)
-  q[n-1]+=_sbOutTakePrev[p]/(tstep*SEC_PER_DAY);
+  q[n-1]+=_sbOutTakePrev[p]/(_rivTakePrevDt*SEC_PER_DAY); //(the take's rate over its own step)
   pSB->SetQoutArray(n,&q[0],pSB->GetLastOutflowRate());
 }
 //////////////////////////////////////////////////////////////////
@@ -3282,7 +3308,7 @@ void CGroundwaterModel::TakeRiverLossFromOutflow(const int p,double &Qout,const 
     _sbOutTake[p]+=take; _rivTake+=take;
   }
   //(the last take's half only when the start-of-step outflow is the one delivered, not an outflow set from outside)
-  const double dV=0.5*(_sbOutTake[p]+(_sbAddBack[p]?_sbOutTakePrev[p]:0.0)); //[m3]
+  const double dV=0.5*(_sbOutTake[p]+(_sbAddBack[p]?_sbOutTakePrev[p]*(tstep/_rivTakePrevDt):0.0)); //[m3] (the last take's rate over this step)
   if (dV!=0.0){CSubBasin *pSB=_pModel->GetSubBasin(p); pSB->SetChannelStorage(pSB->GetChannelStorage()-dV);}
 }
 //////////////////////////////////////////////////////////////////
@@ -3303,11 +3329,17 @@ void CGroundwaterModel::InitRiverTakes()
   const int nSB=_pModel->GetNumSubBasins();
   _sbInTake.assign(nSB,0.0); _sbOutTake.assign(nSB,0.0); _sbOutTakePrev.assign(nSB,0.0); _sbQoutDeliv.assign(nSB,0.0);
   _sbQoutRec.assign(nSB,std::numeric_limits<double>::quiet_NaN()); _sbAddBack.assign(nSB,0); _sbOverN=0;
-  _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0;
+  _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0; _rivTakePrevDt=_rivTakePrevBook=0.0;
+  _rivTakeDt=(_hotRivTakeDt>0.0)?_hotRivTakeDt:_tsDt; //(the step of the hotstart's takes)
   for (int p=0;p<nSB;p++){
     map<long long,pair<double,double> >::const_iterator it=_hotRivTake.find(_pModel->GetSubBasin(p)->GetID());
     if ((it==_hotRivTake.end()) || !_pModel->GetSubBasin(p)->IsEnabled()){continue;}
     _sbInTake[p]=it->second.first; _sbOutTake[p]=it->second.second; _rivTake+=it->second.first+it->second.second;
+    //a restart with another :TimeStep: the first step's inflow and outflow book the last takes' rates over the new step, not
+    //half the takes; the rest of those halves is carried as river loss (negative: returned), so Raven still gives up the whole
+    //takes (Raven averages a longer step's inflow history from the shorter steps' inflows, so for a take from the inflow this
+    //holds when the last takes were equal)
+    if (_rivTakeDt!=_tsDt){_sbLossCarry[p]+=0.5*(it->second.first+it->second.second)*(1.0-_tsDt/_rivTakeDt);}
     map<long long,double>::const_iterator qt=_hotQoutRec.find(_pModel->GetSubBasin(p)->GetID());
     if (qt!=_hotQoutRec.end()){_sbQoutRec[p]=qt->second;}
   }
@@ -3632,7 +3664,8 @@ void CGroundwaterModel::AppendRunTotals()
     S<<"  river loss carried    : "<<_rivCarryEnd<<" m3 at the end of the run (leakage MODFLOW took that the reaches' runoff, inflow and outflow could not supply"
      <<((_resNode.size()>0)?", and reservoir gains not supplied":"")<<"; not yet taken from Raven: water the aquifer received that no reach gave up; GWBudget.csv)"<<endl;
   }
-  if (_rivTake>0.0){ //(only when the last step took a river loss from a reach's inflow or outflow)
+  if (0.5*_rivTake>1e-6){ //(only when the last step took a river loss from a reach's inflow or outflow; not for round-off takes from a
+                          // reach that has stopped flowing, which solution.rvc still holds for an exact restart)
     S<<"  river take in transit : "<<0.5*_rivTake<<" m3 at the end of the run (the second half of the last step's river loss taken from reach inflows and outflows: "
      <<"MODFLOW received it, Raven's channel storage and balance book it in the next step; :GWRiverTake in solution.rvc)"<<endl;
   }

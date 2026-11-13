@@ -813,11 +813,25 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
     if (bscale==0.0){err=F+"its band SCALE in GDAL_METADATA is 0 (every value would be the OFFSET): save the raster with its elevations (e.g. gdal_translate -unscale)"; return false;}
     map<string,string>::const_iterator iu=items.find("UNITTYPE");
     if (iu!=items.end()){
-      string u=iu->second; for (size_t i=0;i<u.size();i++){u[i]=(char)tolower((unsigned char)u[i]);}
-      const bool metre=(u=="") || (u=="m") || (u=="metre") || (u=="metres") || (u=="meter") || (u=="meters");
-      const char *len[]={"ft","foot","feet","cm","centimet","mm","millimet","dm","decimet","km","kilomet","inch","yard","yd","mile"};
-      bool other=(u=="in");
-      for (int i=0;i<15;i++){if (u.find(len[i])!=string::npos){other=true;}}
+      //the unit's words (letters only, lower case): "m (Admiralty datum)" and "metres above Hydrographic Datum" are metres,
+      //"feet above sea level" and "US survey foot" are not; a word is matched whole (not "dm" inside "admiralty")
+      vector<string> wd; string cur;
+      for (size_t i=0;i<=iu->second.size();i++){
+        const char ch=(i<iu->second.size())?iu->second[i]:' ';
+        if (isalpha((unsigned char)ch)){cur+=(char)tolower((unsigned char)ch);} else if (!cur.empty()){wd.push_back(cur); cur="";}
+      }
+      const char *mw[]={"m","metre","metres","meter","meters"};
+      const char *ow[]={"ft","foot","feet","cm","mm","dm","km","inch","inches","yard","yards","yd","yds","mile","miles"};
+      const char *op[]={"centimet","millimet","decimet","kilomet"};          //(word prefixes: centimetre(s), centimeter(s), ...)
+      bool anyM=false,other=false;
+      for (size_t j=0;j<wd.size();j++){
+        for (int i=0;i<5;i++){if (wd[j]==mw[i]){anyM=true;}}
+        for (int i=0;i<15;i++){if (wd[j]==ow[i]){other=true;}}
+        for (int i=0;i<4;i++){if (wd[j].compare(0,strlen(op[i]),op[i])==0){other=true;}}
+      }
+      bool firstM=wd.empty(); for (int i=0;(i<5) && !wd.empty();i++){if (wd[0]==mw[i]){firstM=true;}}
+      if (!wd.empty() && ((wd[0]=="inch") || ((wd[0]=="in") && !anyM))){other=true;} //("in" first: inches unless a metre word follows, as in "in metres")
+      const bool metre=firstM || (anyM && !other);
       if (!metre && other){
         err=F+"its elevations are in "+iu->second+" (the band unit, UNITTYPE in GDAL_METADATA); Raven reads elevations in metres: convert the values to metres (e.g. gdal_calc.py) and set the unit to metres (gdal_edit.py -units m)"; return false;
       }

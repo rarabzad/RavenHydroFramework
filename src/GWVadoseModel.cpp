@@ -248,12 +248,10 @@ void CGroundwaterModel::VZInit()
   set<pair<long long,pair<int,int> > > used;                                    //(HRU ID, cell, class) of the lines used
   for (size_t e=0;e<_szxLink.size();e++){
     const gw_link &L=_aLinks[_szxLink[e]]; const int ic=L.ic;
-    if (!IsExternal() && _colCHDTop[ic]){ //a generated model's cell held as a specified head at the start (a :BoundaryHead series): no
-      for (int i=_vzOff[e];i<_vzOff[e+1];i++){                                  //  column (one forms, at rest, when the cell is released)
-        _vzcCol[i]=gwvz::vz_column(); _vzcCol[i].ztop=_vzcZt[i]; _vzcCol[i].zbot=_vzcZt[i];
-      }
-      continue;
-    }
+    //a generated model's cell held as a specified head at the start (a :BoundaryHead series): no column (one forms, at rest,
+    //when the cell is released), except the columns of the hotstart's lines: the cell was released in the last step of the
+    //run that wrote them, and VZStep ends them in the first step, their water to the specified head, as in a continuous run
+    const bool held=(!IsExternal() && _colCHDTop[ic]);
     double h=_X[_reduced[TopNode(ic)]]*_hf; const double Lmin=VZ_LMIN;
     if (!(std::fabs(_X[_reduced[TopNode(ic)]])<1e29)){h=WaterTable(ic);}       //(HDRY is in the model's units: a dry top cell without NEWTON, the water table below it)
     const double hF=h;                                                           //(the initial head: the saturated fractions of the first step)
@@ -275,6 +273,10 @@ void CGroundwaterModel::VZInit()
     else if (!refOther){
       map<long long,map<int,map<int,vector<double> > > >::const_iterator kt=_hotVzc.find(id);
       if (kt!=_hotVzc.end()){map<int,map<int,vector<double> > >::const_iterator jt=kt->second.find(ic+1); if (jt!=kt->second.end()){vc=&jt->second;}}
+    }
+    if (held && (v1==NULL) && (vc==NULL)){
+      for (int i=_vzOff[e];i<_vzOff[e+1];i++){_vzcCol[i]=gwvz::vz_column(); _vzcCol[i].ztop=_vzcZt[i]; _vzcCol[i].zbot=_vzcZt[i];}
+      continue;
     }
     //the column tops written with the lines (:GWVadoseColumnTops; files without them are not checked): a top that differs by
     //more than 1 mm was written for other columns (another :SoilZoneSubgrid, ground or soil-zone thickness)
@@ -310,6 +312,7 @@ void CGroundwaterModel::VZInit()
         c=gwvz::vz_column(); c.ztop=zb; c.zbot=h;                                //(another node count: the column starts at its reference;
                                                                                  //  a water table now at the base: no column)
       }
+      if (held){c=gwvz::vz_column(); c.ztop=zb; c.zbot=zb; continue;}          //(a held cell's column without a usable line: none)
       if (zb-h>Lmin){
         gwvz::Build(c,S,zb,h,_vzN);
         if (c.active && (q0>0.0)){
@@ -351,7 +354,7 @@ void CGroundwaterModel::VZInit()
     if (used.count(lines[j])){continue;}
     nUn++;
     map<long long,set<int> >::const_iterator lt=linkCells.find(lines[j].first);
-    const bool atLink=(lt!=linkCells.end()) && lt->second.count(lines[j].second.first) && (IsExternal() || !_colCHDTop[lines[j].second.first-1]);
+    const bool atLink=(lt!=linkCells.end()) && lt->second.count(lines[j].second.first); //(a held cell's lines are read as a link's)
     if (atLink){nBad++;}
     map<long long,map<int,map<int,vector<double> > > >::const_iterator tt=_hotVzt.find(lines[j].first);
     if (tt==_hotVzt.end()){continue;}

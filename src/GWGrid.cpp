@@ -156,6 +156,16 @@ void CGWGrid::ToWorld(const double x,const double y,double &X,double &Y) const
 }
 
 //-- regular grid: one cell size, or variable spacing refined around features ---------------------------
+void CGWGrid::RegularAxisCounts(const double xa,const double ya,const double xb,const double yb,const double cellsize,
+                                const vector<gw_refine> &ref,double &ncol,double &nrow)
+{
+  const double c=cellsize,ax=floor(xa/c)*c,ay=floor(ya/c)*c;
+  const int nc=max(1,(int)ceil((xb-ax)/c)),nr=max(1,(int)ceil((yb-ay)/c));
+  if (ref.empty()){ncol=nc; nrow=nr; return;}
+  vector<double> s,w;
+  RefineAxis(ax,nc,c,ref,true ,s,w); ncol=(double)w.size();
+  RefineAxis(ay,nr,c,ref,false,s,w); nrow=(double)w.size();
+}
 void CGWGrid::MakeRegular(const double xa,const double ya,const double xb,const double yb,const double cellsize,
                           const vector<gw_refine> &ref)
 {

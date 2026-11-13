@@ -239,6 +239,9 @@ public:/*-------------------------------------------------------*/
   const double   *GetOutflowArray          () const;
   int             GetLatHistorySize        () const;
   double          GetQlatLast              () const {return _QlatLast;} ///< [m3/s] (ensemble snapshots)
+  void            GetRoutingMemory         (vector<double> &m) const { ///< [m3/s] local outflow, irrigation and diversion at the end and start of the step, then each water demand's delivered and returned flow (ensemble snapshots)
+    m.assign(6+2*_nWaterDemands,0.0); m[0]=_Qlocal; m[1]=_QlocLast; m[2]=_Qirr; m[3]=_QirrLast; m[4]=_Qdiverted; m[5]=_QdivLast;
+    for (int ii=0;ii<_nWaterDemands;ii++){m[6+2*ii]=(_aQdelivered!=NULL)?_aQdelivered[ii]:0.0; m[7+2*ii]=(_aQreturned!=NULL)?_aQreturned[ii]:0.0;}}
   int             GetInflowHistorySize     () const;
   int             GetOutflowArraySize      () const;
   int             GetNumDiversions         () const;
@@ -311,6 +314,9 @@ public:/*-------------------------------------------------------*/
   void            SetQout                  (const double &Q);
   void            SetQoutArray             (const int N, const double *aQo, const double QoLast);
   void            SetQlatHist              (const int N, const double *aQl, const double QlLast,const double &tstep_in, const double &tstep);
+  void            SetRoutingMemory         (const vector<double> &m) { ///< restores GetRoutingMemory's values
+    if (m.size()<6){return;} _Qlocal=m[0]; _QlocLast=m[1]; _Qirr=m[2]; _QirrLast=m[3]; _Qdiverted=m[4]; _QdivLast=m[5];
+    for (int ii=0;(ii<_nWaterDemands) && (7+2*ii<(int)m.size());ii++){if (_aQdelivered!=NULL){_aQdelivered[ii]=m[6+2*ii];} if (_aQreturned!=NULL){_aQreturned[ii]=m[7+2*ii];}}}
   void            SetQinHist               (const int N, const double *aQi, const double &tstep_in, const double &tstep);
   void            SetDownstreamID          (const long long down_SBID);
   void            SetDownstreamBasin       (const CSubBasin *pSB);

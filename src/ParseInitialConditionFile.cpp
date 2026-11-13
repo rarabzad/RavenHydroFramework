@@ -1106,8 +1106,13 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       break;
     }
     case(60):  //----------------------------------------------
-    {/*:GWRiverTake  {subbasin ID, river loss taken from the reach's inflow [m3], from its outflow [m3][, its outflow after Raven's routing [m3/s]]} x n  :EndGWRiverTake
+    {/*:GWRiverTake [time step of the takes [d]]  {subbasin ID, river loss taken from the reach's inflow [m3], from its outflow [m3][, its outflow after Raven's routing [m3/s]]} x n  :EndGWRiverTake
        (the takes of the last step, which Raven's channel storage and balance book half in the next step; hotstart) */
+      if (Len>=2){
+        const double dt=GWHotValue(s[1],":GWRiverTake",false);
+        ExitGracefullyIf(!(dt>0.0),"ParseInitialConditionsFile: :GWRiverTake: the time step of the takes must be positive",BAD_DATA);
+        pModel->GetGroundwaterModel()->SetHotstartRiverTakeStep(dt);
+      }
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWRiverTake")){break;}

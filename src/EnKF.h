@@ -67,6 +67,7 @@ private:
   void AssimilationCalcs();         //< determines the final state matrix after assimilation
   void UpdateFromStateMatrix(CModel *pModel,optStruct& Options,const int e);
   void AddToStateMatrix     (CModel* pModel,optStruct& Options,const int e);
+  void ReadExtraRVT         (CModel* pModel,optStruct& Options,const int e);
 public:
   CEnKFEnsemble(const int num_members,const optStruct &Options);
   ~CEnKFEnsemble();

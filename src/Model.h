@@ -171,6 +171,7 @@ private:/*------------------------------------------------------*/
   vector<vector<double> > _initQinHist,_initQlatHist; ///< routing memory at the first initialization, restored for later ensemble members
   vector<vector<double> > _initResState;              ///< reservoir dynamic state at the first initialization
   vector<double>          _initQlatLast;              ///< last lateral inflow at the first initialization [m3/s]
+  vector<vector<double> > _initRouteMem;              ///< local outflow, irrigation and diversion memory (also per water demand) at the first initialization [m3/s]
   double             _initWater;  ///< initial water in system [mm]
   double        _gwPassOut,_gwPassIn; ///< coupled run: water in the GROUNDWATER pass-through store at the end of the last step
                                       ///< (positive, negative part) [mm over the watershed]: it leaves Raven's storage when the

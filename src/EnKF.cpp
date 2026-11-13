@@ -782,6 +782,10 @@ void CEnKFEnsemble::UpdateModel(CModel *pModel,optStruct &Options,const int e)
   }
 
   ParseInitialConditions(pModel,Options);
+  //a coupled model reads the member's time series before its groundwater model is built: the boundaries are placed,
+  //and their cells held or switched, with the member's own :BoundaryHead series
+  const bool rvtBeforeBuild=(Options.modeltype==MODELTYPE_COUPLED);
+  if (rvtBeforeBuild){ReadExtraRVT(pModel,Options,e);}
   pModel->CalculateInitialWaterStorage(Options);
 
   //re-initialize reservoirs (esp. for overriding flows)
@@ -794,14 +798,22 @@ void CEnKFEnsemble::UpdateModel(CModel *pModel,optStruct &Options,const int e)
   }
 
   // read ensemble-member specific time series (e.g., upstream flows in model cascade), if present
+  if (!rvtBeforeBuild){ReadExtraRVT(pModel,Options,e);}
+
+  //The model is run following this routine call...
+}
+
+//////////////////////////////////////////////////////////////////
+/// \brief reads ensemble member e's :ExtraRVTFilename time series, if one is given
+//
+void CEnKFEnsemble::ReadExtraRVT(CModel *pModel,optStruct &Options,const int e)
+{
   if (_extra_rvt != "") {
     string rvt_name=_extra_rvt;
     SubstringReplace(rvt_name,"*",to_string(e+1));//replaces wildcard
     Options.rvt_filename=rvt_name;
     ParseTimeSeriesFile(pModel,Options);
   }
-
-  //The model is run following this routine call...
 }
 
 //////////////////////////////////////////////////////////////////

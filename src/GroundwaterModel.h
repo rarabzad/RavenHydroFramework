@@ -309,6 +309,11 @@ private:/*----------------------------------------------------*/
   int                    _sbOverN;       ///< steps on which a reach's outflow was set from outside the routing after a take (warnings)
   double                 _rivTake,_rivTakePrev; ///< river loss taken from reach inflows and outflows this step and in the last [m3] (Raven's
                                                 ///< channel storage and outflow book such a take half in its step and half in the next)
+  double                 _rivTakeDt,_rivTakePrevDt; ///< the time step of this step's and of the last step's takes [d] (a hotstart's own step
+                                                ///< for the takes of :GWRiverTake when the restart has another :TimeStep)
+  double                 _rivTakePrevBook; ///< the part of the last step's takes that Raven's channel storage and outflow book in this
+                                           ///< step [m3]: half the takes from inflows, half the takes from outflows times this step over theirs
+  double                 _hotRivTakeDt;  ///< from .rvc :GWRiverTake: the time step of the takes [d] (0: not given, the run's own step)
   map<long long,pair<double,double> > _hotRivTake; ///< from .rvc :GWRiverTake, by subbasin ID: inflow and outflow take of the last step [m3]
   map<long long,double>  _hotQoutRec;    ///< from .rvc :GWRiverTake: the reach's stored outflow after Raven's routing in the last step [m3/s]
   double                 _rivCarryEnd;   ///< river loss still carried at the end of the run [m3]
@@ -680,6 +685,7 @@ public:/*-------------------------------------------------------*/
   void   SetHotstartRiverLossCarry(const long long sbid,const double &v){_hotRivCarry[sbid]=v;}
   void   SetHotstartStartHeads(const vector<double> &x){_hotXStart=x;}
   void   SetHotstartRiverTake (const long long sbid,const double &vin,const double &vout,const double &qrec){_hotRivTake[sbid]=make_pair(vin,vout); if (qrec==qrec){_hotQoutRec[sbid]=qrec;}}
+  void   SetHotstartRiverTakeStep(const double &dt){_hotRivTakeDt=dt;}
   void   SetHotstartSoilZoneColumn(const long long hru,const int cell,const vector<double> &phi){if (cell<0){return;} _hotSzCols[hru][cell]=phi;}
   void   Reinitialize         (const optStruct &Options); ///< fresh start for a new ensemble member
   void   AddWell              (const gw_well &w){_aWells.push_back(w);}
@@ -756,7 +762,7 @@ public:/*-------------------------------------------------------*/
   void   FinishBudgetLine     ();
   ///  [m3] net water added to Raven this step, as Raven's balance books it: a river loss taken from a reach's inflow or
   ///  outflow enters Raven's channel storage and outflow (trapezoidal in time) half in its step and half in the next
-  double GetStepReturnVolume  () const {return _returnVol+_riverAppliedVol+_swxAppliedVol+_szAppliedVol+0.5*(_rivTake-_rivTakePrev);}
+  double GetStepReturnVolume  () const {return _returnVol+_riverAppliedVol+_swxAppliedVol+_szAppliedVol+(0.5*_rivTake-_rivTakePrevBook);}
   void   CloseOutputs         ();
   bool   IsActive             () const {return _active;}
   double GetObservationWellHead(const long long id) const; ///< [m]; RAV_BLANK_DATA if unknown
