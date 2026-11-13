@@ -8,6 +8,7 @@
 #include "GWGeometry.h"
 #include "GWGeoTIFF.h"
 #include "GWEPSGTable.h"
+#include "GWUtil.h"
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -59,36 +60,74 @@ bool CGWRaster::Read(const string &filename,string &err)
   if (GWGeoTIFF::IsTIFFName(filename)){return ReadTIFF(filename,err);}
   ifstream IN(filename.c_str());
   if (IN.fail()){err="cannot open raster file "+filename;return false;}
-  bool center=false; string key; double val,cs=1;
-  _nodata=-9999; _hasNodata=true;
-  for (int i=0;i<6;i++)
+  //ESRI ASCII grid: the header keys (any order, any case) up to the first value; GDAL writes dx and dy instead of
+  //cellsize for rectangular pixels, and NODATA_value nan for a floating-point raster whose missing pixels are NaN
+  if (IN.peek()==0xEF){char b[3]={0,0,0}; IN.read(b,3); if (!((unsigned char)b[1]==0xBB && (unsigned char)b[2]==0xBF)){IN.clear(); IN.seekg(0);}} //(a UTF-8 byte-order mark)
+  bool center=false,xc=false,yc=false; string tok; double cs=-1,dx=-1,dy=-1; double ncols=0,nrows=0; int nkey=0;
+  bool hasX=false,hasY=false;
+  _nodata=-9999; _hasNodata=true; _ncols=_nrows=0;
+  while (true)
   {
     streampos pos=IN.tellg();
-    if (!(IN>>key)){err="bad raster header in "+filename;return false;}
-    string lk=key; std::transform(lk.begin(),lk.end(),lk.begin(),::tolower);
-    if      (lk=="ncols"    ){IN>>_ncols;}
-    else if (lk=="nrows"    ){IN>>_nrows;}
-    else if (lk=="xllcorner"){IN>>_xll;}
-    else if (lk=="yllcorner"){IN>>_yll;}
-    else if (lk=="xllcenter"){IN>>_xll;center=true;}
-    else if (lk=="yllcenter"){IN>>_yll;center=true;}
-    else if (lk=="cellsize" ){IN>>cs;}
-    else if (lk=="nodata_value"){IN>>_nodata;}
-    else {IN.seekg(pos);break;} //no NODATA line
+    if (!(IN>>tok)){err="raster "+filename+" has a header but no values";return false;}
+    double v;
+    if (gwutil::StrictNumber(tok.c_str(),v) || (tok[0]=='-') || (tok[0]=='+') || (tok[0]=='.') || isdigit((unsigned char)tok[0])){IN.seekg(pos); break;} //(the first value)
+    string lk=tok; std::transform(lk.begin(),lk.end(),lk.begin(),::tolower);
+    if ((lk=="nan") && (nkey>0)){IN.seekg(pos); break;}                                     //(a first value that is NaN)
+    const char *keys[]={"ncols","nrows","xllcorner","yllcorner","xllcenter","yllcenter","cellsize","dx","dy","nodata_value"};
+    int kk=-1; for (int i=0;i<10;i++){if (lk==keys[i]){kk=i;}}
+    if (kk<0){err="raster "+filename+": unknown header key '"+tok+"' (an ESRI ASCII grid has ncols, nrows, xllcorner or xllcenter, yllcorner or yllcenter, cellsize or dx and dy, and NODATA_value)";return false;}
+    string sv;
+    if (!(IN>>sv)){err="raster "+filename+": the header key "+tok+" has no value";return false;}
+    string ls=sv; std::transform(ls.begin(),ls.end(),ls.begin(),::tolower);
+    if ((kk==9) && ((ls=="nan") || (ls=="-nan") || (ls=="+nan"))){_nodata=NAN; _hasNodata=false; nkey++; continue;} //(NaN pixels are never valid anyway)
+    if (!gwutil::StrictNumber(sv.c_str(),v)){err="raster "+filename+": the value of the header key "+tok+" ('"+sv+"') is not a number";return false;}
+    if ((kk<=1) && ((v!=floor(v)) || (v<=0) || (v>2.0e9))){err="raster "+filename+": "+tok+" "+sv+" is not a positive whole number";return false;}
+    switch (kk){
+      case 0: ncols=v; break;           case 1: nrows=v; break;
+      case 2: _xll=v; hasX=true; break; case 3: _yll=v; hasY=true; break;
+      case 4: _xll=v; hasX=true; xc=true; break; case 5: _yll=v; hasY=true; yc=true; break;
+      case 6: cs=v; break; case 7: dx=v; break; case 8: dy=v; break;
+      default: _nodata=v; _hasNodata=true;
+    }
+    nkey++;
   }
-  _dx=_dy=cs;
-  if ((_ncols<=0) || (_nrows<=0) || (cs<=0)){err="invalid raster header in "+filename;return false;}
+  (void)center;
+  if ((ncols<=0) || (nrows<=0) || !hasX || !hasY){err="raster "+filename+": the header lacks "+string((ncols<=0)?"ncols":(nrows<=0)?"nrows":!hasX?"xllcorner (or xllcenter)":"yllcorner (or yllcenter)");return false;}
+  if (cs>0){_dx=_dy=cs;}
+  else if ((dx>0) && (dy>0)){_dx=dx; _dy=dy;}
+  else {err="raster "+filename+": the header needs a positive cellsize, or positive dx and dy";return false;}
+  _ncols=(int)ncols; _nrows=(int)nrows; cs=_dx;
   if ((double)_ncols*(double)_nrows>MAX_PIXELS){
     ostringstream s; s<<"raster "<<filename<<" has "<<_ncols<<" x "<<_nrows<<" cells, more than the "<<MAX_PIXELS/1e6<<" million Raven reads: resample it to a "
                       <<"coarser resolution (a few raster cells per model cell are enough; each cell averages 25 samples)";
     err=s.str(); _ncols=0; return false;
   }
-  if (center){_xll-=0.5*cs;_yll-=0.5*cs;}
+  if (xc){_xll-=0.5*_dx;}                              //(each axis by its own key: a centre or a corner)
+  if (yc){_yll-=0.5*_dy;}
   if (!CheckLonLatRange(filename,err)){return false;}
   _v.resize((size_t)_ncols*_nrows);
   for (size_t i=0;i<_v.size();i++){
-    if (!(IN>>val)){err="raster "+filename+" has fewer values than ncols*nrows";_ncols=0;return false;}
-    _v[i]=val;
+    if (!(IN>>tok)){
+      ostringstream s; s<<"raster "<<filename<<" has "<<i<<" values, fewer than ncols*nrows ("<<_ncols<<" x "<<_nrows<<")";
+      err=s.str();_ncols=0;return false;
+    }
+    while (!tok.empty() && ((tok[tok.size()-1]=='\x1a') || (tok[tok.size()-1]=='\0'))){tok.erase(tok.size()-1);} //(a DOS end-of-file mark, as GDAL reads it)
+    double v; const char *c=tok.c_str();
+    if (!gwutil::StrictNumber(c,v)){
+      string l=tok; std::transform(l.begin(),l.end(),l.begin(),::tolower);
+      if ((l=="nan") || (l=="-nan") || (l=="+nan")){v=NAN;}
+      else {
+        ostringstream s; s<<"raster "<<filename<<": the value '"<<tok<<"' (row "<<i/_ncols+1<<", column "<<i%_ncols+1<<") is not a number";
+        err=s.str();_ncols=0;return false;
+      }
+    }
+    _v[i]=v;
+  }
+  while ((IN>>tok) && (tok.find_first_not_of(string("\x1a\0",2))==string::npos)){} //(trailing end-of-file marks)
+  if (IN && (tok.find_first_not_of(string("\x1a\0",2))!=string::npos)){
+    ostringstream s; s<<"raster "<<filename<<" has more values than ncols*nrows ("<<_ncols<<" x "<<_nrows<<"; the next is '"<<tok<<"'): check ncols and nrows in its header";
+    err=s.str();_ncols=0;return false;
   }
   return true;
 }
@@ -296,7 +335,7 @@ namespace
     for (size_t i=0;i<r.size();i++){r[i]=C.Point(r[i].x,r[i].y);}
     return (r.size()>=3);
   }
-  void AddPolygon(const JVal &jpoly,vector<gw_ring> &rings,JCoords &C)
+  void AddPolygon(const JVal &jpoly,vector<gw_ring> &rings,JCoords &C,vector<int> *part,const int ipart)
   {
     for (size_t i=0;i<jpoly.a.size();i++){
       gw_ring r;
@@ -305,6 +344,7 @@ namespace
       bool outer=(i==0);
       if ((outer && (A<0)) || (!outer && (A>0))){std::reverse(r.begin(),r.end());}
       rings.push_back(r);
+      if (part!=NULL){part->push_back(ipart);}
     }
   }
   //the GeoJSON "crs" member (GDAL: {"type":"name","properties":{"name":"urn:ogc:def:crs:EPSG::32610"}}) against :InputCRS.
@@ -346,6 +386,12 @@ namespace
       if (crs!=NULL){err="GeoJSON file "+filename+" is in longitude/latitude (its \"crs\" member, "+name+"), but :InputCRS says the input files are projected: give the file in the :InputCRS projection, "+crs->Describe()+" (or remove :InputCRS if every input file is in longitude/latitude)";return false;}
       return true;
     }
+    for (int i=0;(code>0) && (i<GW_EPSG_PROJECTED_NOT_METRE_N);i++){ //(a projection whose coordinates are not metres)
+      if (GW_EPSG_PROJECTED_NOT_METRE[i].code!=code){continue;}
+      err="GeoJSON file "+filename+" is in "+cs.str()+" (its \"crs\" member, "+name+"), a projection whose coordinates are in "+string(GW_EPSG_PROJECTED_NOT_METRE[i].name)+
+          "; Raven reads projected coordinates in metres: reproject the file to a projection in metres";
+      return false;
+    }
     CGWCRS f; string e2;
     if (!f.Parse(cs.str(),e2)){unknown=cs.str()+" (its \"crs\" member, "+name+")"; return true;} //(not built in: cannot be compared)
     if (crs==NULL){err="GeoJSON file "+filename+" is in "+cs.str()+" (its \"crs\" member, "+name+"): give :InputCRS "+cs.str()+" in the .rvg file, or reproject the file to longitude/latitude";return false;}
@@ -380,18 +426,20 @@ double GWGeom::SignedArea(const gw_ring &r)
 }
 
 bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
-                                 map<long long,vector<gw_ring> > &shapes,string &err,const CGWCRS *crs,double *rawbox)
+                                 map<long long,vector<gw_ring> > &shapes,string &err,const CGWCRS *crs,double *rawbox,
+                                 map<long long,vector<int> > *parts)
 {
   ifstream IN(filename.c_str(),ios::binary);
   if (IN.fail()){err="cannot open GeoJSON file "+filename;return false;}
   stringstream ss; ss<<IN.rdbuf(); string txt=ss.str();
+  if (txt.compare(0,3,"\xEF\xBB\xBF")==0){txt.erase(0,3);}   //(a UTF-8 byte-order mark, as some Windows programs write)
   JVal root; JParser P(txt.c_str(),txt.c_str()+txt.size());
   if (!P.Parse(root) || (root.t!=J_OBJ)){err="invalid JSON in "+filename;return false;}
   const JVal *feats=root.Get("features");
   if ((feats==NULL) || (feats->t!=J_ARR)){err=filename+" is not a GeoJSON FeatureCollection";return false;}
   JCoords C(crs);
   if (!CheckFileCRS(root,filename,crs,err,C.unknown)){return false;}
-  int nfound=0;
+  int nfound=0,npart=0;
   for (size_t f=0;f<feats->a.size();f++)
   {
     const JVal &F=feats->a[f];
@@ -410,8 +458,9 @@ bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
     if ((gt==NULL) || (co==NULL)){continue;}
     if ((gt->s!="Polygon") && (gt->s!="MultiPolygon")){continue;} //(checked first: a line with the same ID adds no empty entry)
     vector<gw_ring> &rings=shapes[id];
-    if (gt->s=="Polygon"){AddPolygon(*co,rings,C);}
-    else {for (size_t i=0;i<co->a.size();i++){AddPolygon(co->a[i],rings,C);}}
+    vector<int> *pp=(parts!=NULL)?&(*parts)[id]:NULL;  //(the polygon each ring belongs to: a Polygon, or one part of a MultiPolygon)
+    if (gt->s=="Polygon"){AddPolygon(*co,rings,C,pp,npart++);}
+    else {for (size_t i=0;i<co->a.size();i++){AddPolygon(co->a[i],rings,C,pp,npart++);}}
     nfound++;
   }
   if (nfound==0){err="no Polygon/MultiPolygon features found in "+filename;return false;}  //(callers may then try lines)
@@ -426,6 +475,7 @@ bool GWGeom::ReadGeoJSONLines(const string &filename,const string &idField,
   ifstream IN(filename.c_str(),ios::binary);
   if (IN.fail()){err="cannot open GeoJSON file "+filename;return false;}
   stringstream ss; ss<<IN.rdbuf(); string txt=ss.str();
+  if (txt.compare(0,3,"\xEF\xBB\xBF")==0){txt.erase(0,3);}   //(a UTF-8 byte-order mark, as some Windows programs write)
   JVal root; JParser P(txt.c_str(),txt.c_str()+txt.size());
   if (!P.Parse(root) || (root.t!=J_OBJ)){err="invalid JSON in "+filename;return false;}
   const JVal *feats=root.Get("features");
@@ -511,11 +561,34 @@ bool CGWCRS::Parse(const string &spec0,string &err)
 {
   string spec=spec0; for (size_t i=0;i<spec.size();i++){spec[i]=(char)toupper((unsigned char)spec[i]);}
   _epsg=0; _code="";
-  istringstream is(spec); vector<string> w; string t; while (is>>t){w.push_back(t);}
+  istringstream is(spec),is0(spec0); vector<string> w,w0; string t; while (is>>t){w.push_back(t);} while (is0>>t){w0.push_back(t);}
   if (w.empty()){err="empty coordinate system"; return false;}
   string ell="WGS84";
+  //every parameter is read strictly (the whole token a finite number) and the count is exact: a typo would otherwise
+  //move or shear the model without a word
+  const char *pn1[5]={"lat0","lon0","k0","FE","FN"},*pn2[6]={"lat1","lat2","lat0","lon0","FE","FN"};
+  double par[6]={0,0,0,0,0,0};
+  if ((w[0]=="TMERC") || (w[0]=="ALBERS") || (w[0]=="LCC")){
+    const int np=(w[0]=="TMERC")?5:6;
+    if ((w.size()<(size_t)np+1) || (w.size()>(size_t)np+2)){
+      err=w0[0]+" takes "+((np==5)?"lat0 lon0 k0 FE FN":"lat1 lat2 lat0 lon0 FE FN")+" and an optional ellipsoid (WGS84 or GRS80): "+to_string((long long)w.size()-1)+" values are given";
+      return false;
+    }
+    for (int i=0;i<np;i++){
+      if (!gwutil::StrictNumber(w0[i+1].c_str(),par[i])){err=w0[0]+" parameter "+string((np==5)?pn1[i]:pn2[i])+": '"+w0[i+1]+"' is not a number"; return false;}
+    }
+    if ((np==5) && !(par[2]>0.0)){err="TMERC parameter k0 (the scale factor) must be positive: '"+w0[3]+"'"; return false;}
+    for (int i=0;i<np;i++){
+      const string nm=(np==5)?pn1[i]:pn2[i];
+      if ((nm.compare(0,3,"lat")==0) && (fabs(par[i])>90.0)){err=w0[0]+" parameter "+nm+": "+w0[i+1]+" is not a latitude (-90 to 90 degrees)"; return false;}
+      if ((nm=="lon0") && (fabs(par[i])>360.0)){err=w0[0]+" parameter lon0: "+w0[i+1]+" is not a longitude (degrees)"; return false;}
+    }
+  }
   if ((w[0].compare(0,5,"EPSG:")==0) || (w[0]=="ESRI:102001")){ //(102001 is an ESRI code; EPSG:102001 is accepted as well)
-    long code=atol(w[0].substr(5).c_str());
+    if (w.size()>1){err="surplus value '"+w0[1]+"' after "+w0[0]+" (an EPSG code takes no parameters)"; return false;}
+    const string num=w[0].substr(5);
+    if (num.empty() || (num.find_first_not_of("0123456789")!=string::npos) || (num.size()>9)){err="'"+w0[0]+"' is not EPSG: followed by a whole-number code"; return false;}
+    long code=atol(num.c_str());
     if ((code>32600) && (code<=32660)){_type=1; _lat0=0; _lon0=-183+6*(code-32600); _k0=0.9996; _fe=500000; _fn=0;}
     else if ((code>32700) && (code<=32760)){_type=1; _lat0=0; _lon0=-183+6*(code-32700); _k0=0.9996; _fe=500000; _fn=10000000;}
     else if ((code>=26901) && (code<=26923)){_type=1; _lat0=0; _lon0=-183+6*(code-26900); _k0=0.9996; _fe=500000; _fn=0; ell="GRS80";}
@@ -528,13 +601,12 @@ bool CGWCRS::Parse(const string &spec0,string &err)
     if ((w[0].compare(0,5,"EPSG:")==0) && (code!=102001)){_epsg=code;}
     _code=(code==102001)?"ESRI:102001":w[0];
   }
-  else if ((w[0]=="TMERC") && (w.size()>=6)){_type=1; _lat0=atof(w[1].c_str()); _lon0=atof(w[2].c_str()); _k0=atof(w[3].c_str()); _fe=atof(w[4].c_str()); _fn=atof(w[5].c_str()); if (w.size()>6){ell=w[6];}}
-  else if (((w[0]=="ALBERS") || (w[0]=="LCC")) && (w.size()>=7)){
-    _type=(w[0]=="ALBERS")?2:3; _lat1=atof(w[1].c_str()); _lat2=atof(w[2].c_str()); _lat0=atof(w[3].c_str()); _lon0=atof(w[4].c_str());
-    _fe=atof(w[5].c_str()); _fn=atof(w[6].c_str()); if (w.size()>7){ell=w[7];}
+  else if (w[0]=="TMERC"){_type=1; _lat0=par[0]; _lon0=par[1]; _k0=par[2]; _fe=par[3]; _fn=par[4]; if (w.size()>6){ell=w[6];}}
+  else if ((w[0]=="ALBERS") || (w[0]=="LCC")){
+    _type=(w[0]=="ALBERS")?2:3; _lat1=par[0]; _lat2=par[1]; _lat0=par[2]; _lon0=par[3]; _fe=par[4]; _fn=par[5]; if (w.size()>7){ell=w[7];}
   }
   else {err="coordinate system must be EPSG:code, TMERC lat0 lon0 k0 FE FN, ALBERS lat1 lat2 lat0 lon0 FE FN or LCC lat1 lat2 lat0 lon0 FE FN"; return false;}
-  if (ell=="GRS80"){_f=1.0/298.257222101;} else if (ell=="WGS84"){_f=1.0/298.257223563;} else {err="ellipsoid must be WGS84 or GRS80"; return false;}
+  if (ell=="GRS80"){_f=1.0/298.257222101;} else if (ell=="WGS84"){_f=1.0/298.257223563;} else {err="ellipsoid must be WGS84 or GRS80, not '"+w0[w.size()-1]+"'"; return false;}
   _a=6378137.0; _e2=_f*(2-_f); _e=sqrt(_e2);
   _lat0*=D2R; _lon0*=D2R; _lat1*=D2R; _lat2*=D2R;
   if (_type==1){

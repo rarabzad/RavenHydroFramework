@@ -100,7 +100,8 @@ namespace GWGeom
   //(crs: projection of the file's coordinates, :InputCRS; NULL: longitude/latitude. Vertices are returned in lon/lat;
   // rawbox, if given: xmin, ymin, xmax, ymax of the coordinates as written in the file)
   bool   ReadGeoJSONPolygons(const string &filename,const string &idField,
-                             map<long long,vector<gw_ring> > &shapes,string &err,const CGWCRS *crs=NULL,double *rawbox=NULL);
+                             map<long long,vector<gw_ring> > &shapes,string &err,const CGWCRS *crs=NULL,double *rawbox=NULL,
+                             map<long long,vector<int> > *parts=NULL); ///< parts: for each ring, the polygon it belongs to (rings of one polygon: its outline and holes)
   bool   ReadGeoJSONLines   (const string &filename,const string &idField,
                              vector<gw_ring> &lines,vector<long long> &ids,string &err,const CGWCRS *crs=NULL,double *rawbox=NULL);
   double SignedArea         (const gw_ring &r);
