@@ -9,6 +9,7 @@
 #include "ParseLib.h"
 #include "GlobalParams.h"
 #include "SoilAndLandClasses.h"
+#include "GWUtil.h"
 #include <string>
 
 
@@ -45,6 +46,21 @@ void  AddNewLULTClass       (CLandUseClass **&pLandUseClasses, surface_struct **
 void  AddNewVegClass        (CVegetationClass **&pVegClasses, veg_struct **&parsed_vegs,
                              string *&vegtags, int &num_parsed_vegs,
                              const string name, bool isdefault, CModel *pModel);
+//////////////////////////////////////////////////////////////////
+/// \brief a number of the groundwater coupling's tables (:AquiferClasses, :AquiferProfiles, :AquiferProfileParameters),
+///  read strictly: the whole token must be a finite number (a letter O for a zero, or a unit, would otherwise be read as
+///  the number before it, or as 0)
+//
+static double GWTableNumber(const char *tok,const string &table,const string &row,const string &what)
+{
+  double v=0.0;
+  if (!gwutil::StrictNumber(tok,v)){
+    ExitGracefully(("ParseClassPropertiesFile: "+table+", row "+row+": "+what+" '"+string(tok)+"' is not a number (give a plain number in the units of the manual, "
+                    "without units or thousands separators)").c_str(),BAD_DATA);
+  }
+  return v;
+}
+
 //////////////////////////////////////////////////////////////////
 /// \brief This method parses the class properties .rvp file
 ///
@@ -854,7 +870,7 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
         gw_aquifer_class c; c.name=s[0]; c.Kh=-1; c.Kv=-1; c.Ss=1e-5; c.Sy=0.1; c.porosity=0.3; c.clapp_b=4.0; c.psia=0.3; c.unsatGiven=false; c.syGiven=false; bool kvGiven=false;
         int nUnsat=0;
         for (size_t i=0;i<attrs.size();i++){
-          double v=s_to_d(s[i+1]);
+          double v=GWTableNumber(s[i+1],":AquiferClasses",c.name,attrs[i]);
           if      (attrs[i]=="K_HORIZ"     ){c.Kh=v;}
           else if (attrs[i]=="K_VERT"      ){c.Kv=v; kvGiven=true;}
           else if (attrs[i]=="SPEC_STORAGE"){c.Ss=v;}
@@ -885,7 +901,9 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
         if (!strcmp(s[0],":EndAquiferProfiles")){break;}
         if ((!strcmp(s[0],":Attributes")) || (!strcmp(s[0],":Units"))){continue;}
         ExitGracefullyIf(Len<2,"ParseClassPropertiesFile: bad :AquiferProfiles row",BAD_DATA);
-        int nL=s_to_i(s[1]);
+        const double nLd=GWTableNumber(s[1],":AquiferProfiles",s[0],"the number of layers");
+        ExitGracefullyIf((nLd!=floor(nLd)) || (nLd>1000),("ParseClassPropertiesFile: :AquiferProfiles, row "+string(s[0])+": the number of layers '"+string(s[1])+"' is not a whole number").c_str(),BAD_DATA);
+        int nL=(int)nLd;
         ExitGracefullyIf((nL<0) || (Len!=2+3*nL),
           ("ParseClassPropertiesFile: aquifer profile "+string(s[0])+" must list name, nLayers, then class, thickness or TO_BEDROCK, and layer type for each layer").c_str(),BAD_DATA);
         gw_profile P=CGroundwaterModel::DefaultProfile(s[0]);
@@ -895,7 +913,7 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
           L.iclass=pGW->GetAquiferClassIndex(cls);
           ExitGracefullyIf(L.iclass==DOESNT_EXIST,("ParseClassPropertiesFile: unknown aquifer class "+cls+" (define :AquiferClasses before :AquiferProfiles)").c_str(),BAD_DATA);
           L.to_bedrock=(th=="TO_BEDROCK");
-          L.thickness=L.to_bedrock?0.0:s_to_d(th.c_str());
+          L.thickness=L.to_bedrock?0.0:GWTableNumber(th.c_str(),":AquiferProfiles",P.name,"the thickness of layer "+to_string(l+1)+" (or TO_BEDROCK)");
           ExitGracefullyIf((!L.to_bedrock) && (L.thickness<=0),("ParseClassPropertiesFile: layer thickness must be positive in aquifer profile "+P.name).c_str(),BAD_DATA);
           if      ((ty=="AQUIFER") || (ty=="UNCONFINED_AQUIFER")){L.type=GWL_AQUIFER;}
           else if  (ty=="CONFINED_AQUIFER")                      {L.type=GWL_CONFINED_AQUIFER;}
@@ -925,7 +943,7 @@ bool ParseClassPropertiesFile(CModel         *&pModel,
         ExitGracefullyIf(attrs.size()==0,"ParseClassPropertiesFile: :AquiferProfileParameters requires an :Attributes line",BAD_DATA);
         ExitGracefullyIf(Len!=(int)attrs.size()+1,"ParseClassPropertiesFile: :AquiferProfileParameters row has the wrong number of values",BAD_DATA);
         for (size_t i=0;i<attrs.size();i++){
-          if (!pGW->SetProfileParameter(s[0],attrs[i],s_to_d(s[i+1]))){
+          if (!pGW->SetProfileParameter(s[0],attrs[i],GWTableNumber(s[i+1],":AquiferProfileParameters",s[0],attrs[i]))){
             ExitGracefully(("ParseClassPropertiesFile: unknown aquifer profile "+string(s[0])+" in :AquiferProfileParameters").c_str(),BAD_DATA);
           }
         }

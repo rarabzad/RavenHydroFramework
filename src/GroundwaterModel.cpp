@@ -416,6 +416,8 @@ void CGroundwaterModel::MeshSeeds(const vector<vector<gw_ring> > &rings,const ve
   double cs=_cellSize,sb=0.5*cs,smin=sb;
   for (size_t i=0;i<ref.size();i++){if (ref[i].kind==1){sb=min(sb,ref[i].size);} smin=min(smin,ref[i].size);}
   double hs=0.25*min(sb,smin); //hash size for spacing checks
+  const double hc=max(hs,0.25*cs); //a second, coarser hash for searches over a larger radius (the interior lattice at the base
+                                   //cell size), so that their cost does not grow with the inverse square of the finest refinement size
   //is a point inside a refinement polygon, or within distance r of its outline?
   auto nearPoly=[&](const gw_ring &P,const double px,const double py,const double r)->bool {
     if (GWGeom::PointInRing(P,px,py)){return true;}
@@ -426,19 +428,21 @@ void CGroundwaterModel::MeshSeeds(const vector<vector<gw_ring> > &rings,const ve
     }
     return false;
   };
-  map<pair<long long,long long>,vector<int> > H;
+  map<pair<long long,long long>,vector<int> > H,Hc;
   struct local { static pair<long long,long long> K(double x,double y,double h){return make_pair((long long)floor(x/h),(long long)floor(y/h));} };
   //nearest distance to accepted seeds within r
   vector<gw_pt> &S=seeds;
   auto nearest=[&](const double px,const double py,const double r)->double { //distance to the nearest accepted seed within r
-    double res=1e300; long long ki=(long long)floor(px/hs),kj=(long long)floor(py/hs); int kr=(int)ceil(r/hs);
+    //(either hash finds every seed within r, so the seeds do not depend on the hash used: the one that scans fewer squares)
+    const bool coarse=(ceil(r/hc)<ceil(r/hs)); const double h=coarse?hc:hs; map<pair<long long,long long>,vector<int> > &M=coarse?Hc:H;
+    double res=1e300; long long ki=(long long)floor(px/h),kj=(long long)floor(py/h); int kr=(int)ceil(r/h);
     for (long long ia=ki-kr;ia<=ki+kr;ia++){for (long long ja=kj-kr;ja<=kj+kr;ja++){
-      map<pair<long long,long long>,vector<int> >::iterator it=H.find(make_pair(ia,ja)); if (it==H.end()){continue;}
+      map<pair<long long,long long>,vector<int> >::iterator it=M.find(make_pair(ia,ja)); if (it==M.end()){continue;}
       for (size_t m=0;m<it->second.size();m++){const gw_pt &q=S[it->second[m]]; res=min(res,hypot(q.x-px,q.y-py));}
     }}
     return res;
   };
-  auto addSeed=[&](const double px,const double py){gw_pt q; q.x=px; q.y=py; H[local::K(q.x,q.y,hs)].push_back((int)S.size()); S.push_back(q);};
+  auto addSeed=[&](const double px,const double py){gw_pt q; q.x=px; q.y=py; H[local::K(q.x,q.y,hs)].push_back((int)S.size()); Hc[local::K(q.x,q.y,hc)].push_back((int)S.size()); S.push_back(q);};
   //1. mirrored pairs along unique boundary segments
   set<pair<pair<long long,long long>,pair<long long,long long> > > done;
   for (size_t k=0;k<rings.size();k++){
@@ -1267,6 +1271,39 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   }
   else if (_gridType==GWGRID_HRUMESH){
     vector<vector<gw_ring> > rr; for (size_t i=0;i<_aqHRUs.size();i++){rr.push_back(prj[_aqHRUs[i]]);}
+    //the mesh's size, estimated before the seeds are placed (a refinement size given in km, or split by a thousands
+    //separator, asks for millions of seeds): pairs along the HRU boundaries, seeds on the refinement lines, around the
+    //points and over the polygons, and the interior lattice; the seeds placed are fewer (those too close are left out)
+    if (!ref.empty()){
+      double smin=cs,sb=0.5*cs,est=(maxx-minx+2*cs)*(maxy-miny+2*cs)/(cs*cs),nb=0.0;
+      for (size_t i=0;i<ref.size();i++){if (ref[i].kind==1){sb=min(sb,ref[i].size);} smin=min(smin,ref[i].size);}
+      set<pair<pair<long long,long long>,pair<long long,long long> > > seg;
+      for (size_t k=0;k<rr.size();k++){for (size_t r=0;r<rr[k].size();r++){const gw_ring &R=rr[k][r]; for (size_t v=0;v<R.size();v++){
+        const gw_pt &A=R[v],&B=R[(v+1)%R.size()];
+        pair<long long,long long> ka((long long)llround(A.x*100),(long long)llround(A.y*100)),kb((long long)llround(B.x*100),(long long)llround(B.y*100));
+        if (kb<ka){swap(ka,kb);}
+        if (seg.insert(make_pair(ka,kb)).second){nb+=2.0*max(1.0,hypot(B.x-A.x,B.y-A.y)/sb);}
+      }}}
+      for (size_t i=0;i<ref.size();i++){
+        const gw_ring &g=ref[i].geom; const double s=ref[i].size;
+        if (ref[i].kind==0){est+=19.0;}
+        else if (ref[i].kind==1){for (size_t v=0;v+1<g.size();v++){est+=max(1.0,hypot(g[v+1].x-g[v].x,g[v+1].y-g[v].y)/s);}}
+        else {double P=0; for (size_t v=0;v<g.size();v++){P+=hypot(g[(v+1)%g.size()].x-g[v].x,g[(v+1)%g.size()].y-g[v].y);}
+              est+=(fabs(GWGeom::SignedArea(g))+2.0*P*s+4.0*s*s)/(0.8660254*s*s);}
+      }
+      est+=nb; _gridEst=est; _gridWhat=":GridRefinement";
+      //the HRU boundaries take seed pairs at the smallest line size, and their cells reach half a base cell inland: the
+      //work of building the cells grows with their number times base cell size / spacing
+      const double work=nb*0.5*cs/sb,MAX_WORK=2.5e8; //(about five minutes on one core)
+      if ((est>1.5*maxCells) || (work>MAX_WORK)){
+        ostringstream S; S<<"CGroundwaterModel: the :GridRefinement sizes (smallest "<<setprecision(4)<<smin<<" m) give an HRU mesh of about "<<setprecision(3)<<est<<" cells per layer (estimated)";
+        if (est>1.5*maxCells){S<<", more than "<<maxCells;}
+        else {S<<", with seeds every "<<setprecision(4)<<sb<<" m along "<<setprecision(3)<<0.5*nb*sb/1000.0<<" km of HRU boundaries (the smallest LINES or RIVERS size), whose cells reach "
+               <<0.5*cs<<" m inland: too slow to build (a size meant in km given in m?)";}
+        S<<": give larger refinement sizes in metres as plain numbers (for example 500, not 0.5 or 1,000)";
+        ExitGracefully(S.str().c_str(),BAD_DATA);
+      }
+    }
     vector<gw_pt> seeds; MeshSeeds(rr,ref,minx-cs,miny-cs,maxx+cs,maxy+cs,seeds);
     ExitGracefullyIf(seeds.size()>maxCells,"CGroundwaterModel: HRU mesh exceeds 5 million cells per layer; increase :GridCellSize",BAD_DATA);
     _grid.MakeVoronoi(seeds,minx-cs,miny-cs,maxx+cs,maxy+cs);
@@ -1573,26 +1610,33 @@ void CGroundwaterModel::BuildRivers()
 vector<int> CGroundwaterModel::SelectColumns(const string &file) const
 {
   vector<int> cols; vector<char> sel(_ncpl,0); string err;
-  map<long long,vector<gw_ring> > polys; double rb[4];
-  if (GWGeom::ReadGeoJSONPolygons(file,"",polys,err,InCRS(),rb))
+  map<long long,vector<gw_ring> > polys; map<long long,vector<int> > parts; double rb[4];
+  if (GWGeom::ReadGeoJSONPolygons(file,"",polys,err,InCRS(),rb,&parts))
   {
     CheckInputLonLat(file,rb,"GeoJSON file");
-    vector<gw_ring> rings;
+    vector<gw_ring> rings; vector<int> part;
     for (map<long long,vector<gw_ring> >::const_iterator it=polys.begin();it!=polys.end();it++){
+      const vector<int> &pp=parts[it->first];
       for (size_t r=0;r<it->second.size();r++){
         gw_ring R; for (size_t n=0;n<it->second[r].size();n++){gw_pt q; _proj.Forward(it->second[r][n].x,it->second[r][n].y,q.x,q.y); R.push_back(q);}
-        rings.push_back(R);
+        rings.push_back(R); part.push_back(pp[r]);
       }
     }
     for (int ic=0;ic<_ncpl;ic++){
       if (_colProfile[ic]==DOESNT_EXIST){continue;}
       double x,y; CellCentreWorld(ic,x,y);
-      bool in=false; //even-odd rule over all rings (holes included)
-      for (size_t r=0;r<rings.size();r++){
-        const gw_ring &R=rings[r]; size_t m=R.size();
-        for (size_t i=0,j=m-1;i<m;j=i++){
-          if (((R[i].y>y)!=(R[j].y>y)) && (x<(R[j].x-R[i].x)*(y-R[i].y)/(R[j].y-R[i].y)+R[i].x)){in=!in;}
+      //even-odd rule within each polygon (its outline and holes), and the union of the polygons: a centre inside two
+      //overlapping features (or parts of a MultiPolygon) is inside
+      bool in=false;
+      for (size_t r0=0;(r0<rings.size()) && !in;){
+        size_t r1=r0; bool inp=false;
+        for (;(r1<rings.size()) && (part[r1]==part[r0]);r1++){
+          const gw_ring &R=rings[r1]; size_t m=R.size();
+          for (size_t i=0,j=m-1;i<m;j=i++){
+            if (((R[i].y>y)!=(R[j].y>y)) && (x<(R[j].x-R[i].x)*(y-R[i].y)/(R[j].y-R[i].y)+R[i].x)){inp=!inp;}
+          }
         }
+        in=inp; r0=r1;
       }
       if (in){sel[ic]=1;}
     }
@@ -3470,6 +3514,11 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
   if (_doSteady){S<<"  initialization        : steady state, recharge "<<_ssRecharge<<" mm/d"<<endl;}
   else if (_hotHeads.size()>0){S<<"  initialization        : hotstart heads from .rvc"<<endl;}
   if (_dryStart!=""){S<<"  dry at the start      : layer "<<_dryStart<<"; every active convertible cell at or below its bottom"<<endl;}
+  { bool anyDelay=false; double s0=0.0; //(the recharge-delay reservoirs at the start, so that a balance check can include step 1)
+    for (size_t p=0;p<_aProfiles.size();p++){if (_aProfiles[p].recharge_delay>0){anyDelay=true;}}
+    for (size_t i=0;i<_aqHRUs.size();i++){s0+=_rchStore[_aqHRUs[i]];}
+    if (anyDelay || (s0!=0.0)){S<<"  recharge delay storage: "<<setprecision(15)<<s0<<setprecision(6)<<" m3 at the start (GWBudget.csv 'recharge delay storage')"<<endl;}
+  }
   for (size_t p=0;p<_aProfiles.size();p++){
     int n=0; for (int ic=0;ic<_ncpl;ic++){if (_colProfile[ic]==(int)p){n++;}}
     S<<"  profile "<<_aProfiles[p].name<<": ";

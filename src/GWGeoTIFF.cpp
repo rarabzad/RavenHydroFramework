@@ -411,9 +411,9 @@ namespace
       for (uint64_t i=0;i<t->count;i++){if (!Double(*t,i,v[(size_t)i])){v.clear(); return false;}}
       return true;
     }
-    string Ascii(const int tag) const
+    string Ascii(const int tag,const uint64_t maxlen=256) const
     {
-      const TEntry *t=Tag(tag); if ((t==NULL) || (t->type!=2) || (t->count>256)){return "";}
+      const TEntry *t=Tag(tag); if ((t==NULL) || (t->type!=2) || (t->count>maxlen)){return "";}
       string s((const char*)d+t->off,(size_t)t->count);
       size_t z=s.find('\0'); if (z!=string::npos){s.erase(z);}
       return s;
@@ -540,6 +540,34 @@ namespace
       case 9014: return "fathom"; case 9030: return "nautical mile"; case 9036: return "kilometre"; case 9101: return "radian";
       case 9102: return "degree"; case 9103: return "arc-minute"; case 9104: return "arc-second"; case 9105: return "grad";
       case 9122: return "degree"; case 32767: return "user-defined"; default: return "code "+to_string((unsigned long long)u);
+    }
+  }
+  //the scale, offset and unit of band 1 in GDAL's metadata (tag 42112, XML; GDAL writes them as
+  //<Item name="SCALE" sample="0" role="scale">0.1</Item>): upper-case role (SCALE, OFFSET, UNITTYPE) -> text (entities
+  //decoded, blanks trimmed). As GDAL reads them, only items with such a role count: an item without one is ordinary
+  //band metadata
+  void GDALBandItems(const string &x,map<string,string> &items)
+  {
+    size_t p=0;
+    while ((p=x.find("<Item",p))!=string::npos){
+      size_t gt=x.find('>',p); if (gt==string::npos){break;}
+      const string head=x.substr(p,gt-p);
+      if (!head.empty() && (head[head.size()-1]=='/')){p=gt+1; continue;}     //(an empty item)
+      size_t end=x.find("</Item>",gt); if (end==string::npos){break;}
+      string body=x.substr(gt+1,end-gt-1); p=end+7;
+      string role,sample;
+      for (int k=0;k<2;k++){
+        const string a=(k==0)?" role=\"":" sample=\""; size_t q=head.find(a); if (q==string::npos){continue;}
+        q+=a.size(); size_t r=head.find('"',q); if (r!=string::npos){((k==0)?role:sample)=head.substr(q,r-q);}
+      }
+      if (sample!="0"){continue;}                                             //(dataset items and other bands)
+      for (size_t i=0;i<role.size();i++){role[i]=(char)toupper((unsigned char)role[i]);}
+      if ((role!="SCALE") && (role!="OFFSET") && (role!="UNITTYPE")){continue;} //(other band metadata)
+      const char *ent[5][2]={{"&lt;","<"},{"&gt;",">"},{"&quot;","\""},{"&apos;","'"},{"&amp;","&"}};
+      for (int e=0;e<5;e++){size_t q=0; while ((q=body.find(ent[e][0],q))!=string::npos){body.replace(q,strlen(ent[e][0]),ent[e][1]); q+=strlen(ent[e][1]);}}
+      size_t a=body.find_first_not_of(" \t\r\n"),b=body.find_last_not_of(" \t\r\n");
+      body=(a==string::npos)?"":body.substr(a,b-a+1);
+      items[role]=body;
     }
   }
   const char *Lookup(const gw_epsg_name *tab,const int nt,const int code)
@@ -696,7 +724,8 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
   if (!std::isfinite(xul) || !std::isfinite(yul) || !std::isfinite(sx) || !std::isfinite(sy)){err=F+"invalid georeferencing values"; return false;}
   //-- GeoKeys: model type, raster type (PixelIsArea/PixelIsPoint), EPSG code of the CRS
   int projCS=0,geogCS=0; bool hasProj=false,hasGeog=false;
-  uint64_t projLin=0,geogLin=0,geogAng=0,vertU=0,geogPM=0,vertCS=0; //(units, prime meridian and vertical keys; 0: not given)
+  uint64_t projLin=0,geogLin=0,geogAng=0,vertU=0,geogPM=0,vertCS=0,geogDatum=0; //(units, prime meridian, datum and vertical keys; 0: not given)
+  double pmLong=0.0; bool hasPMLong=false;   //(GeogPrimeMeridianLongGeoKey, a double held in GeoDoubleParams, tag 34736)
   { const TEntry *t=T.Tag(34735);
     if (t!=NULL){
       vector<uint64_t> k; uint64_t nk=t->count;
@@ -704,8 +733,13 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
       if (!T.List(34735,k,nk,e) || (k.size()<4)){err=F+"corrupt GeoKeyDirectory"; return false;}
       uint64_t nkeys=std::min(k[3],(uint64_t)(k.size()-4)/4);
       for (uint64_t i=0;i<nkeys;i++){
-        uint64_t id=k[4+4*i],loc=k[5+4*i],val=k[7+4*i];
-        if (loc!=0){continue;}                          //(values held in other tags are not needed)
+        uint64_t id=k[4+4*i],loc=k[5+4*i],cnt=k[6+4*i],val=k[7+4*i];
+        if ((loc==34736) && (id==2061)){                //(the prime meridian of a user-defined geographic system, as GDAL writes it)
+          vector<double> dbl;
+          if (!T.Doubles(34736,dbl) || (cnt<1) || (val>=dbl.size())){err=F+"corrupt GeoKeyDirectory (GeogPrimeMeridianLongGeoKey outside GeoDoubleParams)"; return false;}
+          pmLong=dbl[(size_t)val]; hasPMLong=true; continue;
+        }
+        if (loc!=0){continue;}                          //(other values held in other tags are not needed)
         if      (id==1024){R.modelType=(int)val;}
         else if (id==1025){R.rasterType=(int)val;}
         else if (id==2048){geogCS=(int)val; hasGeog=true;}
@@ -715,6 +749,7 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
         else if (id==3076){projLin=val;}
         else if (id==4099){vertU=val;}
         else if (id==2051){geogPM=val;}
+        else if (id==2050){geogDatum=val;}
         else if (id==4096){vertCS=val;}
       }
     }
@@ -737,7 +772,16 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
     if (pm!=NULL){err=F+"it is in EPSG:"+to_string(R.epsg)+", whose longitudes count from the prime meridian of "+string(pm)+" from Greenwich; Raven reads longitudes from Greenwich: reproject the raster (e.g. gdalwarp -t_srs EPSG:4326)"; return false;}
     if (au!=NULL){err=F+"it is in EPSG:"+to_string(R.epsg)+", whose angles are in "+string(au)+"; Raven reads longitude/latitude in degrees: reproject the raster (e.g. gdalwarp -t_srs EPSG:4326)"; return false;}
   }
-  if (geo && (geogPM!=0) && (geogPM!=8901)){err=F+"its prime meridian (GeogPrimeMeridianGeoKey "+to_string((unsigned long long)geogPM)+") is not Greenwich; Raven reads longitudes from Greenwich: reproject the raster (e.g. gdalwarp -t_srs EPSG:4326)"; return false;}
+  if (geo && hasPMLong && (pmLong!=0.0)){err=F+"its prime meridian lies at longitude "+Fmt(pmLong)+" from Greenwich (GeogPrimeMeridianLongGeoKey); Raven reads longitudes from Greenwich: reproject the raster (e.g. gdalwarp -t_srs EPSG:4326)"; return false;}
+  if (geo && (geogPM!=0) && (geogPM!=8901) && !((geogPM==32767) && hasPMLong)){err=F+"its prime meridian (GeogPrimeMeridianGeoKey "+to_string((unsigned long long)geogPM)+") is not Greenwich; Raven reads longitudes from Greenwich: reproject the raster (e.g. gdalwarp -t_srs EPSG:4326)"; return false;}
+  if (geo && (geogDatum!=0) && (geogDatum!=32767)){
+    const char *dp=Lookup(GW_EPSG_DATUM_PRIME_MERIDIAN,GW_EPSG_DATUM_PRIME_MERIDIAN_N,(int)geogDatum);
+    if (dp!=NULL){err=F+"its geodetic datum EPSG:"+to_string((unsigned long long)geogDatum)+" (GeogGeodeticDatumGeoKey) counts longitudes from the prime meridian of "+string(dp)+" from Greenwich; Raven reads longitudes from Greenwich: reproject the raster (e.g. gdalwarp -t_srs EPSG:4326)"; return false;}
+  }
+  if ((R.epsg>0) && !R.geographic && (projLin==0)){   //(a projected code that implies its unit; GeoTIFF 1.1 lets a writer leave ProjLinearUnitsGeoKey out)
+    const char *pu=Lookup(GW_EPSG_PROJECTED_NOT_METRE,GW_EPSG_PROJECTED_NOT_METRE_N,R.epsg);
+    if (pu!=NULL){err=F+"it is in EPSG:"+to_string(R.epsg)+", a projection whose coordinates are in "+string(pu)+"; Raven reads projected coordinates in metres: reproject the raster to a projection in metres (e.g. gdalwarp -t_srs EPSG:...)"; return false;}
+  }
   if ((vertCS!=0) && (vertCS!=32767)){
     const char *fu=Lookup(GW_EPSG_VERTICAL_FEET,GW_EPSG_VERTICAL_FEET_N,(int)vertCS);
     if (fu!=NULL){err=F+"its elevations are in "+string(fu)+" (vertical coordinate system EPSG:"+to_string((unsigned long long)vertCS)+"); Raven reads elevations in metres: convert the values to metres and save the raster with a vertical system in metres or none (e.g. gdal_calc.py)"; return false;}
@@ -749,6 +793,39 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
              ") whose unit Raven does not know; its elevations are read as metres";
   }
   if ((vertU!=0) && (vertU!=9001)){err=F+"its elevations are in "+UnitName(vertU)+" (VerticalUnitsGeoKey); Raven reads elevations in metres: convert the values to metres and save the raster without that key (e.g. gdal_calc.py)"; return false;}
+  //-- GDAL's band scale, offset and unit (GDAL_METADATA): the values are read unscaled, as GDAL's -unscale and GIS
+  //   programs show them; a unit of feet stops, another unit than metres gives a warning
+  double bscale=1.0,boffset=0.0;
+  { const uint64_t MAXMETA=16ULL<<20;
+    const TEntry *tm=T.Tag(42112);
+    if ((tm!=NULL) && (tm->type==2) && (tm->count>MAXMETA)){
+      err=F+"its GDAL_METADATA tag holds "+to_string((unsigned long long)(tm->count>>20))+" MB, more than the 16 MB Raven reads, so its band scale, offset and unit cannot be checked: "
+          "save the raster without the extra metadata (e.g. gdal_translate -unscale -co PROFILE=GeoTIFF in.tif out.tif)"; return false;
+    }
+    const string meta=T.Ascii(42112,MAXMETA);
+    map<string,string> items; if (meta!=""){GDALBandItems(meta,items);}
+    for (int k=0;k<2;k++){
+      const char *nm=(k==0)?"SCALE":"OFFSET"; map<string,string>::const_iterator it=items.find(nm); if (it==items.end()){continue;}
+      char *endp; const double v=strtod(it->second.c_str(),&endp);
+      if (it->second.empty() || (*endp!='\0') || !std::isfinite(v)){err=F+"its band "+string(nm)+" in GDAL_METADATA ("+it->second+") is not a number"; return false;}
+      if (k==0){bscale=v;} else {boffset=v;}
+    }
+    if (bscale==0.0){err=F+"its band SCALE in GDAL_METADATA is 0 (every value would be the OFFSET): save the raster with its elevations (e.g. gdal_translate -unscale)"; return false;}
+    map<string,string>::const_iterator iu=items.find("UNITTYPE");
+    if (iu!=items.end()){
+      string u=iu->second; for (size_t i=0;i<u.size();i++){u[i]=(char)tolower((unsigned char)u[i]);}
+      const bool metre=(u=="") || (u=="m") || (u=="metre") || (u=="metres") || (u=="meter") || (u=="meters");
+      const char *len[]={"ft","foot","feet","cm","centimet","mm","millimet","dm","decimet","km","kilomet","inch","yard","yd","mile"};
+      bool other=(u=="in");
+      for (int i=0;i<15;i++){if (u.find(len[i])!=string::npos){other=true;}}
+      if (!metre && other){
+        err=F+"its elevations are in "+iu->second+" (the band unit, UNITTYPE in GDAL_METADATA); Raven reads elevations in metres: convert the values to metres (e.g. gdal_calc.py) and set the unit to metres (gdal_edit.py -units m)"; return false;
+      }
+      if (!metre){
+        R.notes+=string(R.notes.empty()?"":"\n")+"raster "+name+" has the band unit '"+iu->second+"' (UNITTYPE in GDAL_METADATA), which Raven does not know; its elevations are read as metres";
+      }
+    }
+  }
   if (R.rasterType==2){xul-=0.5*sx; yul+=0.5*sy;}    //PixelIsPoint: the tie point is the centre of the pixel
   //-- NODATA
   string nd=T.Ascii(42113);
@@ -810,6 +887,17 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
                  "If they are no data, declare it (e.g. gdal_translate -a_nodata -9999 in.tif out.tif)";
     }
   }
+  //-- band scale and offset applied (no-data pixels become NaN, so that no scaled value is taken for NODATA)
+  const bool scaled=(bscale!=1.0) || (boffset!=0.0);
+  if (scaled){
+    for (size_t i=0;i<R.v.size();i++){
+      double &v=R.v[i];
+      if ((v!=v) || (R.hasNodata && (fabs(v-R.nodata)<=1e-6))){v=NAN; continue;}  //(as CGWRaster::Valid tells no data)
+      v=v*bscale+boffset;
+      if (!std::isfinite(v)){v=NAN;}                                            //(beyond the range of a double: no data, as infinite values are)
+    }
+    R.hasNodata=false; R.nodata=0.0;
+  }
   (void)planar;                                   //(irrelevant with one sample per pixel)
   //-- description
   ostringstream s;
@@ -818,6 +906,7 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
   s<<", "<<((comp==1)?string("uncompressed"):CompressionName(comp))<<", predictor "<<pred<<", "<<bps<<"-bit "<<((fmt==1)?"unsigned":(fmt==2)?"signed":"float")
    <<", "<<((R.rasterType==2)?"PixelIsPoint":"PixelIsArea");
   if (hasMask){s<<", internal mask ("<<nmask<<" pixels no data)";}
+  if (scaled){s<<", scale "<<Fmt(bscale)<<" and offset "<<Fmt(boffset)<<" applied (GDAL_METADATA)";}
   R.format=s.str();
   return true;
 }

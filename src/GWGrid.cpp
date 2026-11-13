@@ -391,6 +391,7 @@ void CGWGrid::MakeVoronoi(const vector<gw_pt> &seeds,const double xa,const doubl
   for (int i=0;i<n;i++){
     const gw_pt &P=seeds[i];
     gw_ring c=RectRing(xa,ya,xb,yb); vector<int> lab(4,-1);
+    double rc=0; for (size_t v=0;v<c.size();v++){rc=max(rc,hypot(c[v].x-P.x,c[v].y-P.y));} //(the cell lies within rc of its seed)
     int bxi=min(bnx-1,max(0,(int)floor((P.x-xa)/bs))),byi=min(bny-1,max(0,(int)floor((P.y-ya)/bs)));
     for (int k=0;k<=bnx+bny;k++){
       for (int yy=byi-k;yy<=byi+k;yy++){
@@ -401,8 +402,14 @@ void CGWGrid::MakeVoronoi(const vector<gw_pt> &seeds,const double xa,const doubl
             int j=L[t]; if (j==i){continue;}
             const gw_pt &Qj=seeds[j];
             double dx=Qj.x-P.x,dy=Qj.y-P.y,mx=0.5*(P.x+Qj.x),my=0.5*(P.y+Qj.y);
-            gw_ring nc; vector<int> nl;
+            //a seed at least twice as far as the cell's farthest vertex cannot cut it (every vertex lies strictly on the
+            //seed's side of the bisector, with a margin far above round-off): the clip would leave the cell as it is
+            if (hypot(dx,dy)>2.0*rc*(1.0+1e-6)){continue;}
             size_t m=c.size();
+            bool cuts=false;                                     //(no vertex beyond the bisector: the clip would copy the cell)
+            for (size_t v=0;(v<m) && !cuts;v++){if ((c[v].x-mx)*dx+(c[v].y-my)*dy>0){cuts=true;}}
+            if (!cuts){continue;}
+            gw_ring nc; vector<int> nl;
             for (size_t v=0;v<m;v++){
               const gw_pt &A=c[v],&Bp=c[(v+1)%m];
               double fa=(A.x-mx)*dx+(A.y-my)*dy,fb=(Bp.x-mx)*dx+(Bp.y-my)*dy;
@@ -415,6 +422,7 @@ void CGWGrid::MakeVoronoi(const vector<gw_pt> &seeds,const double xa,const doubl
             }
             c=nc; lab=nl;
             if (c.size()<3){break;}
+            rc=0; for (size_t v=0;v<c.size();v++){rc=max(rc,hypot(c[v].x-P.x,c[v].y-P.y));}
           }
         }
       }

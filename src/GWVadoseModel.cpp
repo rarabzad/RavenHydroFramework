@@ -208,7 +208,7 @@ double CGroundwaterModel::VZBackRate(const int e,const double h) const
     if (!_vzcUse[i]){continue;}
     const double F0=_vzcF0[i];
     if (F0>=1.0-1e-12){r+=max(_vzcOut[i],0.0)/_szTstep; continue;}             //(all saturated at the start: all of it, also in explicit coupling)
-    if (expl || !(_vzcRq[i]>0.0)){continue;}                                     //(explicit coupling: no head to follow)
+    if (expl || !(_vzcRq[i]>0.0)){continue;}                                     //(explicit coupling: no head to follow; manual, sec:szvadose, rule (i))
     const double F=VZClassF(e,i,h);                                              //(one class: the link's F at h; at the connection head = _linkF)
     r+=_vzcRq[i]*min(max(F-F0,0.0),1.0-F0);
   }
@@ -442,7 +442,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
             const double z0=col.zbot;
             const int tn=TopNode(L.ic); const double ztc=CellTop(tn/_ncpl,L.ic);
             const double capS=min(gwvz::SyRise(S,z0,zt),gwvz::SyRise(S,h,min(zb,ztc))); //[m] Sy dh across the layers the rise crosses, and the
-                                                                                 // room the top cell has left above the water table
+                                                                                 // room the top cell has left above the water table (manual, sec:szvadose)
             gwvz::vz_column t=col; const double abT=gwvz::MoveBottom(t,S,zt,_vzN);
             const double capU=_szxUpCHD[e]?1e300:(SZUpCap(e,tstep)-used)*tstep/Ac; //[m] a deficit below it (a column dried by evaporation or
             if ((zt<zb) && (abT>capS*(1.0+1e-9))){                               // capillary rise) is filled out of the source cell, at most what
