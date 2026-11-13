@@ -134,7 +134,7 @@ void CGroundwaterModel::ExtReadSimulation()
       _extPkgs.push_back(P);
     }
   }
-  _extDisFtype=""; _stoName="STO"; _disName="DIS";
+  _extDisFtype=""; _stoName="STO"; _disName="DIS"; //(the name file's names; the names in MODFLOW's memory are found in ExtProbe)
   for (size_t i=0;i<_extPkgs.size();i++){
     const string &f=_extPkgs[i].ftype;
     if ((f=="DIS6") || (f=="DISV6") || (f=="DISU6")){_extDisFtype=f; _disName=_extPkgs[i].pname;}
@@ -605,6 +605,12 @@ void CGroundwaterModel::ExtProbe()
     }
   }
   if (!_mf6.Initialize(_mf6dir)){ExitGracefully(("CGroundwaterModel: the MODFLOW 6 model does not initialise: "+_mf6.GetLastError()+" (see "+_mf6dir+"/mfsim.lst)").c_str(),RUNTIME_ERR);}
+  //MODFLOW 6 keeps the discretization and storage packages in its memory under fixed names (DIS, STO), whatever the name
+  //file calls them, as it keeps NPF: those names first, then the name file's
+  {const string cd[3]={"DIS",_disName,_extDisFtype.substr(0,_extDisFtype.size()-1)};
+   for (int i=0;i<3;i++){if (_mf6.HasVar(_mf6.GetVarAddress(_mname,cd[i],"NLAY"))){_disName=cd[i]; break;}}
+   const string cs[2]={"STO",_stoName};
+   for (int i=0;i<2;i++){if (_mf6.HasVar(_mf6.GetVarAddress(_mname,cs[i],"STRGSS"))){_stoName=cs[i]; break;}}}
   string M=_mname,D=_disName;
   int *p=_mf6.GetIntPtr(_mf6.GetVarAddress(M,D,"NLAY")); ExitGracefullyIf(p==NULL,"CGroundwaterModel: cannot read NLAY of the MODFLOW 6 model",RUNTIME_ERR);
   if (p==NULL){return;}
@@ -658,7 +664,7 @@ void CGroundwaterModel::ExtProbe()
     const string npf="NPF";                                                    //(MODFLOW's name for it whatever the name file says)
     string ak=_mf6.GetVarAddress(M,npf,"K33"); if (!_mf6.HasVar(ak)){ak=_mf6.GetVarAddress(M,npf,"K11");}
     double *kk=_mf6.HasVar(ak)?_mf6.GetDoublePtr(ak):NULL;
-    string as=_mf6.GetVarAddress(M,"STO","SY"); double *sy=(!_extNoSto && _mf6.HasVar(as))?_mf6.GetDoublePtr(as):NULL;
+    string as=_mf6.GetVarAddress(M,_stoName,"SY"); double *sy=(!_extNoSto && _mf6.HasVar(as))?_mf6.GetDoublePtr(as):NULL;
     ExitGracefullyIf(kk==NULL,"CGroundwaterModel: :SoilZone PHYSICAL with an existing model: cannot read the model's hydraulic conductivity (NPF K33/K)",RUNTIME_ERR);
     double sy0=0.2;                                                            //(no SY: SPEC_YIELD of :SoilZoneAquiferClass when given, else 0.2)
     if (sy==NULL){
@@ -941,6 +947,7 @@ void CGroundwaterModel::ExtBuild(const optStruct &Options)
     map<long long,double>::iterator it=_hotRivCarry.find(_pModel->GetSubBasin(p)->GetID());
     if (it!=_hotRivCarry.end()){_sbLossCarry[p]=it->second;}
   }
+  InitRiverTakes();
   _sbRivLen.assign(_pModel->GetNumSubBasins(),0.0);
   if (_owTable.empty()){BuildStresses();} //monitoring wells (located through the cell polygons)
 }

@@ -7,6 +7,7 @@
 ----------------------------------------------------------------*/
 #include "GroundwaterModel.h"
 #include <set>
+#include <limits>
 #include <new>
 //optional stage timing for large grids: set RAVEN_GW_PROFILE=1
 static const double GW_MAX_CELLS_PER_LAYER=5.0e6; ///< largest grid Raven builds [cells per layer]: refused before it is built (estimated) and after
@@ -68,7 +69,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _swxHead=_swxCond=_swxRbot=_swxHcof=_swxRhs=NULL; _swxNcol=0; _Qswx_in=_Qswx_out=_swxAppliedVol=0.0;
   _resExchange=false; _resQ=_resHcof=_resRhs=NULL; _resNcol=0; _Qres_spec=_Qres=_resPendingVol=_resShortVol=0.0;
   _cacheHit=false; _geomSeconds=0.0; _writeNC=false; _writeCBC=false; _ncid=-1; _ncTime=_ncHead=-1; _ncRec=0; _nstp=0; _stepCount=0; _jday0=0; _jyear0=0; _calendar=0; _tsDur=_tsDt=0.0;
-  _Qriv_in=_Qriv_out=_riverAppliedVol=_riverDeficitVol=0.0; _budgetLineOpen=false;
+  _Qriv_in=_Qriv_out=_riverAppliedVol=_riverDeficitVol=0.0; _budgetLineOpen=false; _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0; _sbOverN=0;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
@@ -79,7 +80,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _szCapN=0; _szCapExcess=0.0; _szDropN=_szDropPlain=0; _szDropSteps=0; _szDropThis=false; _szxDropped.clear(); _szEsum=0.0; _szWhy=0; _szWhyE=-1; _szWhyV=_szWhyFa=_szWhyFb=0.0;
   _szNegCutQ=_szNegUnheldV=0.0; _negCutVol=_negUnheldVol=0.0; _negUnheldN=0; _negWarned=false; _Qgross=1.0; _QabsOther=0.0; _rchLostQ=_rchLostVol=0.0; _rchLostN=0;
   _resUndelVol=_resUndelTot=0.0; _resUndelN=0; _resUnsent.clear(); _resUse.clear(); _resWs.clear(); _resOff.clear(); _resShortTot=0.0; _resShortN=0;
-  _vzChdV=0.0; _vzChdN=0; _vzHotUnusedV=0.0; _vzHotUnusedN=0;
+  _vzChdV=0.0; _vzChdN=0; _vzHotUnusedV=0.0; _vzHotUnusedN=0; _vzHotBadN=0; _szDebtHotUnused=0.0;
   _wetKeptIt=_wetKeptSteps=0; _farSlowN=0; _farWarned=false; _xPrevIt.clear(); _xStart.clear(); _keptCol.clear(); _stepEnd=""; _lastConverged=true;
   _summaryFile="";
 }
@@ -108,6 +109,7 @@ void CGroundwaterModel::ResetState()
   _resP.clear(); _resZbot.clear(); _resNode.clear(); _resR.clear(); _resW.clear(); _resK0.clear(); _resA.clear(); _resWk.clear();
   _X=NULL; _active=false; _stepCount=0; _nNonConverged=0; _budgetLineOpen=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=_riverAppliedVol=_riverDeficitVol=0.0;
+  _sbInTake.clear(); _sbOutTake.clear(); _sbOutTakePrev.clear(); _sbQoutDeliv.clear(); _sbQoutRec.clear(); _sbAddBack.clear(); _sbOverN=0; _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0;
   _szOn.clear(); _szSV.clear(); _szLay.clear(); _szD.clear(); _szLam.clear(); _szRchV.clear(); _szRej.clear(); _szOvfV.clear(); _szNetV.clear(); _szW.clear();
   _linkF.clear(); _cellDem.clear(); _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _colCoverNS.clear(); _szxOfHRU.clear();
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szxOne.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
@@ -125,7 +127,7 @@ void CGroundwaterModel::ResetState()
   _szCapN=0; _szCapExcess=0.0; _szDropN=_szDropPlain=0; _szDropSteps=0; _szDropThis=false; _szxDropped.clear(); _szEsum=0.0; _szWhy=0; _szWhyE=-1; _szWhyV=_szWhyFa=_szWhyFb=0.0;
   _szNegCutQ=_szNegUnheldV=0.0; _negCutVol=_negUnheldVol=0.0; _negUnheldN=0; _negWarned=false; _Qgross=1.0; _QabsOther=0.0; _rchLostQ=_rchLostVol=0.0; _rchLostN=0;
   _resUndelVol=_resUndelTot=0.0; _resUndelN=0; _resUnsent.clear(); _resUse.clear(); _resWs.clear(); _resOff.clear(); _resShortTot=0.0; _resShortN=0;
-  _vzChdV=0.0; _vzChdN=0; _vzHotUnusedV=0.0; _vzHotUnusedN=0;
+  _vzChdV=0.0; _vzChdN=0; _vzHotUnusedV=0.0; _vzHotUnusedN=0; _vzHotBadN=0; _szDebtHotUnused=0.0;
   _wetKeptIt=_wetKeptSteps=0; _farSlowN=0; _farWarned=false; _xPrevIt.clear(); _xStart.clear(); _keptCol.clear(); _stepEnd=""; _lastConverged=true;
   _szxRs.clear(); _szxRq.clear(); _szxRqP.clear(); _szxRl.clear(); _szxRqc.clear(); _szxF0.clear(); _szxDrn.clear(); _szxKink.clear(); _szxNegCap.clear(); _vzUsed.clear(); _cellConv.clear(); _szResE=-1; _szExtra=0;
 }
@@ -784,6 +786,20 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
   _active=true;
   if (_doSteady){RunSteadyState();}
   if (SZPhysical()){SZInitColumns();} //before Raven's initial storage is taken (CModel::CalculateInitialWaterStorage)
+  if (!_hotDebt.empty()){ //lagged-exchange debt of the hotstart file this run does not repay (no LAGGED timing, or lines that match no
+    double tot=0.0,used=0.0;  //  exchange link): dropped, warned about and reported, as the aquifer keeps that water
+    for (map<long long,map<int,double> >::const_iterator it=_hotDebt.begin();it!=_hotDebt.end();it++){
+      for (map<int,double>::const_iterator jt=it->second.begin();jt!=it->second.end();jt++){tot+=max(jt->second,0.0);}
+    }
+    if (SZPhysical() && (_szTiming==1)){for (size_t e=0;e<_szxDebt.size();e++){used+=_szxDebt[e];}}
+    _szDebtHotUnused=max(tot-used,0.0);
+    if (_szDebtHotUnused>1e-9*max(tot,1.0)){
+      WriteWarning("CGroundwaterModel: the hotstart file holds "+ToStr(_szDebtHotUnused)+" m3 of lagged-exchange debt (:GWSoilZoneLag: water the soil zone used that the aquifer "
+                   "had not yet repaid) that this run does not repay ("+string((SZPhysical() && (_szTiming==1))?"lines that match no exchange link of this run":
+                   (SZPhysical()?":SoilZoneExchangeTiming AFTER":"no :SoilZone PHYSICAL"))+"): the aquifer keeps that water (reported in the run totals of GWModelSummary.txt). "
+                   "Restart with :SoilZoneExchangeTiming LAGGED and the links of the run that wrote the file to have it repaid",false);
+    }
+  }
   if ((!_hotVz.empty() || !_hotVzc.empty()) && !(SZPhysical() && (_vzMode>0))){ //unsaturated-column water of the hotstart file a run without columns
     _vzHotUnusedN=0; _vzHotUnusedV=0.0; bool vol=!_hotVzt.empty();                //  cannot hold: dropped, warned about and reported
     for (map<long long,map<int,vector<double> > >::const_iterator it=_hotVz.begin();it!=_hotVz.end();it++){_vzHotUnusedN+=(int)it->second.size();}
@@ -831,7 +847,7 @@ double CGroundwaterModel::WaterTable(const int ic) const
 void CGroundwaterModel::ClearHotstartData()
 {
   _hotHeads.clear(); _hotDims[0]=_hotDims[1]=_hotDims[2]=0;
-  _hotRchStore.clear(); _hotResSeep.clear(); _hotResFrac.clear(); _hotRivCarry.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotVzc.clear(); _hotVzt.clear(); _hotLag.clear(); _hotDebt.clear();
+  _hotRchStore.clear(); _hotResSeep.clear(); _hotResFrac.clear(); _hotRivCarry.clear(); _hotRivTake.clear(); _hotQoutRec.clear(); _hotXStart.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotVzc.clear(); _hotVzt.clear(); _hotVzMethod=""; _hotLag.clear(); _hotDebt.clear();
   _initMode="FROM_PROFILE"; _initValue=0.0;
 }
 //////////////////////////////////////////////////////////////////
@@ -1475,6 +1491,7 @@ void CGroundwaterModel::BuildRivers()
     map<long long,double>::iterator it=_hotRivCarry.find(_pModel->GetSubBasin(p)->GetID());
     if (it!=_hotRivCarry.end()){_sbLossCarry[p]=it->second;}
   }
+  InitRiverTakes();
   if (_riverFile==""){return;}
   vector<gw_ring> lines; vector<long long> ids; string err;
   double rb[4];
@@ -2289,7 +2306,10 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
     _szTstep=tstep; _szResid=0.0; _szIter=0; _szConv=true; _szExtra=0; _szWhy=0; _szWhyE=-1;
     _szxDropped.assign(_szxLink.size(),0); _szDropThis=false;
   }
-  if (_xStart.empty() && (_X!=NULL)){const int nx=_mf6.GetVarSize(_mf6.GetVarAddress(_mname,"","X")); if (nx>0){_xStart.assign(_X,_X+nx);}} //(heads at the start of the run)
+  if (_xStart.empty() && (_X!=NULL)){ //heads at the start of the run; a hotstart written after an unconverged step gives those of the
+    const int nx=_mf6.GetVarSize(_mf6.GetVarAddress(_mname,"","X"));     //  last converged step (:GWStartHeads), as the run that wrote it had
+    if (nx>0){if ((int)_hotXStart.size()==nx){_xStart=_hotXStart;} else {_xStart.assign(_X,_X+nx);}}
+  }
   //-- 1. Raven recharge -> column flows [m3/d], mass-conservative per HRU
   std::fill(_Qcol.begin(),_Qcol.end(),0.0);
   _ravenRchVol=0.0; _QrchCHD=0.0;
@@ -2319,10 +2339,14 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
       if (!(SZPhysical() && _szOn[k])){_QrchCHD+=V/tstep;}
       continue;
     }
+    //HRU partly on specified-head cells: each linked cell gets the recharge of its own overlap, and the share over the
+    //specified heads goes to them (with a soil zone: SZRecharge), so a small overlap with other cells never takes it all
+    const double Arch=(_hruRchArea[k]<_hruLinkedArea[k])?_hruLinkedArea[k]:_hruRchArea[k];
+    if ((Arch>_hruRchArea[k]) && !(SZPhysical() && _szOn[k])){_QrchCHD+=V/tstep*(Arch-_hruRchArea[k])/Arch;}
     for (size_t j=0;j<_hruLinks[k].size();j++){
       const gw_link &L=_aLinks[_hruLinks[k][j]];
       if (_colCHDTop[L.ic]){continue;}
-      _Qcol[L.ic]+=V/tstep*L.area/_hruRchArea[k];
+      _Qcol[L.ic]+=V/tstep*L.area/Arch;
     }
   }
 
@@ -3035,6 +3059,12 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
     RVC<<((n%10==0)?"  ":" ")<<h; if ((n%10==9) || (n==_nlay*_ncpl-1)){RVC<<endl;}
   }
   RVC<<":EndGWHeads"<<endl;
+  if (!_lastConverged && !_xStart.empty()){ //the last step did not converge: the heads of the last converged step, which the far-head
+    //test of the next step compares with
+    RVC<<":GWStartHeads "<<_xStart.size()<<"   # MODFLOW's heads (active cells, MODFLOW's order) at the end of the last converged step"<<endl<<setprecision(hp);
+    for (size_t r=0;r<_xStart.size();r++){RVC<<((r%10==0)?"  ":" ")<<_xStart[r]; if ((r%10==9) || (r==_xStart.size()-1)){RVC<<endl;}}
+    RVC<<":EndGWStartHeads"<<endl;
+  }
   if (_resP.size()>0){ //reservoir seepage computed in the last step, not yet delivered to the aquifer
     RVC<<":GWReservoirSeepage   # subbasin ID, seepage in transit [m3], share of the lake's cells able to take seepage when it was computed"<<endl;
     for (size_t r=0;r<_resP.size();r++){RVC<<"  "<<_pModel->GetSubBasin(_resP[r])->GetID()<<", "<<setprecision(17)<<_pModel->GetSubBasin(_resP[r])->GetReservoir()->GetReservoirGWLosses(1.0)<<", "<<((r<_resWk.size())?_resWk[r]:1.0)<<endl;}
@@ -3045,6 +3075,18 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
     RVC<<":GWRiverLossCarry   # subbasin ID, river loss to be taken from the river in the next step [m3]"<<endl;
     for (size_t p=0;p<_sbLossRemain.size();p++){if (_sbLossRemain[p]>0){RVC<<"  "<<_pModel->GetSubBasin((int)p)->GetID()<<", "<<setprecision(17)<<_sbLossRemain[p]<<endl;}}
     RVC<<":EndGWRiverLossCarry"<<endl;
+  }
+  bool anyTake=false; for (size_t p=0;p<_sbOutTake.size();p++){if ((_sbInTake[p]>0) || (_sbOutTake[p]>0)){anyTake=true;}}
+  if (anyTake){ //river loss taken from reach inflows and outflows in the last step: Raven's channel storage and balance book half of it in the next step
+    RVC<<":GWRiverTake   # subbasin ID, river loss taken from the reach's inflow and from its outflow in the last step [m3], the reach's outflow after Raven's routing [m3/s]"<<endl;
+    for (size_t p=0;p<_sbOutTake.size();p++){
+      if ((_sbInTake[p]>0) || (_sbOutTake[p]>0)){
+        RVC<<"  "<<_pModel->GetSubBasin((int)p)->GetID()<<", "<<setprecision(17)<<_sbInTake[p]<<", "<<_sbOutTake[p];
+        if ((p<_sbQoutRec.size()) && (_sbQoutRec[p]==_sbQoutRec[p])){RVC<<", "<<_sbQoutRec[p];}
+        RVC<<endl;
+      }
+    }
+    RVC<<":EndGWRiverTake"<<endl;
   }
   if (SZPhysical() && _szColInit){ //water of the soil-zone columns (Raven's SOIL[m] holds only their mean)
     RVC<<":GWSoilZoneColumns   # HRU ID, cell (grid column number; 0: rest of the HRU), water of SOIL["<<_szNLayers-1<<"] up to SOIL[0] in the column [mm]"<<endl;
@@ -3061,8 +3103,9 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
     bool anyVz=false; for (size_t i=0;i<_vzcCol.size();i++){if (_vzcCol[i].active){anyVz=true;}}
     if (anyVz){ //unsaturated columns (:SoilZoneVadose); with depth classes (:SoilZoneVadoseClasses K > 1) one line per class column
       const bool cls=(_vzClasses>1);
-      if (!cls){RVC<<":GWVadoseColumns   # HRU ID, cell (grid column number), water table [m], water contents of the nodes from the top [-]"<<endl;}
-      else     {RVC<<":GWVadoseClassColumns   # HRU ID, cell (grid column number), depth class, classes of the cell, water table [m], water contents of the nodes from the top [-]"<<endl;}
+      const string meth=(_vzMode==2)?"KINEMATIC":((_vzMode==3)?"LAG":"RICHARDS"); //(the method: its reference profile defines the columns' water)
+      if (!cls){RVC<<":GWVadoseColumns "<<meth<<"   # HRU ID, cell (grid column number), water table [m], water contents of the nodes from the top [-]"<<endl;}
+      else     {RVC<<":GWVadoseClassColumns "<<meth<<"   # HRU ID, cell (grid column number), depth class, classes of the cell, water table [m], water contents of the nodes from the top [-]"<<endl;}
       for (size_t e=0;e<_szxLink.size();e++){
         const gw_link &L=_aLinks[_szxLink[e]];
         for (int i=_vzOff[e];i<_vzOff[e+1];i++){
@@ -3115,6 +3158,8 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
 void CGroundwaterModel::ApplyRiverExchange(double *aRouted,const double &tstep)
 {
   _riverAppliedVol=0.0; _riverDeficitVol=0.0;
+  _rivTakePrev=_rivTake; _rivTake=0.0; //(the takes of the last step: booked by Raven half in that step and half in this one)
+  for (size_t p=0;p<_sbOutTake.size();p++){_sbOutTakePrev[p]=_sbOutTake[p]; _sbOutTake[p]=0.0; _sbInTake[p]=0.0;}
   for (size_t p=0;p<_sbGain.size();p++){
     _sbLossRemain[p]=0.0;
     if (((_sbGain[p]==0.0) && (_sbLossCarry[p]==0.0)) || (!_pModel->GetSubBasin((int)p)->IsEnabled())){continue;}
@@ -3134,13 +3179,107 @@ double CGroundwaterModel::TakeRiverLossFromInflow(const int p,const double &Qin,
   double avail=Qin*tstep*SEC_PER_DAY;
   double take =min(_sbLossRemain[p],avail);
   _sbLossRemain[p]-=take; _riverDeficitVol-=take; _riverAppliedVol-=take;
+  _sbInTake[p]+=take; _rivTake+=take;
   return Qin-take/(tstep*SEC_PER_DAY);
+}
+//////////////////////////////////////////////////////////////////
+/// \brief called in the routing loop just before the reach is routed: a reach whose outflow was lowered by a take in the
+///  last step is routed from its outflow before that take. The routing methods that keep the outflow as their state
+///  (Muskingum, Muskingum-Cunge, storage coefficient, ROUTE_HYDROLOGIC, TVD) then route the channel's own water as without
+///  the take, so the take lowers only the outflow delivered downstream (and the hydrograph), never the water the channel
+///  holds; methods that do not read the outflow are not affected
+//
+void CGroundwaterModel::BeginReachRouting(const int p,const double &tstep)
+{
+  if (p>=(int)_sbAddBack.size()){return;}
+  _sbAddBack[p]=0;
+  if (_sbOutTakePrev[p]==0.0){return;}
+  CSubBasin *pSB=_pModel->GetSubBasin(p);
+  const int n=pSB->GetNumSegments();
+  vector<double> q(pSB->GetOutflowArray(),pSB->GetOutflowArray()+n);
+  //an outflow set from outside the routing since Raven's routing stored it (streamflow assimilation, a live file, BMI, an
+  //ensemble state update; ROUTE_EXTERNAL reaches are fed this way) is the reach's state now: the last take is not added
+  //back to it, and Raven's books start from it (TakeRiverLossFromOutflow leaves out the last take's half)
+  if ((_sbQoutRec[p]==_sbQoutRec[p]) && (q[n-1]!=_sbQoutRec[p])){
+    if (++_sbOverN<=10){
+      WriteWarning("CGroundwaterModel: in the step ending "+_stepEnd+": the outflow of subbasin "+to_string(pSB->GetID())+" was set from outside Raven's routing (streamflow "
+                   "assimilation, a live file, BMI or an ensemble state update) after a river loss was taken from it; the reach is routed from the outflow as set"+
+                   ((_sbOverN==10)?" (further such warnings suppressed)":""),false);
+    }
+    return;
+  }
+  _sbAddBack[p]=1;
+  _sbQoutDeliv[p]=q[n-1];                                                      //(the delivered outflow, restored exactly after routing)
+  q[n-1]+=_sbOutTakePrev[p]/(tstep*SEC_PER_DAY);
+  pSB->SetQoutArray(n,&q[0],pSB->GetLastOutflowRate());
+}
+//////////////////////////////////////////////////////////////////
+/// \brief called in the routing loop after the reach is routed: river loss that neither the local runoff nor the inflow
+///  covered is taken from the reach's routed outflow (kept >= 0), before Raven's irrigation demand. The take lowers the
+///  outflow delivered downstream, the outlet's outflow and the hydrograph; the routing state keeps the outflow before the
+///  take (BeginReachRouting). Raven's channel storage integrates the delivered outflow over the step (trapezoidal), so the
+///  take is subtracted from it the same way: the channel storage follows the routing without the take, and the take
+///  leaves Raven through the lower outflow (half in this step, half in the next, as GetStepReturnVolume books it)
+//
+void CGroundwaterModel::TakeRiverLossFromOutflow(const int p,double &Qout,const double &tstep)
+{
+  if (p>=(int)_sbOutTake.size()){return;}
+  const double dt=tstep*SEC_PER_DAY;
+  if (_sbAddBack[p]){ //(the start-of-step outflow back to the delivered one: Raven books the outflow delivered)
+    CSubBasin *pSB=_pModel->GetSubBasin(p); const int n=pSB->GetNumSegments();
+    vector<double> q(pSB->GetOutflowArray(),pSB->GetOutflowArray()+n); q[n-1]=_sbQoutDeliv[p];
+    pSB->SetQoutArray(n,&q[0],pSB->GetLastOutflowRate());
+  }
+  if ((_sbLossRemain[p]>0.0) && (Qout>0.0)){
+    const double avail=Qout*dt;
+    const double take =min(_sbLossRemain[p],avail);
+    Qout=(take>=avail)?0.0:max(Qout-take/dt,0.0);
+    _sbLossRemain[p]-=take; _riverDeficitVol-=take; _riverAppliedVol-=take;
+    _sbOutTake[p]+=take; _rivTake+=take;
+  }
+  //(the last take's half only when the start-of-step outflow is the one delivered, not an outflow set from outside)
+  const double dV=0.5*(_sbOutTake[p]+(_sbAddBack[p]?_sbOutTakePrev[p]:0.0)); //[m3]
+  if (dV!=0.0){CSubBasin *pSB=_pModel->GetSubBasin(p); pSB->SetChannelStorage(pSB->GetChannelStorage()-dV);}
+}
+//////////////////////////////////////////////////////////////////
+/// \brief called in the routing loop right after Raven's UpdateOutflows (before streamflow assimilation): the reach's stored
+///  outflow, against which BeginReachRouting detects an outflow set from outside the routing
+//
+void CGroundwaterModel::EndReachRouting(const int p)
+{
+  if (p>=(int)_sbQoutRec.size()){return;}
+  const CSubBasin *pSB=_pModel->GetSubBasin(p);
+  _sbQoutRec[p]=pSB->GetOutflowArray()[pSB->GetNumSegments()-1];
+}
+//////////////////////////////////////////////////////////////////
+/// \brief per-subbasin river-take books at the start of a run: the takes of the last step of a hotstart's run (:GWRiverTake)
+//
+void CGroundwaterModel::InitRiverTakes()
+{
+  const int nSB=_pModel->GetNumSubBasins();
+  _sbInTake.assign(nSB,0.0); _sbOutTake.assign(nSB,0.0); _sbOutTakePrev.assign(nSB,0.0); _sbQoutDeliv.assign(nSB,0.0);
+  _sbQoutRec.assign(nSB,std::numeric_limits<double>::quiet_NaN()); _sbAddBack.assign(nSB,0); _sbOverN=0;
+  _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0;
+  for (int p=0;p<nSB;p++){
+    map<long long,pair<double,double> >::const_iterator it=_hotRivTake.find(_pModel->GetSubBasin(p)->GetID());
+    if ((it==_hotRivTake.end()) || !_pModel->GetSubBasin(p)->IsEnabled()){continue;}
+    _sbInTake[p]=it->second.first; _sbOutTake[p]=it->second.second; _rivTake+=it->second.first+it->second.second;
+    map<long long,double>::const_iterator qt=_hotQoutRec.find(_pModel->GetSubBasin(p)->GetID());
+    if (qt!=_hotQoutRec.end()){_sbQoutRec[p]=qt->second;}
+  }
 }
 void CGroundwaterModel::FinishBudgetLine()
 {
-  //river loss still unsupplied after routing is carried to the next step (reported as "river loss carried")
-  //(added, not assigned: on the first step this keeps a carry read from a hotstart file)
-  for (size_t p=0;p<_sbLossRemain.size();p++){_sbLossCarry[p]+=_sbLossRemain[p]; _sbLossRemain[p]=0.0;}
+  //river loss still unsupplied after routing (the reach's runoff, inflow and outflow could not cover it) is carried to the
+  //next step (reported as "river loss carried"); added, not assigned: on the first step this keeps a carry read from a
+  //hotstart file
+  double rest=0.0;
+  for (size_t p=0;p<_sbLossRemain.size();p++){rest+=_sbLossRemain[p]; _sbLossCarry[p]+=_sbLossRemain[p]; _sbLossRemain[p]=0.0;}
+  if (_budgetLineOpen && (rest>1e-6) && (++_rivCarryN<=10)){
+    WriteWarning("CGroundwaterModel: in the step ending "+_stepEnd+": "+ToStr(rest)+" m3 of river leakage to the aquifer could not be taken from the reaches "
+                 "(their runoff, inflow and outflow were too small); carried to the next step ('river loss carried to next step' in GWBudget.csv; "
+                 "a loss still carried at the end of the run is in the run totals of GWModelSummary.txt)"+((_rivCarryN==10)?" (further such warnings suppressed)":""),false);
+  }
   if (_budgetLineOpen && _BUDGET.is_open()){
     _BUDGET<<","<<_Qriv_in<<","<<_Qriv_out<<","<<_riverAppliedVol<<","<<_riverDeficitVol<<","<<_Qevt<<","<<_Qwel_spec<<","<<_Qwel<<","<<_Qghb<<","<<_Qchd<<","<<_Qswx_in<<","<<_Qswx_out<<","<<_swxAppliedVol;
     _resPendingVol=0.0;
@@ -3425,10 +3564,29 @@ void CGroundwaterModel::AppendRunTotals()
   if (_ncWithheldN>0){S<<"  discharge withheld    : "<<_ncWithheldVol<<" m3 on "<<_ncWithheldN<<" unconverged steps (MODFLOW's negative residual, withheld from the discharge to Raven in proportion: seepage, river and surface-store gains; it stays in the aquifer, booked as MF6 balance error in GWBudget.csv)"<<endl;}
   if (_negCutVol>0.0){S<<"  negative recharge cut : "<<_negCutVol<<" m3 the top cells could not supply, taken back out of the soil zone (negative rejected recharge in GWBudget.csv)"<<endl;}
   if (_negUnheldVol>0.0){S<<"  negative recharge not held: "<<_negUnheldVol<<" m3 of that cut the soil zone did not hold when it was taken back (the HRU's soil zone held less, at the end of the step, than the cut: a process after the import moved it on before the coupled exchange): no store supplied it ('negative recharge the soil zone did not hold' in GWBudget.csv)"<<endl;}
-  if (_vzHotUnusedN>0){S<<"  hotstart columns unused: "<<_vzHotUnusedN<<" unsaturated columns of the hotstart file, "<<_vzHotUnusedV<<" m3 above their reference profiles, dropped (this run has no unsaturated columns)"<<endl;}
+  if (SZPhysical() && (_szTiming==1) && (_szxLink.size()>0)){
+    double open=0.0,held=0.0;
+    for (size_t e=0;e<_szxDebt.size();e++){open+=_szxDebt[e]; if (_colCHDTop[_aLinks[_szxLink[e]].ic]){held+=_szxDebt[e];}}
+    if (open>0.0){ //(only when a debt is open)
+      S<<"  lagged debt open      : "<<open<<" m3 at the end of the run (water the soil zone used that the aquifer has not yet repaid; written to solution.rvc, :GWSoilZoneLag, "
+       <<"and repaid after a restart with LAGGED timing); "<<held<<" m3 of it on cells that are specified heads at the end, repaid once they are released"<<endl;
+    }
+  }
+  if (_szDebtHotUnused>0.0){S<<"  hotstart debt unused  : "<<_szDebtHotUnused<<" m3 of lagged-exchange debt of the hotstart file (:GWSoilZoneLag) not repaid by this run: the aquifer keeps it"<<endl;}
+  if (_vzHotUnusedN>0){S<<"  hotstart columns unused: "<<_vzHotUnusedN<<" unsaturated columns of the hotstart file, "<<_vzHotUnusedV<<" m3 above their reference profiles, dropped ("
+                        <<((SZPhysical() && (_vzMode>0))?"columns that match no column of this run, or were written for other columns":"this run has no unsaturated columns")<<")"<<endl;}
   if ((IsExternal() || _chdSwAny) && (_vzMode>0) && SZPhysical()){S<<"  columns over specified heads: "<<_vzChdN<<" unsaturated columns ended on cells that were specified heads, their water ("<<_vzChdV<<" m3 above their reference profiles) to the specified heads (recharge onto CHD cells in GWBudget.csv)"<<endl;}
   bool series=false; for (size_t b=0;b<_aBounds.size();b++){if (_aBounds[b].pHead!=NULL){series=true;}}
   if (series){S<<"  head boundaries off   : "<<_bndOffN<<" cell-steps (a :BoundaryHead series at or below the cell bottom: GHB conductance 0, CHD cell not held)"<<endl;}
+  _rivCarryEnd=0.0; for (size_t p=0;p<_sbLossCarry.size();p++){_rivCarryEnd+=_sbLossCarry[p];}
+  if (_rivCarryEnd>0.0){ //(only when a loss is still carried)
+    S<<"  river loss carried    : "<<_rivCarryEnd<<" m3 at the end of the run (leakage MODFLOW took that the reaches' runoff, inflow and outflow could not supply"
+     <<((_resNode.size()>0)?", and reservoir gains not supplied":"")<<"; not yet taken from Raven: water the aquifer received that no reach gave up; GWBudget.csv)"<<endl;
+  }
+  if (_rivTake>0.0){ //(only when the last step took a river loss from a reach's inflow or outflow)
+    S<<"  river take in transit : "<<0.5*_rivTake<<" m3 at the end of the run (the second half of the last step's river loss taken from reach inflows and outflows: "
+     <<"MODFLOW received it, Raven's channel storage and balance book it in the next step; :GWRiverTake in solution.rvc)"<<endl;
+  }
   if (_resNode.size()>0){S<<"  reservoir gain not supplied: "<<_resShortTot<<" m3 (lake gains MODFLOW did not supply: cells under the lakes that were drying, specified heads or inactive; taken back from the reservoirs' subbasins; GWBudget.csv)"<<endl;}
   if (ResUndelivered()){S<<"  reservoir seepage not delivered: "<<_resUndelTot<<" m3 (cells under the lakes that were specified heads or inactive: returned to the reservoirs' subbasins; GWBudget.csv)"<<endl;}
   if (IsExternal() && !_mf6Newton){S<<"  recharge not applied  : "<<_rchLostVol<<" m3 (columns whose cells were all dry or whose highest active cell is a specified head, a model without NEWTON; GWBudget.csv; net: a negative recharge there, taken out of GROUNDWATER without MODFLOW supplying it, counts negative)"<<endl;}

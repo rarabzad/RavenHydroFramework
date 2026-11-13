@@ -28,6 +28,16 @@ static double GWHotValue(const char *s,const char *block,const bool water)
   return v;
 }
 //////////////////////////////////////////////////////////////////
+/// \brief the :SoilZoneVadose method named on a :GWVadoseColumns or :GWVadoseClassColumns line (the method that wrote the columns)
+//
+static void VadoseHotMethod(CModel *pModel,const char *m)
+{
+  const string M=m;
+  ExitGracefullyIf((M!="RICHARDS") && (M!="KINEMATIC") && (M!="LAG"),("ParseInitialConditionsFile: :GWVadoseColumns or :GWVadoseClassColumns: '"+M+
+    "' is not a :SoilZoneVadose method (RICHARDS, KINEMATIC or LAG); is the .rvc file damaged?").c_str(),BAD_DATA);
+  pModel->GetGroundwaterModel()->SetHotstartVadoseMethod(M);
+}
+//////////////////////////////////////////////////////////////////
 /// \brief Parses Initial conditions file
 /// \details model.rvc: input file that defines HRU and Subbasin initial conditions\n
 ///
@@ -140,6 +150,8 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":GWVadoseColumnTops"          )){code=56; }
     else if  (!strcmp(s[0],":GWSoilZoneLag"               )){code=58; }
     else if  (!strcmp(s[0],":GWVadoseClassColumns"        )){code=59; }
+    else if  (!strcmp(s[0],":GWRiverTake"                 )){code=60; }
+    else if  (!strcmp(s[0],":GWStartHeads"                )){code=61; }
     else if  (!strcmp(s[0],":EndHRUStateVariableTable"    )){code=-2; }
     else if  (!strcmp(s[0],":InitialConcentrationTable"   )){code=4; concname=s[1]; }
     else if  (!strcmp(s[0],":EndInitialConcentrationTable")){code=-2; }
@@ -173,7 +185,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":BasinStageHist"              )){code=16;}
     else if  (!strcmp(s[0],":BasinAreaHist"               )){code=17;}
 
-    if ((code>=50) && (code<=59) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
+    if ((code>=50) && (code<=61) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
       //groundwater state of a coupled run (e.g. its solution.rvc) in a run without :GroundwaterModel: not used
       WriteWarning("ParseInitialConditionsFile: "+string(s[0])+" ignored (the model has no :GroundwaterModel MODFLOW6)",Options.noisy);
       if (code>50){ //a block: skip to its own end line (:InitialGWHeads is a single line)
@@ -1008,8 +1020,9 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       break;
     }
     case(57):  //----------------------------------------------
-    {/*:GWVadoseColumns  {HRU ID, cell (grid column number), water table [m], contents of the nodes from the top} x n
-       :EndGWVadoseColumns  (unsaturated columns of :SoilZoneVadose RICHARDS, hotstart) */
+    {/*:GWVadoseColumns [method]  {HRU ID, cell (grid column number), water table [m], contents of the nodes from the top} x n
+       :EndGWVadoseColumns  (unsaturated columns of :SoilZoneVadose, hotstart; method: RICHARDS, KINEMATIC or LAG, the one that wrote them) */
+      if (Len>=2){VadoseHotMethod(pModel,s[1]);}
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWVadoseColumns")){break;}
@@ -1035,9 +1048,10 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       break;
     }
     case(59):  //----------------------------------------------
-    {/*:GWVadoseClassColumns  {HRU ID, cell (grid column number), depth class, classes of the cell, water table [m], contents of the
+    {/*:GWVadoseClassColumns [method]  {HRU ID, cell (grid column number), depth class, classes of the cell, water table [m], contents of the
          nodes from the top} x n
-       :EndGWVadoseClassColumns  (unsaturated columns of the depth classes, :SoilZoneVadoseClasses K > 1, hotstart) */
+       :EndGWVadoseClassColumns  (unsaturated columns of the depth classes, :SoilZoneVadoseClasses K > 1, hotstart; method as :GWVadoseColumns) */
+      if (Len>=2){VadoseHotMethod(pModel,s[1]);}
       while (!pp->Tokenize(s,Len)){
         if (IsComment(s[0],Len)){continue;}
         if (!strcmp(s[0],":EndGWVadoseClassColumns")){break;}
@@ -1089,6 +1103,34 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
         if (!strcmp(s[0],":EndGWRiverLossCarry")){break;}
         if (Len>=2){pModel->GetGroundwaterModel()->SetHotstartRiverLossCarry(s_to_ll(s[0]),GWHotValue(s[1],":GWRiverLossCarry",false));}
       }
+      break;
+    }
+    case(60):  //----------------------------------------------
+    {/*:GWRiverTake  {subbasin ID, river loss taken from the reach's inflow [m3], from its outflow [m3][, its outflow after Raven's routing [m3/s]]} x n  :EndGWRiverTake
+       (the takes of the last step, which Raven's channel storage and balance book half in the next step; hotstart) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWRiverTake")){break;}
+        ExitGracefullyIf(Len<3,"ParseInitialConditionsFile: :GWRiverTake: each line needs a subbasin ID and two volumes",BAD_DATA);
+        pModel->GetGroundwaterModel()->SetHotstartRiverTake(s_to_ll(s[0]),GWHotValue(s[1],":GWRiverTake",true),GWHotValue(s[2],":GWRiverTake",true),
+                                                            (Len>=4)?GWHotValue(s[3],":GWRiverTake",true):std::numeric_limits<double>::quiet_NaN());
+      }
+      break;
+    }
+    case(61):  //----------------------------------------------
+    {/*:GWStartHeads [n]  {head} x n  :EndGWStartHeads  (MODFLOW's heads of the active cells at the end of the last converged step,
+       written when the last step did not converge: the far-head test of the next step compares with them; hotstart) */
+      ExitGracefullyIf(Len<2,"ParseInitialConditionsFile: :GWStartHeads needs the number of heads",BAD_DATA);
+      const long long n=s_to_ll(s[1]);
+      ExitGracefullyIf((n<=0) || (n>1000000000LL),"ParseInitialConditionsFile: :GWStartHeads: the number of heads must be positive (at most 1e9); is the .rvc file damaged?",BAD_DATA);
+      vector<double> h; h.reserve((size_t)n);
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWStartHeads")){break;}
+        for (int i=0;i<Len;i++){h.push_back(GWHotValue(s[i],":GWStartHeads",false));}
+      }
+      ExitGracefullyIf((long long)h.size()!=n,"ParseInitialConditionsFile: :GWStartHeads holds another number of heads than its first line gives; is the .rvc file damaged?",BAD_DATA);
+      pModel->GetGroundwaterModel()->SetHotstartStartHeads(h);
       break;
     }
     case(13):  //----------------------------------------------

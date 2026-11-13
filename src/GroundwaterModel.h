@@ -300,6 +300,20 @@ private:/*----------------------------------------------------*/
   map<long long,double>  _hotRivCarry;   ///< from .rvc :GWRiverLossCarry, by subbasin ID [m3]
   vector<double>         _swxQ;          ///< per SWX entry: flow into the aquifer this step [m3/d]
   vector<double>         _sbLossRemain;  ///< per subbasin: river loss not yet taken from Raven this step [m3]
+  vector<double>         _sbInTake,_sbOutTake; ///< per subbasin: river loss taken from the reach's inflow and from its outflow this step [m3]
+  vector<double>         _sbOutTakePrev; ///< per subbasin: river loss taken from the reach's outflow in the last step [m3]
+  vector<double>         _sbQoutDeliv;   ///< per subbasin: the reach's outflow delivered at the start of the step [m3/s], while its
+                                         ///< routing reads the outflow before the last step's take (BeginReachRouting)
+  vector<double>         _sbQoutRec;     ///< per subbasin: the reach's stored outflow right after Raven's UpdateOutflows [m3/s] (NaN: not known)
+  vector<char>           _sbAddBack;     ///< per subbasin: the last take was added back for this step's routing
+  int                    _sbOverN;       ///< steps on which a reach's outflow was set from outside the routing after a take (warnings)
+  double                 _rivTake,_rivTakePrev; ///< river loss taken from reach inflows and outflows this step and in the last [m3] (Raven's
+                                                ///< channel storage and outflow book such a take half in its step and half in the next)
+  map<long long,pair<double,double> > _hotRivTake; ///< from .rvc :GWRiverTake, by subbasin ID: inflow and outflow take of the last step [m3]
+  map<long long,double>  _hotQoutRec;    ///< from .rvc :GWRiverTake: the reach's stored outflow after Raven's routing in the last step [m3/s]
+  double                 _rivCarryEnd;   ///< river loss still carried at the end of the run [m3]
+  int                    _rivCarryN;     ///< steps on which river loss was carried (warnings)
+  void                   InitRiverTakes();
   bool                   _budgetLineOpen;
   int    _iGW,_iReturnSV;
 
@@ -402,6 +416,7 @@ private:/*----------------------------------------------------*/
   double                 _szRepayQ;      ///< repayment this step, all links [m3/d]
   map<long long,map<int,double> > _hotLag; ///< hotstart :GWSoilZoneLag: HRU ID -> cell (1-based) -> last step's exchange [m3/d]
   map<long long,map<int,double> > _hotDebt; ///< hotstart :GWSoilZoneLag: HRU ID -> cell (1-based) -> outstanding debt [m3]
+  double                 _szDebtHotUnused; ///< debt of the hotstart file this run does not repay (no LAGGED timing, or no such link) [m3]
   void   SZClassify     ();                                     ///< column classes of every soil-zone HRU for this step
   void   SZLagApply     (double **aPhinew,double **aPhi,const double &tstep);  ///< LAGGED: last step's exchange to the columns and Raven's soil zone
   void   SZLagReverse   (const int k);                          ///< LAGGED: takes the source back out of the columns after the sync
@@ -494,6 +509,8 @@ private:/*----------------------------------------------------*/
   map<long long,map<int,vector<double> > > _hotVz; ///< from .rvc :GWVadoseColumns: by HRU ID and cell: zbot, contents
   map<long long,map<int,map<int,vector<double> > > > _hotVzc; ///< from .rvc :GWVadoseClassColumns: by HRU ID, cell and class: classes of the cell, zbot, contents
   map<long long,map<int,map<int,vector<double> > > > _hotVzt; ///< from .rvc :GWVadoseColumnTops: by HRU ID, cell and class (1 without classes): column top [m], water above its reference profile [m3]
+  string                 _hotVzMethod;   ///< from .rvc: the :SoilZoneVadose method that wrote the unsaturated columns ('' if not given)
+  int                    _vzHotBadN;     ///< hotstart column lines written for other columns (method's reference, node count, classes, top)
   double                 _vzChdV; int _vzChdN; ///< [m3] run total of the water of unsaturated columns ended on cells that are specified heads (existing models); columns ended
   double                 _vzHotUnusedV; int _vzHotUnusedN; ///< [m3] water of hotstart column lines a run without columns does not use; lines
   void   VZSetup        ();                                    ///< materials of every exchange column (after SZBuildEntries)
@@ -538,6 +555,7 @@ private:/*----------------------------------------------------*/
   vector<char>           _cellConv;      ///< per user node: convertible cell (ICELLTYPE != 0; generated: layer type; existing: NPF memory)
   vector<double>         _xPrevIt;       ///< MODFLOW's iterate before the solve of the last outer iteration the limit allows (model units)
   vector<double>         _xStart;        ///< heads at the start of the step, taken only from converged steps (far-head test; model units)
+  vector<double>         _hotXStart;     ///< from .rvc :GWStartHeads: _xStart of the run that wrote it, when its last step did not converge
   vector<int>            _keptCol;       ///< per grid column: times KeepColumnsWet set the column in this step
   long                   _szCapN;        ///< supply-limited link updates (last update before the freeze) in the run
   double                 _szCapExcess;   ///< largest take of such a boundary beyond the column's free water [m3/d] (reported, must be 0)
@@ -660,6 +678,8 @@ public:/*-------------------------------------------------------*/
   void   SetHotstartReservoirSeepage(const long long sbid,const double &v){_hotResSeep[sbid]=v;}
   void   SetHotstartReservoirFraction(const long long sbid,const double &v){_hotResFrac[sbid]=v;}
   void   SetHotstartRiverLossCarry(const long long sbid,const double &v){_hotRivCarry[sbid]=v;}
+  void   SetHotstartStartHeads(const vector<double> &x){_hotXStart=x;}
+  void   SetHotstartRiverTake (const long long sbid,const double &vin,const double &vout,const double &qrec){_hotRivTake[sbid]=make_pair(vin,vout); if (qrec==qrec){_hotQoutRec[sbid]=qrec;}}
   void   SetHotstartSoilZoneColumn(const long long hru,const int cell,const vector<double> &phi){if (cell<0){return;} _hotSzCols[hru][cell]=phi;}
   void   Reinitialize         (const optStruct &Options); ///< fresh start for a new ensemble member
   void   AddWell              (const gw_well &w){_aWells.push_back(w);}
@@ -713,6 +733,7 @@ public:/*-------------------------------------------------------*/
   void   SetHotstartVadose    (const long long hru,const int cell,const vector<double> &v){if (cell<=0){return;} _hotVz[hru][cell]=v;}
   void   SetHotstartVadoseClass(const long long hru,const int cell,const int cls,const vector<double> &v){if ((cell<=0) || (cls<=0)){return;} _hotVzc[hru][cell][cls]=v;}
   void   SetHotstartVadoseTop (const long long hru,const int cell,const int cls,const vector<double> &v){if ((cell<=0) || (cls<=0)){return;} _hotVzt[hru][cell][cls]=v;}
+  void   SetHotstartVadoseMethod(const string &m){_hotVzMethod=m;}
   bool   UsesPhysicalSoilZone () const {return _szMode==1;}
   void   WarnIgnoredSoilZoneOptions(const string &given,const bool noisy) const;
   void   NoteSoilClassWithoutKsat(const void *soil,const string &tag){_szNoKsat[soil]=tag;}
@@ -729,8 +750,13 @@ public:/*-------------------------------------------------------*/
   void   SZClassResult        (const int k,const int c,const double *aPhi);   ///< class c's state after Raven's processes
   void   ApplyRiverExchange   (double *aRouted,const double &tstep);
   double TakeRiverLossFromInflow(const int p,const double &Qin,const double &tstep); ///< returns reduced upstream inflow [m3/s]
+  void   BeginReachRouting    (const int p,const double &tstep);                   ///< the routing state before the last step's outflow take
+  void   TakeRiverLossFromOutflow(const int p,double &Qout,const double &tstep);    ///< reduces the reach's routed outflow [m3/s]
+  void   EndReachRouting      (const int p);                                       ///< records the reach's stored outflow after Raven's UpdateOutflows
   void   FinishBudgetLine     ();
-  double GetStepReturnVolume  () const {return _returnVol+_riverAppliedVol+_swxAppliedVol+_szAppliedVol;}  ///< [m3] net water added to Raven this step
+  ///  [m3] net water added to Raven this step, as Raven's balance books it: a river loss taken from a reach's inflow or
+  ///  outflow enters Raven's channel storage and outflow (trapezoidal in time) half in its step and half in the next
+  double GetStepReturnVolume  () const {return _returnVol+_riverAppliedVol+_swxAppliedVol+_szAppliedVol+0.5*(_rivTake-_rivTakePrev);}
   void   CloseOutputs         ();
   bool   IsActive             () const {return _active;}
   double GetObservationWellHead(const long long id) const; ///< [m]; RAV_BLANK_DATA if unknown

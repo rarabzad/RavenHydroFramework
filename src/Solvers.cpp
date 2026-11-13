@@ -580,7 +580,14 @@ void MassEnergyBalance( CModel            *pModel,
 
       pBasin->UpdateLateralInflow(aRouted[p]/(tstep*SEC_PER_DAY));//[m3/d]->[m3/s]
 
+      if (Options.modeltype == MODELTYPE_COUPLED){ //(a reach is routed from its outflow before the last step's river-loss take)
+        pGWModel->BeginReachRouting(p,tstep);
+      }
       pBasin->RouteWater    (aQoutnew,Options,tt);
+
+      if (Options.modeltype == MODELTYPE_COUPLED){ //river leakage the reach's runoff and inflow did not cover: from its outflow
+        pGWModel->TakeRiverLossFromOutflow(p,aQoutnew[pBasin->GetNumSegments()-1],tstep);
+      }
 
       irr_Q=pBasin->ApplyIrrigationDemand(t+tstep,aQoutnew[pBasin->GetNumSegments()-1],Options.management_optimization);
 
@@ -603,6 +610,7 @@ void MassEnergyBalance( CModel            *pModel,
       }
 
       pBasin->UpdateOutflows(aQoutnew,irr_Q,div_Q_total,res_ht,res_outflow,res_const,res_Qstruct,Options,tt,false);//actually updates flow values here
+      if (Options.modeltype == MODELTYPE_COUPLED){pGWModel->EndReachRouting(p);} //(the outflow as routed: an override later is detected)
 
       pModel->AssimilationOverride(p,Options,tt); //modifies flows using assimilation, if needed
 

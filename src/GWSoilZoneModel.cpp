@@ -400,7 +400,7 @@ void CGroundwaterModel::SZInitColumns()
       map<long long,map<int,double> >::const_iterator it=_hotLag.find(_pModel->GetHydroUnit(L.k)->GetHRUID());
       if (it==_hotLag.end()){continue;}
       map<int,double>::const_iterator jt=it->second.find(L.ic+1);
-      if (jt!=it->second.end()){_szxQprev[e]=jt->second; _szxDebt[e]=max(_hotDebt[it->first][L.ic+1],0.0);}
+      if (jt!=it->second.end()){_szxQprev[e]=jt->second; if (_szTiming==1){_szxDebt[e]=max(_hotDebt[it->first][L.ic+1],0.0);}} //(only LAGGED repays a debt)
     }
   }
   if (_vzMode>0){VZInit();}
@@ -644,7 +644,10 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
         continue;
       }
       if (_colCHDTop[L.ic]){continue;}
-      double share=(W>0.0)?((_linkSzx[li]>=0)?_szxFw[_linkSzx[li]]/W:0.0):L.area/(_szOn[k]?Aall:_hruRchArea[k]),F=_linkF[li];
+      //(an HRU without a soil zone partly on specified-head cells: shares of its whole linked area, the rest went to the
+      // specified heads in Exchange)
+      const double Ano=(_hruRchArea[k]<_hruLinkedArea[k])?_hruLinkedArea[k]:_hruRchArea[k];
+      double share=(W>0.0)?((_linkSzx[li]>=0)?_szxFw[_linkSzx[li]]/W:0.0):L.area/(_szOn[k]?Aall:Ano),F=_linkF[li];
       const int e=_linkSzx[li];
       if ((_vzMode>0) && (e>=0) && (e<(int)_vzRl.size())){
         _vzRl[e]=V/tstep*share;                                                  //(for SZRejRate)

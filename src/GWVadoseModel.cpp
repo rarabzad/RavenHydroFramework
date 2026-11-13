@@ -8,6 +8,7 @@
   Raven step before MODFLOW's (with the heads of the last step), capillary rise into the soil zone, recharge to MODFLOW.
   ----------------------------------------------------------------*/
 #include "GroundwaterModel.h"
+#include <set>
 #include "Model.h"
 
 static const double VZ_LMIN=0.05;   //[m] shortest unsaturated column (one node of the finest grid)
@@ -237,12 +238,22 @@ double CGroundwaterModel::VZStorage() const
 //
 void CGroundwaterModel::VZInit()
 {
-  int nHot=0,nBad=0,nSteady=0,nRest=0,nBack=0;
+  int nHot=0,nSteady=0,nRest=0,nBack=0;
   const bool cls=(_vzClasses>1);
   const bool gwHot=!_hotHeads.empty() || !_hotSzCols.empty() || !_hotVz.empty() || !_hotVzc.empty();
   const double q0=_vzQ0/MM_PER_METER;                                            //[m/d]
+  //the methods count the columns' water from different reference profiles (KINEMATIC from ths - Sy, RICHARDS and LAG from
+  //the hydrostatic profile): contents another reference wrote would be other water here, so such lines are not used
+  const bool refOther=!_hotVzMethod.empty() && ((_hotVzMethod=="KINEMATIC")!=(_vzMode==2));
+  set<pair<long long,pair<int,int> > > used;                                    //(HRU ID, cell, class) of the lines used
   for (size_t e=0;e<_szxLink.size();e++){
     const gw_link &L=_aLinks[_szxLink[e]]; const int ic=L.ic;
+    if (!IsExternal() && _colCHDTop[ic]){ //a generated model's cell held as a specified head at the start (a :BoundaryHead series): no
+      for (int i=_vzOff[e];i<_vzOff[e+1];i++){                                  //  column (one forms, at rest, when the cell is released)
+        _vzcCol[i]=gwvz::vz_column(); _vzcCol[i].ztop=_vzcZt[i]; _vzcCol[i].zbot=_vzcZt[i];
+      }
+      continue;
+    }
     double h=_X[_reduced[TopNode(ic)]]*_hf; const double Lmin=VZ_LMIN;
     if (!(std::fabs(_X[_reduced[TopNode(ic)]])<1e29)){h=WaterTable(ic);}       //(HDRY is in the model's units: a dry top cell without NEWTON, the water table below it)
     const double hF=h;                                                           //(the initial head: the saturated fractions of the first step)
@@ -252,29 +263,18 @@ void CGroundwaterModel::VZInit()
     const long long id=_pModel->GetHydroUnit(L.k)->GetHRUID();
     const int nK=_vzOff[e+1]-_vzOff[e];
     //the hotstart lines of this link: of its own kind (:GWVadoseColumns with one class, :GWVadoseClassColumns with K > 1);
-    //lines of the other kind were written with another number of classes and do not match
-    const vector<double> *v1=NULL; const map<int,vector<double> > *vc=NULL; bool other=false;
-    if (!cls){
+    //lines of the other kind were written with another number of classes and are not used (nor lines written by a method
+    //of another reference profile). With depth classes a class column inactive at the end of the run that wrote the file
+    //has no line (the writer skips it; the water table fell below its base in the last step, and the column forms here, at
+    //rest, as it would have in the continuous run's next step). Lines not used are reported after the loop
+    const vector<double> *v1=NULL; const map<int,vector<double> > *vc=NULL;
+    if (!refOther && !cls){
       map<long long,map<int,vector<double> > >::const_iterator it=_hotVz.find(id);
       if (it!=_hotVz.end()){map<int,vector<double> >::const_iterator jt=it->second.find(ic+1); if (jt!=it->second.end()){v1=&jt->second;}}
-      map<long long,map<int,map<int,vector<double> > > >::const_iterator kt=_hotVzc.find(id);
-      if ((kt!=_hotVzc.end()) && (kt->second.find(ic+1)!=kt->second.end())){other=true;}
     }
-    else {
+    else if (!refOther){
       map<long long,map<int,map<int,vector<double> > > >::const_iterator kt=_hotVzc.find(id);
       if (kt!=_hotVzc.end()){map<int,map<int,vector<double> > >::const_iterator jt=kt->second.find(ic+1); if (jt!=kt->second.end()){vc=&jt->second;}}
-      map<long long,map<int,vector<double> > >::const_iterator it=_hotVz.find(id);
-      if ((it!=_hotVz.end()) && (it->second.find(ic+1)!=it->second.end())){other=true;}
-    }
-    //with depth classes a class column inactive at the end of the run that wrote the file has no line (the writer skips
-    //it; the water table fell below its base in the last step, and the column forms here, at rest, as it would have in
-    //the continuous run's next step); a missing line is a mismatch only when the link's lines were written with another
-    //number of classes
-    bool vcOther=false;
-    if (vc!=NULL){
-      for (map<int,vector<double> >::const_iterator ct=vc->begin();ct!=vc->end();ct++){
-        if ((ct->second.size()<3) || ((int)std::floor(ct->second[0]+0.5)!=nK)){vcOther=true;}
-      }
     }
     //the column tops written with the lines (:GWVadoseColumnTops; files without them are not checked): a top that differs by
     //more than 1 mm was written for other columns (another :SoilZoneSubgrid, ground or soil-zone thickness)
@@ -283,16 +283,15 @@ void CGroundwaterModel::VZInit()
     for (int i=_vzOff[e];i<_vzOff[e+1];i++){
       gwvz::vz_column &c=_vzcCol[i]; const double zb=_vzcZt[i];
       c=gwvz::vz_column(); c.ztop=zb; c.zbot=h;
-      vector<double> v; bool have=false,bad=other;
+      vector<double> v; bool have=false;
       if (v1!=NULL){if (v1->size()>=2){v=*v1; have=true;}}
       else if (vc!=NULL){
         map<int,vector<double> >::const_iterator ct=vc->find(i-_vzOff[e]+1);
         if ((ct!=vc->end()) && (ct->second.size()>=3) && ((int)std::floor(ct->second[0]+0.5)==nK)){v.assign(ct->second.begin()+1,ct->second.end()); have=true;}
-        else if ((ct!=vc->end()) || vcOther){bad=true;}                         //(written with another number of classes for this cell)
       }
       if (have && (vt!=NULL)){
         map<int,vector<double> >::const_iterator ct=vt->find(i-_vzOff[e]+1);
-        if ((ct!=vt->end()) && (ct->second.size()>=1) && (std::fabs(ct->second[0]-zb)>1e-3)){have=false; bad=true;}
+        if ((ct!=vt->end()) && (ct->second.size()>=1) && (std::fabs(ct->second[0]-zb)>1e-3)){have=false;}
       }
       if (have){
         gwvz::Build(c,S,zb,v[0],_vzN);                                            //zbot, then the contents top down
@@ -305,14 +304,13 @@ void CGroundwaterModel::VZInit()
           }
           if (!c.th.empty()){c.dryTop=(c.psi[0]<=-0.999999*1e5); c.satTop=(c.psi[0]>=-1e-9);} //(the top's memory: a top held at air-dry or
                                                                                  // saturation by the last step, as in a continuous run)
-          nHot++;
+          nHot++; used.insert(make_pair(id,make_pair(ic+1,cls?(i-_vzOff[e]+1):1)));
           continue;
         }
-        bad=true;                                                                //(another node count: the column starts at its reference;
-        c=gwvz::vz_column(); c.ztop=zb; c.zbot=h;                                //  a water table now at the base: no column)
+        c=gwvz::vz_column(); c.ztop=zb; c.zbot=h;                                //(another node count: the column starts at its reference;
+                                                                                 //  a water table now at the base: no column)
       }
       if (zb-h>Lmin){
-        if (bad){nBad++;}
         gwvz::Build(c,S,zb,h,_vzN);
         if (c.active && (q0>0.0)){
           if (gwHot){nRest++;}
@@ -335,8 +333,40 @@ void CGroundwaterModel::VZInit()
   }
   _vzStore0=_vzStoreVol=VZStorage();
   if (nHot>0){WriteAdvisory("CGroundwaterModel: "+to_string(nHot)+" unsaturated columns read from the hotstart file",false);}
-  if (nBad>0){WriteWarning("CGroundwaterModel: "+to_string(nBad)+" unsaturated columns of the hotstart file do not match the columns (another :SoilZoneVadose node count, "
-                           "another :SoilZoneVadoseClasses, or another column top: :SoilZoneSubgrid, ground or soil-zone thickness?); they start at rest (their reference profile)",false);}
+  //the hotstart lines no column used: written for other columns (another method's reference profile, node count, number of
+  //classes or column top: those columns start at rest), or on cells that are no longer exchange links of a soil-zone HRU
+  //(now specified heads, another HRU or grid): their water is dropped, warned about and reported in the run totals
+  int nUn=0,nBad=0; double vUn=0.0; bool vol=!_hotVzt.empty();
+  map<long long,set<int> > linkCells; for (size_t e=0;e<_szxLink.size();e++){const gw_link &L=_aLinks[_szxLink[e]]; linkCells[_pModel->GetHydroUnit(L.k)->GetHRUID()].insert(L.ic+1);}
+  vector<pair<long long,pair<int,int> > > lines;
+  for (map<long long,map<int,vector<double> > >::const_iterator it=_hotVz.begin();it!=_hotVz.end();it++){
+    for (map<int,vector<double> >::const_iterator jt=it->second.begin();jt!=it->second.end();jt++){lines.push_back(make_pair(it->first,make_pair(jt->first,1)));}
+  }
+  for (map<long long,map<int,map<int,vector<double> > > >::const_iterator it=_hotVzc.begin();it!=_hotVzc.end();it++){
+    for (map<int,map<int,vector<double> > >::const_iterator jt=it->second.begin();jt!=it->second.end();jt++){
+      for (map<int,vector<double> >::const_iterator kt=jt->second.begin();kt!=jt->second.end();kt++){lines.push_back(make_pair(it->first,make_pair(jt->first,kt->first)));}
+    }
+  }
+  for (size_t j=0;j<lines.size();j++){
+    if (used.count(lines[j])){continue;}
+    nUn++;
+    map<long long,set<int> >::const_iterator lt=linkCells.find(lines[j].first);
+    const bool atLink=(lt!=linkCells.end()) && lt->second.count(lines[j].second.first) && (IsExternal() || !_colCHDTop[lines[j].second.first-1]);
+    if (atLink){nBad++;}
+    map<long long,map<int,map<int,vector<double> > > >::const_iterator tt=_hotVzt.find(lines[j].first);
+    if (tt==_hotVzt.end()){continue;}
+    map<int,map<int,vector<double> > >::const_iterator ut=tt->second.find(lines[j].second.first); if (ut==tt->second.end()){continue;}
+    map<int,vector<double> >::const_iterator vt=ut->second.find(lines[j].second.second); if ((vt!=ut->second.end()) && (vt->second.size()>=2)){vUn+=vt->second[1];}
+  }
+  _vzHotUnusedN=nUn; _vzHotUnusedV=vUn; _vzHotBadN=nBad;
+  if (nUn>0){
+    string why;
+    if (nBad>0){why+=to_string(nBad)+" written for other columns ("+(refOther?(":SoilZoneVadose "+_hotVzMethod+", whose reference profile differs from this run's: they start at rest"):
+                     string("another :SoilZoneVadose node count, another :SoilZoneVadoseClasses, or another column top: :SoilZoneSubgrid, ground or soil-zone thickness?; they start at rest"))+")";}
+    if (nUn>nBad){why+=string((nBad>0)?", ":"")+to_string(nUn-nBad)+" on cells that are no longer exchange links of a soil-zone HRU (specified heads, another HRU or grid?)";}
+    WriteWarning("CGroundwaterModel: "+to_string(nUn)+" unsaturated columns of the hotstart file are not used: "+why+"; their water"+(vol?(", "+ToStr(vUn)+" m3 above their reference profiles,"):string(""))+
+                 " is dropped (reported in the run totals of GWModelSummary.txt)",false);
+  }
   if (nSteady>0){WriteAdvisory("CGroundwaterModel: "+to_string(nSteady)+" unsaturated columns start at their steady profile for :SoilZoneVadoseInitialFlux "+ToStr(_vzQ0)+" mm/d "
                                "(the unsaturated share (1 - F) of it each column receives)",false);}
   if (nBack>0){WriteWarning("CGroundwaterModel: "+to_string(nBack)+" unsaturated columns cannot carry the flux of :SoilZoneVadoseInitialFlux "+ToStr(_vzQ0)+" mm/d (their layers "
@@ -384,7 +414,7 @@ void CGroundwaterModel::VZStep(const double &tstep)
           gwvz::vz_column &col=_vzcCol[ii]; if (!col.active){continue;}
           const double R=gwvz::RelStorage(col,_vzStrat[e])*(a*_vzcA[ii]);       //[m3]
           const double zt0=col.ztop; col=gwvz::vz_column(); col.ztop=zt0; col.zbot=zt0;
-          _vzAbsQ[e]+=R/tstep; _vzOutVol+=R; _vzChdV+=R; _vzChdN++;
+          _vzAbsQ[e]+=R/tstep; _vzOutVol+=R; _vzChdV+=R; if (R!=0.0){_vzChdN++;} //(a column at rest holds no water: not counted)
         }
         continue;
       }
