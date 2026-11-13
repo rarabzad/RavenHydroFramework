@@ -33,10 +33,71 @@ using namespace gwutil;
 namespace
 {
   string Upper(string s){for (size_t i=0;i<s.size();i++){s[i]=(char)toupper((unsigned char)s[i]);} return s;}
-  vector<string> Words(const string &line)
+  //the words of a line of a MODFLOW 6 input file, as MODFLOW 6 reads them (InputOutput.f90: u9rdcom and urword): a line
+  //whose first character other than a blank, comma or tab is # or !, or which begins with //, is a comment; words are
+  //separated by blanks, commas and tabs; a quoted word ('...' or "...") may hold them (returned without its quotes).
+  //Where MODFLOW reads a fixed number of words it ignores the rest of the line, so there (cut) a later word that begins
+  //with # or ! ends the line; where it reads every word of the line (AUXILIARY names, a name-file PACKAGES row, whose
+  //third word names the package) such a word is data (all)
+  bool Sep(const char c){return (c==' ') || (c==',') || (c=='\t') || (c=='\r') || (c=='\n');}
+  vector<string> Words(const string &line,const bool all=false)
   {
-    string l=line; size_t h=l.find('#'); if (h!=string::npos){l=l.substr(0,h);} h=l.find('!'); if (h!=string::npos){l=l.substr(0,h);}
-    istringstream is(l); vector<string> w; string t; while (is>>t){w.push_back(t);} return w;
+    vector<string> w; const size_t n=line.size(); size_t i=0;
+    while (true){
+      while ((i<n) && Sep(line[i])){i++;}
+      if (i>=n){break;}
+      if (w.empty() && (line.compare(i,2,"//")==0)){break;}
+      if (((line[i]=='#') || (line[i]=='!')) && (w.empty() || !all)){break;}
+      if ((line[i]=='\'') || (line[i]=='"')){
+        const size_t j=line.find(line[i],i+1);
+        w.push_back(line.substr(i+1,((j==string::npos)?n:j)-i-1)); i=(j==string::npos)?n:j+1; continue;
+      }
+      size_t j=i; while ((j<n) && !Sep(line[j])){j++;}
+      w.push_back(line.substr(i,j-i)); i=j;
+    }
+    return w;
+  }
+  //a real number as MODFLOW 6 reads it (Fortran list-directed input, checked against mf6 6.8.1): digits with an optional
+  //decimal point, and an optional exponent written with E, D or Q (either case; without digits it is 0) or with its sign
+  //alone: 5, 5., .5, 5.0E-1, 50.0D-1, 0.5d1, 1.0+1, 1.0e; a slash ends the value (5.0/), and a repeat count r*c gives c
+  //(2*5.0). Only finite values are taken
+  bool MF6Real(const string &tok0,double &v)
+  {
+    string tok=tok0.substr(0,tok0.find('/'));
+    const size_t st=tok.find('*');
+    if (st!=string::npos){ //(a repeat count: digits; r* without a value, a null value, is no number)
+      if (st==0){return false;}
+      for (size_t j=0;j<st;j++){if (!isdigit((unsigned char)tok[j])){return false;}}
+      tok=tok.substr(st+1);
+    }
+    string s; size_t i=0,nd=0; const size_t n=tok.size();
+    if ((i<n) && ((tok[i]=='+') || (tok[i]=='-'))){s+=tok[i++];}
+    while ((i<n) && isdigit((unsigned char)tok[i])){s+=tok[i++]; nd++;}
+    if ((i<n) && (tok[i]=='.')){s+=tok[i++]; while ((i<n) && isdigit((unsigned char)tok[i])){s+=tok[i++]; nd++;}}
+    if (nd==0){return false;}
+    if (i<n){
+      const char c=(char)toupper((unsigned char)tok[i]);
+      bool letter=false;
+      if ((c=='E') || (c=='D') || (c=='Q')){i++; letter=true;} else if ((c!='+') && (c!='-')){return false;}
+      bool sign=false; string ex;
+      if ((i<n) && ((tok[i]=='+') || (tok[i]=='-'))){ex+=tok[i++]; sign=true;}
+      size_t ne=0; while ((i<n) && isdigit((unsigned char)tok[i])){ex+=tok[i++]; ne++;}
+      if (i<n){return false;}
+      if (ne==0){if (sign || !letter){return false;}}  //(1.0e is 1.0; 0.5e- and 1.0+ are no numbers)
+      else {s+='E'+ex;}
+    }
+    v=strtod(s.c_str(),NULL); return std::isfinite(v);
+  }
+  //an integer as MODFLOW 6 reads it (a period number, NPER): any real MF6Real takes, cut to its whole part as mf6 6.8.1
+  //does (2, 2.0, 2e0, 2/, 1*2 and 2.5 are 2)
+  bool MF6Int(const string &tok,int &k)
+  {
+    double v; if (!MF6Real(tok,v) || (fabs(v)>2.0e9)){return false;}
+    k=(int)v; return true;
+  }
+  string NotANumber(const string &what,const string &tok,const string &where)
+  {
+    return "CGroundwaterModel: "+what+" in "+where+" is '"+tok+"', which is not a number (MODFLOW 6 reads numbers such as 5, 5.0, 5.0E-1 or 5.0D-1)";
   }
   string DirOf(const string &f){size_t p=f.find_last_of("/\\"); return (p==string::npos)?string("./"):f.substr(0,p+1);}
   bool IsDir(const string &p){struct stat st; return (stat(p.c_str(),&st)==0) && ((st.st_mode&S_IFMT)==S_IFDIR);}
@@ -122,7 +183,7 @@ void CGroundwaterModel::ExtReadSimulation()
   ExitGracefullyIf(!N,("CGroundwaterModel: cannot open the model name file "+dir+_extNamFile).c_str(),BAD_DATA);
   _extPkgs.clear(); block=""; map<string,int> count;
   while (getline(N,line)){
-    vector<string> w=Words(line); if (w.empty()){continue;}
+    vector<string> w=Words(line,block=="PACKAGES"); if (w.empty()){continue;}
     string W0=Upper(w[0]);
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
     if (W0=="END"){block=""; continue;}
@@ -208,13 +269,18 @@ void CGroundwaterModel::ExtReadSimulation()
 void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
 {
   string f=_mf6dir+"/"+_extTdisFile;
+  const string fu=DirOf(_extSim)+_extTdisFile; //(the model's own file, which messages name; the working copy has the same lines)
   ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot open "+f).c_str(),BAD_DATA);
-  string line,block,units="DAYS"; vector<double> perlen; vector<string> opts;
+  string line,block,units="DAYS"; vector<double> perlen; vector<string> opts; int ln=0,nper=-1;
   while (getline(I,line)){
+    ln++;
     vector<string> w=Words(line); if (w.empty()){continue;}
     string W0=Upper(w[0]);
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
     if (W0=="END"){block=""; continue;}
+    if ((block=="DIMENSIONS") && (W0=="NPER")){
+      ExitGracefullyIf((w.size()<2) || !MF6Int(w[1],nper),("CGroundwaterModel: NPER in "+fu+" (line "+to_string(ln)+") is not a whole number").c_str(),BAD_DATA);
+    }
     if (block=="OPTIONS"){
       ExitGracefullyIf(W0=="ATS6","CGroundwaterModel: the MODFLOW 6 model uses adaptive time stepping (ATS6); Raven needs fixed time steps. Remove ATS6 from the TDIS options",BAD_DATA);
       if ((W0=="START_DATE_TIME") && (_extOffset>0)){opts.push_back("  START_DATE_TIME "+_extRavenStart+"  # Raven's start (restart)"); continue;}
@@ -226,13 +292,21 @@ void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
         ExitGracefullyIf(w.size()<2,("CGroundwaterModel: OPEN/CLOSE without a file name in "+f).c_str(),BAD_DATA);
         for (size_t j=2;j<w.size();j++){ExitGracefullyIf(Upper(w[j]).find("BINARY")!=string::npos,("CGroundwaterModel: the TDIS period data file "+w[1]+" is binary; Raven reads text files only").c_str(),BAD_DATA);}
         vector<string> rows=ExtReadOpenClose(w[1]);
-        for (size_t j=0;j<rows.size();j++){perlen.push_back(atof(Words(rows[j])[0].c_str()));}
+        for (size_t j=0;j<rows.size();j++){
+          const string tok=Words(rows[j])[0]; double v;
+          ExitGracefullyIf(!MF6Real(tok,v),NotANumber("the length of stress period "+to_string(perlen.size()+1),tok,"the OPEN/CLOSE file "+w[1]+" (row "+to_string(j+1)+")").c_str(),BAD_DATA);
+          perlen.push_back(v);
+        }
         continue;
       }
-      perlen.push_back(atof(w[0].c_str()));
+      double v;
+      ExitGracefullyIf(!MF6Real(w[0],v),NotANumber("the length of stress period "+to_string(perlen.size()+1),w[0],fu+" (line "+to_string(ln)+")").c_str(),BAD_DATA);
+      perlen.push_back(v);
     }
   }
   I.close();
+  ExitGracefullyIf((nper>=0) && (nper!=(int)perlen.size()),("CGroundwaterModel: "+fu+" gives NPER "+to_string(nper)+" but "+to_string(perlen.size())+
+    " stress periods in PERIODDATA; MODFLOW 6 reads exactly NPER rows there").c_str(),BAD_DATA);
   double Tf=1.0; //model time units per day
   if      (units=="SECONDS"){Tf=86400.0;}
   else if (units=="MINUTES"){Tf=1440.0;}
@@ -348,7 +422,10 @@ void CGroundwaterModel::ExtRenumberPeriods()
     vector<string> pre,tsFiles; map<int,vector<string> > blk; string line; int k=-1; bool arrays=false,ts=false,tv=false;
     while (getline(I,line)){
       vector<string> w=Words(line); string W0=w.empty()?"":Upper(w[0]);
-      if ((W0=="BEGIN") && (w.size()>2) && (Upper(w[1])=="PERIOD")){k=atoi(w[2].c_str()); blk[k].clear(); continue;}
+      if ((W0=="BEGIN") && (w.size()>2) && (Upper(w[1])=="PERIOD")){
+        ExitGracefullyIf(!MF6Int(w[2],k) || (k<1),("CGroundwaterModel: the period number of a BEGIN PERIOD line in "+DirOf(_extSim)+P.fname+" is '"+w[2]+"', not a whole number of at least 1").c_str(),BAD_DATA);
+        blk[k].clear(); continue;
+      }
       if ((k>=0) && (W0=="END")){k=-1; continue;}
       if (k>=0){blk[k].push_back(line); continue;}
       if (W0=="READASARRAYS"){arrays=true;}
@@ -415,7 +492,8 @@ void CGroundwaterModel::ExtShiftTimeSeries(const string &name)
     if (W0=="END"){block=""; O<<L[i]<<"\n"; continue;}
     if ((block=="TIMESERIES") && !w.empty()){
       ExitGracefullyIf((W0=="OPEN/CLOSE") || (W0=="INTERNAL"),("CGroundwaterModel: the time-series file "+f+" reads its rows from another file; list them in the file itself").c_str(),BAD_DATA);
-      O<<"  "<<setprecision(15)<<atof(w[0].c_str())-shift; for (size_t j=1;j<w.size();j++){O<<" "<<w[j];} O<<"\n"; continue;
+      double tm; ExitGracefullyIf(!MF6Real(w[0],tm),NotANumber("the time of a row",w[0],DirOf(_extSim)+fn+" (line "+to_string(i+1)+")").c_str(),BAD_DATA);
+      O<<"  "<<setprecision(15)<<tm-shift; for (size_t j=1;j<w.size();j++){O<<" "<<w[j];} O<<"\n"; continue;
     }
     O<<L[i]<<"\n";
   }
@@ -553,7 +631,7 @@ void CGroundwaterModel::ExtEditNameFile(const bool addRaven)
   ofstream O(f.c_str());
   ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+f).c_str(),BAD_DATA);
   for (size_t i=0;i<L.size();i++){
-    vector<string> w=Words(L[i]);
+    vector<string> w=Words(L[i],block=="PACKAGES");
     if (!w.empty() && (Upper(w[0])=="BEGIN") && (w.size()>1)){block=Upper(w[1]);}
     if (!w.empty() && (Upper(w[0])=="END") && (block=="PACKAGES") && addRaven){
       O<<"  RCH6  raven.rch  RCH_RAVEN   # added by Raven\n";
@@ -929,16 +1007,23 @@ void CGroundwaterModel::ExtBuild(const optStruct &Options)
     string fn; for (size_t i=0;i<_extPkgs.size();i++){if (_extPkgs[i].pname==Upper(_streamPkg)){fn=_extPkgs[i].fname;}}
     ifstream P((_mf6dir+"/"+fn).c_str()); string line,block;
     while (getline(P,line)){
-      vector<string> w=Words(line); if (w.empty()){continue;}
+      vector<string> w=Words(line,true); if (w.empty()){continue;}
       string W0=Upper(w[0]);
       if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
       if (W0=="END"){block=""; continue;}
-      if ((block=="OPTIONS") && ((W0=="AUXILIARY") || (W0=="AUX"))){
-        _extNaux=(int)w.size()-1;
-        for (size_t j=1;j<w.size();j++){if (Upper(w[j])==Upper(_streamAux)){_extAux=(int)j-1;}}
+      if ((block=="OPTIONS") && ((W0=="AUXILIARY") || (W0=="AUX"))){ //(every word of the line is an auxiliary name, as for MODFLOW)
+        _extNaux=(int)w.size()-1; _extAux=-1;
+        for (size_t j=1;j<w.size();j++){if ((_extAux<0) && (Upper(w[j])==Upper(_streamAux))){_extAux=(int)j-1;}}
       }
     }
     ExitGracefullyIf(_extAux<0,("CGroundwaterModel: stream package "+_streamPkg+" has no auxiliary variable "+_streamAux).c_str(),BAD_DATA);
+    //the number of auxiliary variables MODFLOW read (its memory): the stride of the values of each entry
+    const string na=_mf6.GetVarAddress(_mname,Upper(_streamPkg),"NAUX");
+    int *pna=_mf6.HasVar(na)?_mf6.GetIntPtr(na):NULL;
+    if (pna!=NULL){
+      ExitGracefullyIf(*pna!=_extNaux,("CGroundwaterModel: stream package "+_streamPkg+": MODFLOW 6 reads "+to_string(*pna)+" auxiliary variables, Raven "+to_string(_extNaux)+
+        " from its AUXILIARY line; write the line with the names only").c_str(),BAD_DATA);
+    }
   }
   _sbGain.assign(_pModel->GetNumSubBasins(),0.0);
   _sbLossRemain.assign(_pModel->GetNumSubBasins(),0.0);

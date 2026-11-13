@@ -695,7 +695,9 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
               }
               pModel->GetGroundwaterModel()->SetHotstartInflowRescale(pBasin->GetID(),mode);
             }
-            pBasin->SetQinHist(histsize,aQin,rvc_tstep,Options.timestep);
+            //(coupled runs: the rescaled history is written only within its array; Raven itself writes past its end when the
+            // lateral-inflow history is the longer one)
+            pBasin->SetQinHist(histsize,aQin,rvc_tstep,Options.timestep,(Options.modeltype==MODELTYPE_COUPLED) && (pModel->GetGroundwaterModel()!=NULL));
             delete [] aQin;
           }
         }

@@ -317,7 +317,7 @@ public:/*-------------------------------------------------------*/
   void            SetRoutingMemory         (const vector<double> &m) { ///< restores GetRoutingMemory's values
     if (m.size()<6){return;} _Qlocal=m[0]; _QlocLast=m[1]; _Qirr=m[2]; _QirrLast=m[3]; _Qdiverted=m[4]; _QdivLast=m[5];
     for (int ii=0;(ii<_nWaterDemands) && (7+2*ii<(int)m.size());ii++){if (_aQdelivered!=NULL){_aQdelivered[ii]=m[6+2*ii];} if (_aQreturned!=NULL){_aQreturned[ii]=m[7+2*ii];}}}
-  void            SetQinHist               (const int N, const double *aQi, const double &tstep_in, const double &tstep);
+  void            SetQinHist               (const int N, const double *aQi, const double &tstep_in, const double &tstep, const bool bounded=false);
   void            SetDownstreamID          (const long long down_SBID);
   void            SetDownstreamBasin       (const CSubBasin *pSB);
   void            SetGauged                (const bool isgauged);

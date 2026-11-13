@@ -188,7 +188,7 @@ void CGroundwaterModel::SZBuildEntries()
   _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _szxCell.clear(); _szxOfHRU.assign(nHRUs,vector<int>());
   _szcLink.clear(); _szcCell.clear(); _szcOfHRU.assign(nHRUs,vector<int>());
   _cellDem.assign(_ncpl,vector<double>());
-  int nRatio=0,nMix=0; double rmin=1e300,rmax=0,dmix=0.0;
+  int nRatio=0,nMix=0; double rmin=1e300,rmax=0,dmix=0.0,fmin=1e300,fmax=0.0; //(fmin, fmax: the ratios of the links outside a factor 2)
   for (size_t li=0;li<_aLinks.size();li++)
   {
     const gw_link &L=_aLinks[li];
@@ -210,7 +210,7 @@ void CGroundwaterModel::SZBuildEntries()
     //storage consistency: specific yield of the top aquifer layer vs drainable porosity of the bottom soil layer
     double Sd=(Lb.phimax-Lb.phifc)/(Lb.H*MM_PER_METER);
     double r=Sy1/Sd; rmin=min(rmin,r); rmax=max(rmax,r);
-    if ((r<0.5) || (r>2.0)){nRatio++;}
+    if ((r<0.5) || (r>2.0)){nRatio++; fmin=min(fmin,r); fmax=max(fmax,r);}
     //the model top is the overlap-weighted soil-zone base of the cell: an HRU whose soil zone is thicker or thinner
     //than the cell's mean (cells shared with lakes or other soil profiles) has its base below or above the top
     double dm=fabs(_szD[L.k]-(_land[ic]-_top[ic]));
@@ -248,7 +248,7 @@ void CGroundwaterModel::SZBuildEntries()
   }
   if (nRatio>0){
     WriteWarning("CGroundwaterModel: :SoilZone PHYSICAL: on "+to_string(nRatio)+" links the specific yield of the top aquifer layer differs from the drainable porosity "
-                 "n(1-SF)(1-FIELD_CAPACITY) of the bottom soil-zone layer by more than a factor 2 (ratio "+to_string(rmin)+" to "+to_string(rmax)+
+                 "n(1-SF)(1-FIELD_CAPACITY) of the bottom soil-zone layer by more than a factor 2 ("+((fmin==fmax)?"ratio "+to_string(fmin):"ratio "+to_string(fmin)+" to "+to_string(fmax))+
                  "); the water table then rises at a different rate in the soil than below it",false);
   }
   _szRatioMin=(rmin<1e299)?rmin:0.0; _szRatioMax=rmax;

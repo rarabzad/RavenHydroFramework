@@ -75,7 +75,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
-  _vzMode=0; _vzPar=0.0; _vzQ0=0.0; _vzClsDev=0.0; _vzBackV=_vzBackWV=0.0; _vzClasses=1; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _ibPtr=NULL; _mf6Newton=true; _farWarned=false; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
+  _vzMode=0; _vzPar=0.0; _vzQ0=0.0; _vzClsDev=0.0; _vzBackV=_vzBackWV=0.0; _vzClasses=1; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _vzSyLow=false; _ibPtr=NULL; _mf6Newton=true; _farWarned=false; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0; _ncWithheldVol=0.0; _ncWithheldN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
@@ -1548,10 +1548,24 @@ void CGroundwaterModel::BuildRivers()
   CheckInputLonLat(_riverFile,rb,"GeoJSON file");
   map<pair<int,int>,pair<double,double> > acc; //(subbasin,column) -> (length, min bed elevation)
   double cs=_cellSize;
+  //lines whose ID names no subbasin of the model (a river network that covers more than the model's watershed) are left out
+  set<long long> unknown; size_t nUnknown=0;
+  if (_riverIDField!=""){
+    for (size_t i=0;i<lines.size();i++){if (_pModel->GetSubBasinIndex(ids[i])<0){unknown.insert(ids[i]); nUnknown++;}}
+    if (nUnknown>0){
+      string list; int nl=0;
+      for (set<long long>::const_iterator it=unknown.begin();(it!=unknown.end()) && (nl<20);it++,nl++){list+=(nl?", ":"")+to_string(*it);}
+      if (unknown.size()>20){list+=", ...";}
+      ExitGracefullyIf(nUnknown==lines.size(),("CGroundwaterModel: no line of the river file "+_riverFile+" has a subbasin of the model in its ID field '"+_riverIDField+
+        "' (IDs "+list+"): check the ID field and the subbasin IDs of the .rvh file").c_str(),BAD_DATA);
+      WriteWarning("CGroundwaterModel: "+to_string(nUnknown)+" line"+((nUnknown>1)?"s":"")+" of the river file "+_riverFile+" name"+((nUnknown>1)?"":"s")+
+                   " no subbasin of the model in the ID field '"+_riverIDField+"' (ID"+((unknown.size()>1)?"s ":" ")+list+"); "+((nUnknown>1)?"they are":"it is")+" left out",false);
+    }
+  }
   for (size_t i=0;i<lines.size();i++)
   {
     int pfix=DOESNT_EXIST;
-    if (ids[i]>=0){pfix=_pModel->GetSubBasinIndex(ids[i]); if (pfix==DOESNT_EXIST){continue;}}
+    if (_riverIDField!=""){pfix=_pModel->GetSubBasinIndex(ids[i]); if (pfix<0){continue;}}
     for (size_t n=0;n+1<lines[i].size();n++)
     {
       const gw_pt &a=lines[i][n],&b=lines[i][n+1];
@@ -3618,6 +3632,10 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
     for (size_t p=0;p<_aProfiles.size();p++){if (_aProfiles[p].recharge_delay>0){anyDelay=true;}}
     for (size_t i=0;i<_aqHRUs.size();i++){s0+=_rchStore[_aqHRUs[i]];}
     if (anyDelay || (s0!=0.0)){S<<"  recharge delay storage: "<<setprecision(15)<<s0<<setprecision(6)<<" m3 at the start (GWBudget.csv 'recharge delay storage')"<<endl;}
+  }
+  { double c0=0.0; for (size_t p=0;p<_sbLossCarry.size();p++){c0+=_sbLossCarry[p];} //(the river loss the run starts with, so that a balance check can include step 1)
+    if (c0!=0.0){S<<"  river loss carried    : "<<setprecision(15)<<c0<<setprecision(6)<<" m3 at the start (the hotstart file's :GWRiverLossCarry and, after a restart with "
+                   "another :TimeStep, the rest of the last step's river take; taken in the first step, in GWBudget.csv 'river exchange applied to Raven')"<<endl;}
   }
   for (size_t p=0;p<_aProfiles.size();p++){
     int n=0; for (int ic=0;ic<_ncpl;ic++){if (_colProfile[ic]==(int)p){n++;}}

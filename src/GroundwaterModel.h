@@ -492,6 +492,7 @@ private:/*----------------------------------------------------*/
   vector<double>         _vzRejV;        ///< per SZX entry: inflow the saturated column top could not take [m3]
   vector<double>         _vzFp;          ///< per SZX entry: saturated fraction the column's inflow used this step
   vector<double>         _vzInV,_vzCapV; ///< per SZX entry: inflow [m3] and capillary rise into the soil zone [m3] this step
+  bool                   _vzSyLow;        ///< a column material has a specific yield below half its drainable porosity (VZSetup)
   long                   _vzSlowed;       ///< steps in which a column's bottom followed a rising water table more slowly (released at most Sy dh)
   vector<double>         _vzCapL;        ///< per SZX entry and soil-zone layer (bottom up, e*n+j): its fraction of _vzCapV
   vector<double>         _szxCapQ;       ///< per SZX entry: capillary rise from the water table into the soil zone this step [m3/d] (a fixed rate taken through SZQ_RAVEN)

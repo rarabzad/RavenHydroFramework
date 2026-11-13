@@ -25,7 +25,7 @@ void CGroundwaterModel::VZSetup()
   _vzUse.assign(ne,0); _vzQ.assign(ne,0.0); _vzAbsQ.assign(ne,0.0); _vzRejV.assign(ne,0.0); _vzFp.assign(ne,0.0);
   _vzInV.assign(ne,0.0); _vzCapV.assign(ne,0.0); _vzCapL.assign(ne*_szNLayers,0.0);
   gwvz::SetAccuracy(_vzAcc); gwvz::SetReference((_vzMode==2)?1:0);
-  vector<char> warned(_aClasses.size(),0),warnSy(_aClasses.size(),0); string noUnsat="",badSy=""; bool extBadSy=false;
+  vector<char> warned(_aClasses.size(),0),warnSy(_aClasses.size(),0); string noUnsat="",badSy=""; bool extBadSy=false; _vzSyLow=false;
   for (size_t e=0;e<ne;e++){
     const gw_link &L=_aLinks[_szxLink[e]]; const int ic=L.ic;
     const gw_profile &P=_aProfiles[_colProfile[ic]];
@@ -55,6 +55,7 @@ void CGroundwaterModel::VZSetup()
         //(KINEMATIC: its reference is ths - Sy, a rise releases at most Sy dh; the warning is meaningless)
         const double dp=m.ths-gwvz::Theta(m,-1.0);
         if ((m.Sy>2.0*dp) || (m.Sy<0.5*dp)){
+          if (m.Sy<0.5*dp){_vzSyLow=true;}
           if (IsExternal()){extBadSy=true;}
           else {const int ic2=P.layers[l].iclass; if (!warnSy[ic2]){warnSy[ic2]=1; badSy+=(badSy==""?"":", ")+_aClasses[ic2].name+" (Sy "+to_string(m.Sy)+", drainable porosity "+to_string(dp)+")";}}
         }
@@ -439,7 +440,8 @@ void CGroundwaterModel::VZStep(const double &tstep)
           //a rising water table takes the column's water above equilibrium below it, at most what MODFLOW stores for that
           //rise (Sy dh): with Sy smaller than the drainable porosity each step's rise would release more than the last (a
           //feedback with gain eps/Sy > 1, design note 1.5); the column's bottom then follows more slowly, releasing the rest
-          //in the next steps (with consistent parameters eps <= Sy and this does not apply)
+          //in the next steps (with consistent parameters, eps <= Sy, it applies only while the column holds water in transit:
+          //the LAG store, a wetting front of RICHARDS, a top cell nearly full)
           const double zt=(zb-h<=Lmin)?zb:max(h,zlow);                           //(not below the aquifer's bottom: a dry column's head can be)
           if (zt>col.zbot+1e-9){ //a rising water table (to the base: the column goes)
             const double z0=col.zbot;
@@ -458,7 +460,9 @@ void CGroundwaterModel::VZStep(const double &tstep)
               const double zn=(lo>col.ztop-0.01)?col.ztop:lo;                    //(a remainder thinner than 1 cm: the column goes)
               absQ=gwvz::MoveBottom(col,S,zn,_vzN)*Ac/tstep;
               if ((_vzSlowed++==0) && (_vzMode!=2)){WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": a rising water table met more water above equilibrium in an unsaturated "
-                                               "column than MODFLOW stores with Sy; the column releases at most Sy dh per step (Sy below the drainable porosity?)",false);}
+                                               "column than MODFLOW stores for the rise; the column releases at most Sy dh per step (or the room left in the top cell) and the rest "
+                                               "in the next steps. This is expected while water is in transit in the column ("+string((_vzMode==3)?"the LAG store":"a wetting front")+")"+
+                                               (_vzSyLow?string("; here a specific yield below the drainable porosity (the warning above) adds to it"):string("")),false);}
             }
             else if ((abT<0.0) && (-abT>capU)){                                  //(the bottom then follows more slowly; the column stays)
               double lo=z0,hi=min(zt,col.ztop-1e-3);

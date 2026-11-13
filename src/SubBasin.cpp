@@ -1490,10 +1490,14 @@ void CSubBasin::SetQlatHist(const int N, const double *aQl, const double QlLast,
 /// \param QoLast: most recent lateral inflow to reach [m3/s]
 /// \param tstep_in: timestep of solution file
 /// \param tstep: current model timestep
+/// \param bounded: rescaled entries are written only within the inflow history array, and entries past the end of aQi
+///  are read as 0 (set by coupled runs: the rescaling loops run over the lateral-inflow history length, which can exceed
+///  the array's _nQinHist+1 entries and, when the step grows, the N entries of aQi)
 //
-void CSubBasin::SetQinHist(const int N, const double *aQi, const double &tstep_in, const double &tstep)
+void CSubBasin::SetQinHist(const int N, const double *aQi, const double &tstep_in, const double &tstep, const bool bounded)
 {
   if(N==0) { return; }
+  const int nw=bounded?min(_nQlatHist,_nQinHist+1):_nQlatHist;
 
   if (N==_nQinHist)
   {
@@ -1509,18 +1513,18 @@ void CSubBasin::SetQinHist(const int N, const double *aQi, const double &tstep_i
   else if (tstep_in>tstep) //e.g., daily to hourly
   {
     int fac=(int)(tstep_in/tstep);
-    for (int i=0;i<_nQlatHist;i++){
+    for (int i=0;i<nw;i++){
       int j=(int)(rvn_floor((double)(i)/fac+0.001));
-      _aQinHist[i]=aQi[j];
+      _aQinHist[i]=(bounded && (j>=N))?0.0:aQi[j];
     }
   }
   else if (tstep_in<tstep) //e.g., hourly to daily
   {
     int fac=(int)(tstep/tstep_in);
-    for (int i=0;i<_nQlatHist;i++){
+    for (int i=0;i<nw;i++){
       _aQinHist[i]=0.0;
       for (int j=0;j<fac;j++){
-        _aQinHist[i]+=aQi[i*fac+j]/(double)(fac);
+        _aQinHist[i]+=((bounded && (i*fac+j>=N))?0.0:aQi[i*fac+j])/(double)(fac);
       }
     }
   }

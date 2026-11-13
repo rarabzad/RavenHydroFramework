@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <algorithm>
+#include <limits>
 
 static const double GW_PI      =3.14159265358979323846;
 static const double GW_D2R     =GW_PI/180.0;
@@ -249,6 +250,14 @@ namespace
   {
     const char *p,*e,*b0;
     void ws(){while((p<e) && isspace((unsigned char)*p)){p++;}}
+    //the four hexadecimal digits after \u (p at the u; left at the last digit)
+    bool Hex4(unsigned long &cp){
+      if (e-p<5){return false;}
+      cp=0; for (int k=1;k<=4;k++){const char h=p[k]; cp<<=4;
+        if ((h>='0') && (h<='9')){cp+=(unsigned long)(h-'0');} else if ((h>='a') && (h<='f')){cp+=(unsigned long)(h-'a'+10);}
+        else if ((h>='A') && (h<='F')){cp+=(unsigned long)(h-'A'+10);} else {return false;}}
+      p+=4; return true;
+    }
     bool str(string &out)
     {
       ws(); if ((p>=e) || (*p!='"')){return false;}
@@ -259,7 +268,18 @@ namespace
           switch(*p){
             case 'n':out+='\n';break; case 't':out+='\t';break; case 'r':out+='\r';break;
             case 'b':out+='\b';break; case 'f':out+='\f';break;
-            case 'u':if (e-p<5){return false;} out+='?';p+=4;break; //(\uXXXX: non-ASCII names are not needed)
+            case 'u':{unsigned long cp; if (!Hex4(cp)){return false;}           //(\uXXXX, a pair of them for a surrogate pair: UTF-8)
+              if ((cp>=0xD800) && (cp<=0xDBFF)){
+                unsigned long lo; if ((e-p<3) || (p[1]!='\\') || (p[2]!='u')){return false;} p+=2;
+                if (!Hex4(lo) || (lo<0xDC00) || (lo>0xDFFF)){return false;}
+                cp=0x10000+((cp-0xD800)<<10)+(lo-0xDC00);
+              }
+              else if ((cp>=0xDC00) && (cp<=0xDFFF)){return false;}
+              if (cp<0x80){out+=(char)cp;}
+              else if (cp<0x800){out+=(char)(0xC0|(cp>>6)); out+=(char)(0x80|(cp&0x3F));}
+              else if (cp<0x10000){out+=(char)(0xE0|(cp>>12)); out+=(char)(0x80|((cp>>6)&0x3F)); out+=(char)(0x80|(cp&0x3F));}
+              else {out+=(char)(0xF0|(cp>>18)); out+=(char)(0x80|((cp>>12)&0x3F)); out+=(char)(0x80|((cp>>6)&0x3F)); out+=(char)(0x80|(cp&0x3F));}
+              break;}
             default :out+=*p;
           }
           p++;
@@ -271,13 +291,21 @@ namespace
     }
   public:
     JParser(const char *b,const char *en):p(b),e(en),b0(b){}
-    //where parsing stopped (the first token that is not valid JSON): line, column and the text there
+    //where parsing stopped (the first token that is not valid JSON): line, column and the text there; for a token that
+    //looks like a number JSON does not have, what JSON allows
     string Where() const{
       int line=1,col=1; for (const char *q=b0;(q<p) && (q<e);q++){if (*q=='\n'){line++; col=1;} else {col++;}}
       string t; for (const char *q=p;(q<e) && (t.size()<12) && (*q!='\n') && (*q!='\r');q++){t+=*q;}
-      return " at line "+to_string((long long)line)+", column "+to_string((long long)col)+((p<e)?" ('"+t+"')":string(" (the end of the file)"))+
-             " (NaN, Infinity, hexadecimal numbers and numbers with leading zeros are not JSON)";
+      string u=t; if (!u.empty() && ((u[0]=='-') || (u[0]=='+'))){u.erase(0,1);}
+      for (size_t i=0;i<u.size();i++){u[i]=(char)tolower((unsigned char)u[i]);}
+      string hint;
+      const bool after0=(p>b0) && (p<e) && (p[-1]=='0') && ((p-1==b0) || !isdigit((unsigned char)p[-2])) && ((*p=='x') || (*p=='X') || isdigit((unsigned char)*p)); //(0x10, 0122: parsing stops after the 0)
+      if (after0){hint=" (hexadecimal numbers and numbers with leading zeros are not JSON)";}
+      else if ((u.compare(0,3,"nan")==0) || (u.compare(0,3,"inf")==0)){hint=" (Raven reads non-finite values written as NaN, Infinity and -Infinity only)";}
+      return " at line "+to_string((long long)line)+", column "+to_string((long long)col)+((p<e)?" ('"+t+"')":string(" (the end of the file)"))+hint;
     }
+    //only blanks after the root value
+    bool AtEnd(){ws(); return (p>=e);}
     bool Parse(JVal &v)
     {
       ws(); if (p>=e){return false;}
@@ -312,7 +340,12 @@ namespace
       else if (c=='t'){if ((e-p<4) || strncmp(p,"true",4)) {return false;} v.t=J_BOOL;v.n=1;p+=4;return true;}
       else if (c=='f'){if ((e-p<5) || strncmp(p,"false",5)){return false;} v.t=J_BOOL;v.n=0;p+=5;return true;}
       else if (c=='n'){if ((e-p<4) || strncmp(p,"null",4)) {return false;} v.t=J_NULL;p+=4;return true;}
-      else { //a number in JSON's grammar only: -?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)? (not NaN, Infinity or hexadecimal)
+      else if ((c=='N') && (e-p>=3) && !strncmp(p,"NaN",3)){v.t=J_NUM; v.n=std::numeric_limits<double>::quiet_NaN(); v.s="NaN"; p+=3; return true;}
+      else if ((c=='I') && (e-p>=8) && !strncmp(p,"Infinity",8)){v.t=J_NUM; v.n=HUGE_VAL; v.s="Infinity"; p+=8; return true;}
+      else if ((c=='-') && (e-p>=9) && !strncmp(p,"-Infinity",9)){v.t=J_NUM; v.n=-HUGE_VAL; v.s="-Infinity"; p+=9; return true;}
+      else { //a number in JSON's grammar: -?(0|[1-9][0-9]*)(.[0-9]+)?([eE][+-]?[0-9]+)? (not hexadecimal or leading zeros);
+             //NaN, Infinity and -Infinity (above), which JSON does not have, are read as GDAL and Python's json read them, so
+             //that an attribute table with such values is read; a coordinate must be finite (JCoords::Pair)
         const char *q=p;
         if ((q<e) && (*q=='-')){q++;}
         if ((q<e) && (*q=='0')){q++;}
@@ -323,7 +356,7 @@ namespace
           q++; if ((q<e) && ((*q=='+') || (*q=='-'))){q++;}
           if (!((q<e) && isdigit((unsigned char)*q))){return false;} while ((q<e) && isdigit((unsigned char)*q)){q++;}
         }
-        v.t=J_NUM; v.n=strtod(string(p,q).c_str(),NULL);
+        v.t=J_NUM; v.s=string(p,q); v.n=strtod(v.s.c_str(),NULL);
         p=q; return true;
       }
     }
@@ -338,18 +371,31 @@ namespace
     JCoords(const CGWCRS *c):crs(c),ax(0),ay(0){box[0]=box[1]=1e300; box[2]=box[3]=-1e300;}
     //a coordinate pair [x, y, ...]: both must be finite JSON numbers (a string, null, true or false is no coordinate)
     bool Pair(const JVal &pt,const string &where,double &x,double &y){
-      if ((pt.t!=J_ARR) || (pt.a.size()<2)){return false;}
-      for (int k=0;k<2;k++){
-        const JVal &c=pt.a[k];
-        if ((c.t==J_NUM) && std::isfinite(c.n)){continue;}
+      if ((pt.t!=J_ARR) || (pt.a.size()<2)){
         if (bad.empty()){
-          const string what=(c.t==J_STR)?"the string \""+c.s+"\"":(c.t==J_NULL)?string("null"):(c.t==J_BOOL)?string(c.n?"true":"false"):
-                            (c.t==J_NUM)?string("a number too large"):(c.t==J_ARR)?string("an array"):string("an object");
-          bad=feature+", "+where+": its "+string(k?"y (latitude)":"x (longitude)")+" is "+what+", not a number";
+          bad=feature+", "+where+": it is "+((pt.t==J_ARR)?"an array of "+to_string((unsigned long long)pt.a.size())+" value"+((pt.a.size()==1)?"":"s"):What(pt))+
+              ", not a position [x, y] (are the coordinates nested as GeoJSON's geometry type needs?)";
         }
         return false;
       }
+      for (int k=0;k<2;k++){
+        const JVal &c=pt.a[k];
+        if ((c.t==J_NUM) && std::isfinite(c.n)){continue;}
+        if (bad.empty()){bad=feature+", "+where+": its "+string(k?"y (latitude)":"x (longitude)")+" is "+What(c)+", not a "+string((c.t==J_NUM)?"finite ":"")+"number";}
+        return false;
+      }
       x=pt.a[0].n; y=pt.a[1].n; return true;
+    }
+    //a geometry member that must be an array (of rings, of polygons, of lines)
+    bool Array(const JVal &v,const string &where){
+      if (v.t==J_ARR){return true;}
+      if (bad.empty()){bad=feature+", "+where+": it is "+What(v)+", not an array (are the coordinates nested as GeoJSON's geometry type needs?)";}
+      return false;
+    }
+    static string What(const JVal &c){
+      return (c.t==J_STR)?"the string \""+c.s+"\"":(c.t==J_NULL)?string("null"):(c.t==J_BOOL)?string(c.n?"true":"false"):
+             (c.t==J_NUM)?(std::isfinite(c.n)?"the number "+c.s:(c.s.size() && (isalpha((unsigned char)c.s[c.s.size()-1])))?c.s:string("a number too large")):
+             (c.t==J_ARR)?string("an array"):string("an object");
     }
     gw_pt Point(const double x,const double y){
       gw_pt q; q.x=x; q.y=y;
@@ -360,10 +406,29 @@ namespace
     }
     void Box(double *b) const {if (b!=NULL){for (int i=0;i<4;i++){b[i]=box[i];}}}
   };
+  //a feature's ID: a whole number, or a string that holds one (blanks around it and a decimal point followed by zeros allowed:
+  //" 7", "7.0"); null, true, false, a fraction or other text are no ID
+  bool FeatureID(const JVal &v,long long &id)
+  {
+    if (v.t==J_NUM){
+      if (!std::isfinite(v.n) || (v.n!=floor(v.n)) || (fabs(v.n)>9.0e15)){return false;}
+      id=(long long)v.n; return true;
+    }
+    if (v.t!=J_STR){return false;}
+    const size_t a=v.s.find_first_not_of(" \t"),b=v.s.find_last_not_of(" \t");     //(blanks around the number are left out)
+    if (a==string::npos){return false;}
+    string s=v.s.substr(a,b-a+1);
+    const size_t dp=s.find('.');                                                      //(a decimal point followed by zeros only: "7.0")
+    if (dp!=string::npos){if ((dp+1<s.size()) && (s.find_first_not_of('0',dp+1)!=string::npos)){return false;} s.erase(dp);}
+    size_t i=((s.size()>0) && ((s[0]=='-') || (s[0]=='+')))?1:0;
+    if ((i>=s.size()) || (s.size()>i+18)){return false;}
+    for (size_t j=i;j<s.size();j++){if (!isdigit((unsigned char)s[j])){return false;}}
+    id=atoll(s.c_str()); return true;
+  }
   bool RingFromJSON(const JVal &jr,gw_ring &r,JCoords &C)
   {
     r.clear();
-    if (jr.t!=J_ARR){return false;}
+    if (!C.Array(jr,C.ring.substr(0,C.ring.size()-2))){return false;}
     for (size_t i=0;i<jr.a.size();i++){
       const JVal &pt=jr.a[i];
       gw_pt q; if (!C.Pair(pt,C.ring+"vertex "+to_string((unsigned long long)(i+1)),q.x,q.y)){return false;}
@@ -373,8 +438,9 @@ namespace
     for (size_t i=0;i<r.size();i++){r[i]=C.Point(r[i].x,r[i].y);}
     return (r.size()>=3);
   }
-  void AddPolygon(const JVal &jpoly,vector<gw_ring> &rings,JCoords &C,vector<int> *part,const int ipart)
+  void AddPolygon(const JVal &jpoly,vector<gw_ring> &rings,JCoords &C,vector<int> *part,const int ipart,const string &where)
   {
+    if (!C.Array(jpoly,where)){return;}
     for (size_t i=0;i<jpoly.a.size();i++){
       gw_ring r;
       C.ring="ring "+to_string((unsigned long long)(i+1))+((i==0)?" (outline), ":" (hole), ");
@@ -474,6 +540,7 @@ bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
   if (txt.compare(0,3,"\xEF\xBB\xBF")==0){txt.erase(0,3);}   //(a UTF-8 byte-order mark, as some Windows programs write)
   JVal root; JParser P(txt.c_str(),txt.c_str()+txt.size());
   if (!P.Parse(root) || (root.t!=J_OBJ)){err="invalid JSON in "+filename+P.Where();return false;}
+  if (!P.AtEnd()){err="invalid JSON in "+filename+": text after the end of the GeoJSON object"+P.Where();return false;}
   const JVal *feats=root.Get("features");
   if ((feats==NULL) || (feats->t!=J_ARR)){err=filename+" is not a GeoJSON FeatureCollection";return false;}
   JCoords C(crs);
@@ -487,22 +554,20 @@ bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
     if ((geom==NULL) || (geom->t!=J_OBJ)){continue;}
     long long id=0;
     C.feature="feature "+to_string((unsigned long long)(f+1));
+    const JVal *gt=geom->Get("type"),*co=geom->Get("coordinates");
+    if ((gt==NULL) || (co==NULL)){continue;}
+    if ((gt->s!="Polygon") && (gt->s!="MultiPolygon")){continue;} //(checked first: features of other types, and their IDs, are not read)
     if (idField!=""){
       if ((props==NULL) || (props->t!=J_OBJ)){err="GeoJSON "+C.feature+" in "+filename+" has no \"properties\" member, so no ID field '"+idField+"'";return false;}
       const JVal *jid=props->Get(idField);
       if (jid==NULL){err="GeoJSON feature missing ID field '"+idField+"' in "+filename;return false;}
-      if (jid->t==J_NUM){id=(long long)llround(jid->n);}
-      else if (jid->t==J_STR){id=atoll(jid->s.c_str());}
-      else {continue;}
+      if (!FeatureID(*jid,id)){err="GeoJSON file "+filename+", "+C.feature+": its ID field '"+idField+"' is "+JCoords::What(*jid)+", not a whole number";return false;}
     }
-    const JVal *gt=geom->Get("type"),*co=geom->Get("coordinates");
-    if ((gt==NULL) || (co==NULL)){continue;}
-    if ((gt->s!="Polygon") && (gt->s!="MultiPolygon")){continue;} //(checked first: a line with the same ID adds no empty entry)
     vector<gw_ring> &rings=shapes[id];
     vector<int> *pp=(parts!=NULL)?&(*parts)[id]:NULL;  //(the polygon each ring belongs to: a Polygon, or one part of a MultiPolygon)
     if (idField!=""){C.feature+=" ("+idField+" "+to_string(id)+")";}
-    if (gt->s=="Polygon"){AddPolygon(*co,rings,C,pp,npart++);}
-    else {for (size_t i=0;i<co->a.size();i++){AddPolygon(co->a[i],rings,C,pp,npart++);}}
+    if (gt->s=="Polygon"){AddPolygon(*co,rings,C,pp,npart++,"its coordinates");}
+    else if (C.Array(*co,"its coordinates")){for (size_t i=0;i<co->a.size();i++){AddPolygon(co->a[i],rings,C,pp,npart++,"polygon "+to_string((unsigned long long)(i+1)));}}
     if (!C.bad.empty()){err="GeoJSON file "+filename+", "+C.bad;return false;}
     nfound++;
   }
@@ -521,6 +586,7 @@ bool GWGeom::ReadGeoJSONLines(const string &filename,const string &idField,
   if (txt.compare(0,3,"\xEF\xBB\xBF")==0){txt.erase(0,3);}   //(a UTF-8 byte-order mark, as some Windows programs write)
   JVal root; JParser P(txt.c_str(),txt.c_str()+txt.size());
   if (!P.Parse(root) || (root.t!=J_OBJ)){err="invalid JSON in "+filename+P.Where();return false;}
+  if (!P.AtEnd()){err="invalid JSON in "+filename+": text after the end of the GeoJSON object"+P.Where();return false;}
   const JVal *feats=root.Get("features");
   if ((feats==NULL) || (feats->t!=J_ARR)){err=filename+" is not a GeoJSON FeatureCollection";return false;}
   JCoords C(crs);
@@ -532,20 +598,22 @@ bool GWGeom::ReadGeoJSONLines(const string &filename,const string &idField,
     if ((geom==NULL) || (geom->t!=J_OBJ)){continue;}
     long long id=-1;
     C.feature="feature "+to_string((unsigned long long)(f+1));
+    const JVal *gt=geom->Get("type"),*co=geom->Get("coordinates");
+    if ((gt==NULL) || (co==NULL)){continue;}
+    if ((gt->s!="LineString") && (gt->s!="MultiLineString")){continue;} //(features of other types, and their IDs, are not read)
     if ((idField!="") && ((props==NULL) || (props->t!=J_OBJ))){err="GeoJSON "+C.feature+" in "+filename+" has no \"properties\" member, so no ID field '"+idField+"'";return false;}
     if (idField!=""){
       const JVal *jid=props->Get(idField);
       if (jid==NULL){err="GeoJSON feature missing ID field '"+idField+"' in "+filename;return false;}
-      id=(jid->t==J_NUM)?(long long)llround(jid->n):atoll(jid->s.c_str());
+      if (!FeatureID(*jid,id)){err="GeoJSON file "+filename+", "+C.feature+": its ID field '"+idField+"' is "+JCoords::What(*jid)+", not a whole number";return false;}
       C.feature+=" ("+idField+" "+to_string(id)+")";
     }
-    const JVal *gt=geom->Get("type"),*co=geom->Get("coordinates");
-    if ((gt==NULL) || (co==NULL)){continue;}
     vector<const JVal*> parts;
     if      (gt->s=="LineString"     ){parts.push_back(co);}
-    else if (gt->s=="MultiLineString"){for (size_t i=0;i<co->a.size();i++){parts.push_back(&co->a[i]);}}
+    else if ((gt->s=="MultiLineString") && C.Array(*co,"its coordinates")){for (size_t i=0;i<co->a.size();i++){parts.push_back(&co->a[i]);}}
     for (size_t i=0;i<parts.size();i++){
       gw_ring L;
+      if (!C.Array(*parts[i],(parts.size()>1)?"line "+to_string((unsigned long long)(i+1)):string("its coordinates"))){err="GeoJSON file "+filename+", "+C.bad;return false;}
       for (size_t n=0;n<parts[i]->a.size();n++){
         const JVal &pt=parts[i]->a[n]; double x,y;
         if (C.Pair(pt,((parts.size()>1)?"line "+to_string((unsigned long long)(i+1))+", ":string(""))+"vertex "+to_string((unsigned long long)(n+1)),x,y)){L.push_back(C.Point(x,y));}
