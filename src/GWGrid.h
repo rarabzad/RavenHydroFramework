@@ -57,6 +57,9 @@ public:
   static double EstimateQuadtreeCells(const double xa,const double ya,const double xb,const double yb,const double cellsize,
                       const vector<gw_refine> &ref,const int maxLevel,const double limit=0.0); ///< cells per layer a quadtree grid will have, estimated before it is built (counting stops above limit > 0)
   void   MakeVoronoi (const vector<gw_pt> &seeds,const double xa,const double ya,const double xb,const double yb);
+  enum {LIMIT_CELLSIZE,LIMIT_REFINEMENT,LIMIT_MESH,LIMIT_MESH_REFINED,LIMIT_IMPORTED,LIMIT_EXISTING};
+  static string CellLimitMessage(const int what,const double n,const double limit,const string &file); ///< the stop for a grid of n cells (or HRU-mesh
+                                                                                                    ///< seeds) per layer, more than limit, naming what decides its size
   void   MakeFromPolygons(const vector<gw_ring> &cells);
 
   int    Locate      (const double x,const double y) const;

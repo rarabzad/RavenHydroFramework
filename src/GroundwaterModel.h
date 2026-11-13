@@ -314,6 +314,15 @@ private:/*----------------------------------------------------*/
   double                 _rivTakePrevBook; ///< the part of the last step's takes that Raven's channel storage and outflow book in this
                                            ///< step [m3]: half the takes from inflows, half the takes from outflows times this step over theirs
   double                 _hotRivTakeDt;  ///< from .rvc :GWRiverTake: the time step of the takes [d] (0: not given, the run's own step)
+  vector<vector<double> > _sbInHist;    ///< per subbasin: river loss taken from the reach's inflow in this step and the earlier ones
+                                         ///< (latest first) as rates [m3/d], kept as Raven keeps the reach's inflow history (CSubBasin::_aQinHist)
+  double                 _rivTakeBookAdj; ///< first step after a hotstart whose inflow history Raven averaged: the part of the inflow takes
+                                          ///< Raven's channel storage books beyond the last takes' rate over this step [m3]
+  map<long long,vector<double> > _hotInHist; ///< from .rvc :GWRiverInflowTakes, by subbasin ID: the inflow-take rates of the last steps [m3/d]
+  map<long long,int>     _hotInMode;     ///< by subbasin ID: how Raven rescaled the reach's inflow history read from the .rvc (CSubBasin::SetQinHist):
+                                         ///< 0 copied, n>0 averaged over n steps, -n each value repeated n times
+  string                 _hotRvcFile;    ///< the .rvc file read last (its groundwater blocks are the state a file written after the run carries)
+  bool                   _closed;        ///< the model ran and is closed (CloseOutputs): its state is the one of the run's end
   map<long long,pair<double,double> > _hotRivTake; ///< from .rvc :GWRiverTake, by subbasin ID: inflow and outflow take of the last step [m3]
   map<long long,double>  _hotQoutRec;    ///< from .rvc :GWRiverTake: the reach's stored outflow after Raven's routing in the last step [m3/s]
   double                 _rivCarryEnd;   ///< river loss still carried at the end of the run [m3]
@@ -686,6 +695,8 @@ public:/*-------------------------------------------------------*/
   void   SetHotstartStartHeads(const vector<double> &x){_hotXStart=x;}
   void   SetHotstartRiverTake (const long long sbid,const double &vin,const double &vout,const double &qrec){_hotRivTake[sbid]=make_pair(vin,vout); if (qrec==qrec){_hotQoutRec[sbid]=qrec;}}
   void   SetHotstartRiverTakeStep(const double &dt){_hotRivTakeDt=dt;}
+  void   SetHotstartInflowTakes(const long long sbid,const vector<double> &r){_hotInHist[sbid]=r;}
+  void   SetHotstartInflowRescale(const long long sbid,const int mode){_hotInMode[sbid]=mode;}
   void   SetHotstartSoilZoneColumn(const long long hru,const int cell,const vector<double> &phi){if (cell<0){return;} _hotSzCols[hru][cell]=phi;}
   void   Reinitialize         (const optStruct &Options); ///< fresh start for a new ensemble member
   void   AddWell              (const gw_well &w){_aWells.push_back(w);}
@@ -698,6 +709,7 @@ public:/*-------------------------------------------------------*/
   void   SetSteadyStateInit   (const double &rch_mm_d){_steadyInit=true;_ssRecharge=rch_mm_d;}
   void   SetInitialHeads      (const string &mode,const double &value){_initMode=mode;_initValue=value;}
   void   ClearHotstartData    (); ///< before an ensemble member's .rvc is read: forget the previous member's values
+  void   SetHotstartFile      (const string &f){_hotRvcFile=f;} ///< the .rvc file being read
   void   SetGridType          (const int t)            {_gridType=t; _gridTypeGiven=true;}
   void   SetMF6Simulation     (const string &f)        {_extSim=f;}
   void   SetMF6Model          (const string &m)        {_extModel=m; _extOnly+=" :MF6Model";}
@@ -766,7 +778,7 @@ public:/*-------------------------------------------------------*/
   void   CloseOutputs         ();
   bool   IsActive             () const {return _active;}
   double GetObservationWellHead(const long long id) const; ///< [m]; RAV_BLANK_DATA if unknown
-  void   WriteHotstart        (ofstream &RVC) const;
+  void   WriteHotstart        (ofstream &RVC) const; ///< the groundwater blocks of a .rvc file (also after the model is closed: see the .cpp)
 };
 
 #endif

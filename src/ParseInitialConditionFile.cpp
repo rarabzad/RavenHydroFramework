@@ -109,6 +109,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     }
     pModel->RestoreInitialDynamicState(Options.timestep); //same routing memory and reservoir states as the first run (a .rvc read below overrides them)
   }
+  if ((Options.modeltype==MODELTYPE_COUPLED) && (pModel->GetGroundwaterModel()!=NULL)){pModel->GetGroundwaterModel()->SetHotstartFile(Options.rvc_filename);}
   //--Sift through file-----------------------------------------------
   bool end_of_file=pp->Tokenize(s,Len);
   while (!end_of_file)
@@ -152,6 +153,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":GWVadoseClassColumns"        )){code=59; }
     else if  (!strcmp(s[0],":GWRiverTake"                 )){code=60; }
     else if  (!strcmp(s[0],":GWStartHeads"                )){code=61; }
+    else if  (!strcmp(s[0],":GWRiverInflowTakes"          )){code=62; }
     else if  (!strcmp(s[0],":EndHRUStateVariableTable"    )){code=-2; }
     else if  (!strcmp(s[0],":InitialConcentrationTable"   )){code=4; concname=s[1]; }
     else if  (!strcmp(s[0],":EndInitialConcentrationTable")){code=-2; }
@@ -185,7 +187,7 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
     else if  (!strcmp(s[0],":BasinStageHist"              )){code=16;}
     else if  (!strcmp(s[0],":BasinAreaHist"               )){code=17;}
 
-    if ((code>=50) && (code<=61) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
+    if ((code>=50) && (code<=62) && ((Options.modeltype!=MODELTYPE_COUPLED) || (pModel->GetGroundwaterModel()==NULL))){
       //groundwater state of a coupled run (e.g. its solution.rvc) in a run without :GroundwaterModel: not used
       WriteWarning("ParseInitialConditionsFile: "+string(s[0])+" ignored (the model has no :GroundwaterModel MODFLOW6)",Options.noisy);
       if (code>50){ //a block: skip to its own end line (:InitialGWHeads is a single line)
@@ -684,6 +686,15 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
               if ((i==Len) && (j<histsize)){end_of_file=pp->Tokenize(s,Len); i=0;}
             } while ((j<histsize) && (!end_of_file));
 
+            if ((Options.modeltype==MODELTYPE_COUPLED) && (pModel->GetGroundwaterModel()!=NULL)){
+              //how SetQinHist rescales the inflow history (river loss taken from the inflow is rescaled the same way)
+              int mode=0;
+              if (histsize!=pBasin->GetInflowHistorySize()){
+                if      (rvc_tstep>Options.timestep){mode=-(int)(rvc_tstep/Options.timestep);}
+                else if (rvc_tstep<Options.timestep){mode= (int)(Options.timestep/rvc_tstep);}
+              }
+              pModel->GetGroundwaterModel()->SetHotstartInflowRescale(pBasin->GetID(),mode);
+            }
             pBasin->SetQinHist(histsize,aQin,rvc_tstep,Options.timestep);
             delete [] aQin;
           }
@@ -1136,6 +1147,18 @@ bool ParseInitialConditionsFile(CModel *&pModel, const optStruct &Options)
       }
       ExitGracefullyIf((long long)h.size()!=n,"ParseInitialConditionsFile: :GWStartHeads holds another number of heads than its first line gives; is the .rvc file damaged?",BAD_DATA);
       pModel->GetGroundwaterModel()->SetHotstartStartHeads(h);
+      break;
+    }
+    case(62):  //----------------------------------------------
+    {/*:GWRiverInflowTakes  {subbasin ID, river loss taken from the reach's inflow in the last steps, latest first, as rates [m3/d]} x n
+       :EndGWRiverInflowTakes  (hotstart: a restart with a longer :TimeStep, where Raven averages the reach's inflow history) */
+      while (!pp->Tokenize(s,Len)){
+        if (IsComment(s[0],Len)){continue;}
+        if (!strcmp(s[0],":EndGWRiverInflowTakes")){break;}
+        ExitGracefullyIf(Len<2,"ParseInitialConditionsFile: :GWRiverInflowTakes: each line needs a subbasin ID and at least one rate",BAD_DATA);
+        vector<double> r; for (int i=1;i<Len;i++){r.push_back(GWHotValue(s[i],":GWRiverInflowTakes",true));}
+        pModel->GetGroundwaterModel()->SetHotstartInflowTakes(s_to_ll(s[0]),r);
+      }
       break;
     }
     case(13):  //----------------------------------------------

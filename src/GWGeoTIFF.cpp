@@ -813,24 +813,48 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
     if (bscale==0.0){err=F+"its band SCALE in GDAL_METADATA is 0 (every value would be the OFFSET): save the raster with its elevations (e.g. gdal_translate -unscale)"; return false;}
     map<string,string>::const_iterator iu=items.find("UNITTYPE");
     if (iu!=items.end()){
-      //the unit's words (letters only, lower case): "m (Admiralty datum)" and "metres above Hydrographic Datum" are metres,
-      //"feet above sea level" and "US survey foot" are not; a word is matched whole (not "dm" inside "admiralty")
-      vector<string> wd; string cur;
+      //the unit's words (ASCII letters only, lower case): "m (Admiralty datum)" and "metres above Hydrographic Datum" are
+      //metres, "feet above sea level" and "US survey foot" are not; a word is matched whole (not "dm" inside "admiralty").
+      //Feet fused with a qualifier, as GDAL and PROJ write US survey feet ("ftUS", "usft", "USfeet"), are feet too. A word
+      //glued to a digit or a non-ASCII letter ("µm", "10m"), or following a number ("0.1 m": a scaled unit), is no metre word
+      vector<string> wd; vector<char> glued; string cur; bool gl=false; unsigned char prev=' ',prevNS=' ';
       for (size_t i=0;i<=iu->second.size();i++){
-        const char ch=(i<iu->second.size())?iu->second[i]:' ';
-        if (isalpha((unsigned char)ch)){cur+=(char)tolower((unsigned char)ch);} else if (!cur.empty()){wd.push_back(cur); cur="";}
+        const unsigned char ch=(i<iu->second.size())?(unsigned char)iu->second[i]:' ';
+        if ((ch<0x80) && isalpha(ch)){if (cur.empty()){gl=(prev>=0x80) || isdigit(prev) || isdigit(prevNS);} cur+=(char)tolower(ch);}
+        else if (!cur.empty()){wd.push_back(cur); glued.push_back(gl?1:0); cur="";}
+        prev=ch; if ((ch!=' ') && (ch!='\t')){prevNS=ch;}
       }
       const char *mw[]={"m","metre","metres","meter","meters"};
-      const char *ow[]={"ft","foot","feet","cm","mm","dm","km","inch","inches","yard","yards","yd","yds","mile","miles"};
+      const char *ow[]={"ft","foot","feet","cm","mm","dm","km","inch","inches","yard","yards","yd","yds","mile","miles",
+                        "fathom","fathoms","chain","chains","kmi"};
+      //(PROJ's short unit ids, which are also ordinary words or abbreviations ("CH1903", "mi-marée", "see link"): another unit
+      //only when no metre word is given and they stand first, or after a qualifier as in us-ch, us-mi, us-in)
+      const char *sw[]={"ch","mi","fath","link","links","in"};
+      const char *sq[]={"us","ind","int","intl"};
       const char *op[]={"centimet","millimet","decimet","kilomet"};          //(word prefixes: centimetre(s), centimeter(s), ...)
+      const char *fw[]={"ft","feet","foot"};                                  //(feet fused with a qualifier: ftus, footus, ...
+      const char *fq[]={"us","s","m","i","int","intl","ind","uk","br"};      // ... and usft, sft, usfeet, intfoot, ...)
       bool anyM=false,other=false;
       for (size_t j=0;j<wd.size();j++){
-        for (int i=0;i<5;i++){if (wd[j]==mw[i]){anyM=true;}}
-        for (int i=0;i<15;i++){if (wd[j]==ow[i]){other=true;}}
+        for (int i=0;i<5;i++){if ((wd[j]==mw[i]) && !glued[j]){anyM=true;}}
+        for (int i=0;i<20;i++){if (wd[j]==ow[i]){other=true;}}
         for (int i=0;i<4;i++){if (wd[j].compare(0,strlen(op[i]),op[i])==0){other=true;}}
+        for (int i=0;i<3;i++){
+          const size_t n=strlen(fw[i]);
+          if (wd[j].compare(0,n,fw[i])==0){other=true;}
+          if (wd[j].size()>n){
+            const string q=wd[j].substr(0,wd[j].size()-n);
+            if (wd[j].compare(wd[j].size()-n,n,fw[i])==0){for (int k=0;k<9;k++){if (q==fq[k]){other=true;}}}
+          }
+        }
       }
-      bool firstM=wd.empty(); for (int i=0;(i<5) && !wd.empty();i++){if (wd[0]==mw[i]){firstM=true;}}
-      if (!wd.empty() && ((wd[0]=="inch") || ((wd[0]=="in") && !anyM))){other=true;} //("in" first: inches unless a metre word follows, as in "in metres")
+      //(an empty unit is no unit; a text without a word, such as ' or ?, is a unit Raven does not know)
+      bool firstM=(iu->second.find_first_not_of(" \t\r\n")==string::npos);
+      for (int i=0;(i<5) && !wd.empty();i++){if ((wd[0]==mw[i]) && !glued[0]){firstM=true;}}
+      bool qual=false; for (int k=0;(k<4) && !wd.empty();k++){if (wd[0]==sq[k]){qual=true;}}
+      for (size_t j=0;(j<wd.size()) && (j<(qual?2u:1u)) && !anyM;j++){ //("in" first: inches unless a metre word follows, as in "in metres")
+        for (int i=0;i<6;i++){if (wd[j]==sw[i]){other=true;}}
+      }
       const bool metre=firstM || (anyM && !other);
       if (!metre && other){
         err=F+"its elevations are in "+iu->second+" (the band unit, UNITTYPE in GDAL_METADATA); Raven reads elevations in metres: convert the values to metres (e.g. gdal_calc.py) and set the unit to metres (gdal_edit.py -units m)"; return false;

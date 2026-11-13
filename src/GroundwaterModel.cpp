@@ -70,7 +70,8 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _resExchange=false; _resQ=_resHcof=_resRhs=NULL; _resNcol=0; _Qres_spec=_Qres=_resPendingVol=_resShortVol=0.0;
   _cacheHit=false; _geomSeconds=0.0; _writeNC=false; _writeCBC=false; _ncid=-1; _ncTime=_ncHead=-1; _ncRec=0; _nstp=0; _stepCount=0; _jday0=0; _jyear0=0; _calendar=0; _tsDur=_tsDt=0.0;
   _Qriv_in=_Qriv_out=_riverAppliedVol=_riverDeficitVol=0.0; _budgetLineOpen=false; _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0; _sbOverN=0;
-  _rivTakeDt=_rivTakePrevDt=_rivTakePrevBook=_hotRivTakeDt=0.0;
+  _rivTakeDt=_rivTakePrevDt=_rivTakePrevBook=_hotRivTakeDt=_rivTakeBookAdj=0.0;
+  _closed=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
@@ -111,7 +112,7 @@ void CGroundwaterModel::ResetState()
   _X=NULL; _active=false; _stepCount=0; _nNonConverged=0; _budgetLineOpen=false;
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=_riverAppliedVol=_riverDeficitVol=0.0;
   _sbInTake.clear(); _sbOutTake.clear(); _sbOutTakePrev.clear(); _sbQoutDeliv.clear(); _sbQoutRec.clear(); _sbAddBack.clear(); _sbOverN=0; _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0;
-  _rivTakeDt=_rivTakePrevDt=_rivTakePrevBook=0.0;
+  _rivTakeDt=_rivTakePrevDt=_rivTakePrevBook=_rivTakeBookAdj=0.0; _sbInHist.clear();
   _szOn.clear(); _szSV.clear(); _szLay.clear(); _szD.clear(); _szLam.clear(); _szRchV.clear(); _szRej.clear(); _szOvfV.clear(); _szNetV.clear(); _szW.clear();
   _linkF.clear(); _cellDem.clear(); _szxLink.clear(); _szxC.clear(); _szxZb.clear(); _szxQ.clear(); _colCoverNS.clear(); _szxOfHRU.clear();
   _szxCell.clear(); _szxQc.clear(); _szxCg.clear(); _szxHc.clear(); _szxHp.clear(); _szxHr.clear(); _szxHq.clear(); _szxQq.clear(); _szxFw.clear(); _szxFc.clear(); _szxOne.clear(); _szSyncOvf.clear(); _szxBa.clear(); _szxBra.clear(); _szxBb.clear(); _szxBrb.clear(); _szxBk.clear(); _szxLam.clear(); _szxRej.clear(); _szxCol.clear(); _linkSzx.clear(); _szColOff.clear(); _szColA.clear(); _szColPhi.clear(); _szColInit=false;
@@ -789,7 +790,7 @@ void CGroundwaterModel::Initialize(const optStruct &Options)
     ExitGracefully(S.str().c_str(),BAD_DATA);
   }
   ConnectEngine(); GWPROF("ConnectEngine");
-  _active=true;
+  _active=true; _closed=false;
   if (_doSteady){RunSteadyState();}
   if (SZPhysical()){SZInitColumns();} //before Raven's initial storage is taken (CModel::CalculateInitialWaterStorage)
   if (!_hotDebt.empty()){ //lagged-exchange debt of the hotstart file this run does not repay (no LAGGED timing, or lines that match no
@@ -853,7 +854,7 @@ double CGroundwaterModel::WaterTable(const int ic) const
 void CGroundwaterModel::ClearHotstartData()
 {
   _hotHeads.clear(); _hotDims[0]=_hotDims[1]=_hotDims[2]=0;
-  _hotRchStore.clear(); _hotResSeep.clear(); _hotResFrac.clear(); _hotRivCarry.clear(); _hotRivTake.clear(); _hotQoutRec.clear(); _hotXStart.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotVzc.clear(); _hotVzt.clear(); _hotVzMethod=""; _hotLag.clear(); _hotDebt.clear(); _hotRivTakeDt=0.0;
+  _hotRchStore.clear(); _hotResSeep.clear(); _hotResFrac.clear(); _hotRivCarry.clear(); _hotRivTake.clear(); _hotQoutRec.clear(); _hotXStart.clear(); _hotSzCols.clear(); _hotVz.clear(); _hotVzc.clear(); _hotVzt.clear(); _hotVzMethod=""; _hotLag.clear(); _hotDebt.clear(); _hotRivTakeDt=0.0; _hotInHist.clear(); _hotInMode.clear();
   _initMode="FROM_PROFILE"; _initValue=0.0;
 }
 //////////////////////////////////////////////////////////////////
@@ -1310,7 +1311,9 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
       }
     }
     vector<gw_pt> seeds; MeshSeeds(rr,ref,minx-cs,miny-cs,maxx+cs,maxy+cs,seeds);
-    ExitGracefullyIf(seeds.size()>maxCells,"CGroundwaterModel: HRU mesh exceeds 5 million cells per layer; increase :GridCellSize",BAD_DATA);
+    if (seeds.size()>maxCells){
+      ExitGracefully(("CGroundwaterModel: "+CGWGrid::CellLimitMessage(ref.empty()?CGWGrid::LIMIT_MESH:CGWGrid::LIMIT_MESH_REFINED,(double)seeds.size(),maxCells,"")).c_str(),BAD_DATA);
+    }
     _grid.MakeVoronoi(seeds,minx-cs,miny-cs,maxx+cs,maxy+cs);
     for (int i=0;i<_grid.ncpl;i++){ //every seed lies in the box, so every cell must be a proper polygon
       ExitGracefullyIf(_grid.poly[i].size()<3,"CGroundwaterModel: HRU mesh produced a degenerate cell (internal error; please report the input)",RUNTIME_ERR);
@@ -1339,9 +1342,9 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   }
   _ncpl=_grid.ncpl; _nrow=_grid.nrow; _ncol=_grid.ncol; _x0=_grid.x0; _y0=_grid.y0;
   if (_ncpl>maxCells){
-    ExitGracefully(((_gridWhat==":GridRefinement")?
-      "CGroundwaterModel: the :GridRefinement sizes give a grid of "+to_string(_ncpl)+" cells per layer, more than 5 million: give larger refinement sizes in metres as plain numbers, or use :GridType QUADTREE or HRU_MESH, which refine only around the features":
-      "CGroundwaterModel: the grid has "+to_string(_ncpl)+" cells per layer, more than 5 million; increase :GridCellSize").c_str(),BAD_DATA);
+    const int what=IsExternal()?CGWGrid::LIMIT_EXISTING:(_gridType==GWGRID_FILE)?CGWGrid::LIMIT_IMPORTED:
+                   (_gridWhat==":GridRefinement")?CGWGrid::LIMIT_REFINEMENT:CGWGrid::LIMIT_CELLSIZE;
+    ExitGracefully(("CGroundwaterModel: "+CGWGrid::CellLimitMessage(what,(double)_ncpl,maxCells,_gridFile)).c_str(),BAD_DATA);
   }
 
   //-- intersection of every HRU ring with every cell it may touch
@@ -3111,6 +3114,24 @@ double CGroundwaterModel::GetObservationWellHead(const long long id) const
 //
 void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
 {
+  if (!_active && _closed){ //a state file written after the run has ended (EnKF's solution_EnKF.rvc, written from each member's
+    //solution.rvc read again): MODFLOW is released, so the groundwater blocks of that .rvc, the state at the end of the member's
+    //run, are written unchanged (every block runs from a ':GW...' line to its ':EndGW...' line)
+    ifstream IN(_hotRvcFile.c_str());
+    string line,endtag;
+    while (getline(IN,line)){
+      const size_t a=line.find_first_not_of(" \t");
+      const size_t b=(a==string::npos)?string::npos:line.find_first_of(" \t\r",a);
+      const string tok=(a==string::npos)?"":line.substr(a,(b==string::npos)?string::npos:b-a);
+      if (endtag.empty()){
+        if ((tok.size()>3) && (tok.compare(0,3,":GW")==0)){endtag=":End"+tok.substr(1);}
+        else {continue;}
+      }
+      else if (tok==endtag){endtag="";}
+      RVC<<line<<endl;
+    }
+    return;
+  }
   if ((!_active) || (_X==NULL)){return;}
   //every value with 17 significant digits, as the HRU states before it: a restart starts from the states as they were
   const std::ios::fmtflags f0=RVC.flags(); const std::streamsize p0=RVC.precision();
@@ -3151,6 +3172,19 @@ void CGroundwaterModel::WriteHotstart(ofstream &RVC) const
       }
     }
     RVC<<":EndGWRiverTake"<<endl;
+  }
+  bool anyHist=false; //takes from a reach's inflow still in Raven's inflow history: a restart with a longer :TimeStep averages them
+  for (size_t p=0;p<_sbInHist.size();p++){for (size_t i=0;i<_sbInHist[p].size();i++){if (_sbInHist[p][i]!=0.0){anyHist=true;}}}
+  if (anyHist){
+    RVC<<":GWRiverInflowTakes   # subbasin ID, river loss taken from the reach's inflow in the last steps, latest first, as rates [m3/d] (as Raven's inflow history holds the inflows)"<<endl;
+    for (size_t p=0;p<_sbInHist.size();p++){
+      size_t m=0; for (size_t i=0;i<_sbInHist[p].size();i++){if (_sbInHist[p][i]!=0.0){m=i+1;}}
+      if (m<1){continue;}
+      RVC<<"  "<<_pModel->GetSubBasin((int)p)->GetID()<<setprecision(17);
+      for (size_t i=0;i<m;i++){RVC<<", "<<_sbInHist[p][i];}
+      RVC<<endl;
+    }
+    RVC<<":EndGWRiverInflowTakes"<<endl;
   }
   if (SZPhysical() && _szColInit){ //water of the soil-zone columns (Raven's SOIL[m] holds only their mean)
     RVC<<":GWSoilZoneColumns   # HRU ID, cell (grid column number; 0: rest of the HRU), water of SOIL["<<_szNLayers-1<<"] up to SOIL[0] in the column [mm]"<<endl;
@@ -3229,6 +3263,12 @@ void CGroundwaterModel::ApplyRiverExchange(double *aRouted,const double &tstep)
   //with another :TimeStep has another step; InitRiverTakes carries the rest)
   _rivTakePrevBook=0.5*_rivTakePrev;
   if (_rivTakePrevDt!=tstep){_rivTakePrevBook*=tstep/_rivTakePrevDt;}
+  if (_rivTakeBookAdj!=0.0){_rivTakePrevBook+=_rivTakeBookAdj; _rivTakeBookAdj=0.0;} //(InitRiverTakes: Raven averaged the inflow history)
+  for (size_t p=0;p<_sbInHist.size();p++){ //(the inflow-take history moves on one step, as Raven's inflow history does)
+    vector<double> &h=_sbInHist[p];
+    for (size_t i=h.size()-1;i>0;i--){h[i]=h[i-1];}
+    if (!h.empty()){h[0]=0.0;}
+  }
   for (size_t p=0;p<_sbOutTake.size();p++){_sbOutTakePrev[p]=_sbOutTake[p]; _sbOutTake[p]=0.0; _sbInTake[p]=0.0;}
   for (size_t p=0;p<_sbGain.size();p++){
     _sbLossRemain[p]=0.0;
@@ -3250,6 +3290,7 @@ double CGroundwaterModel::TakeRiverLossFromInflow(const int p,const double &Qin,
   double take =min(_sbLossRemain[p],avail);
   _sbLossRemain[p]-=take; _riverDeficitVol-=take; _riverAppliedVol-=take;
   _sbInTake[p]+=take; _rivTake+=take;
+  if ((p<(int)_sbInHist.size()) && !_sbInHist[p].empty()){_sbInHist[p][0]+=take/tstep;}
   return Qin-take/(tstep*SEC_PER_DAY);
 }
 //////////////////////////////////////////////////////////////////
@@ -3331,15 +3372,42 @@ void CGroundwaterModel::InitRiverTakes()
   _sbQoutRec.assign(nSB,std::numeric_limits<double>::quiet_NaN()); _sbAddBack.assign(nSB,0); _sbOverN=0;
   _rivTake=_rivTakePrev=_rivCarryEnd=0.0; _rivCarryN=0; _rivTakePrevDt=_rivTakePrevBook=0.0;
   _rivTakeDt=(_hotRivTakeDt>0.0)?_hotRivTakeDt:_tsDt; //(the step of the hotstart's takes)
+  _rivTakeBookAdj=0.0; _sbInHist.assign(nSB,vector<double>());
   for (int p=0;p<nSB;p++){
-    map<long long,pair<double,double> >::const_iterator it=_hotRivTake.find(_pModel->GetSubBasin(p)->GetID());
-    if ((it==_hotRivTake.end()) || !_pModel->GetSubBasin(p)->IsEnabled()){continue;}
-    _sbInTake[p]=it->second.first; _sbOutTake[p]=it->second.second; _rivTake+=it->second.first+it->second.second;
+    const CSubBasin *pSB=_pModel->GetSubBasin(p);
+    _sbInHist[p].assign(max(pSB->GetInflowHistorySize(),1),0.0);
+    map<long long,pair<double,double> >::const_iterator it=_hotRivTake.find(pSB->GetID());
+    map<long long,vector<double> >::const_iterator ih=_hotInHist.find(pSB->GetID());
+    if (((it==_hotRivTake.end()) && (ih==_hotInHist.end())) || !pSB->IsEnabled()){continue;}
+    const double Tin=(it!=_hotRivTake.end())?it->second.first:0.0,Tout=(it!=_hotRivTake.end())?it->second.second:0.0;
+    _sbInTake[p]=Tin; _sbOutTake[p]=Tout; _rivTake+=Tin+Tout;
+    //the inflow-take history of the hotstart's run (latest first, rates over its step), rescaled to this run's step as Raven
+    //rescaled the reach's inflow history (CSubBasin::SetQinHist): copied, or, over the entries of its lateral-inflow history
+    //length, each value repeated or averaged over n steps (the entries after them hold no take). A file without
+    //:GWRiverInflowTakes but with a take from the inflow (written by a build that did not keep the history): the earlier
+    //takes are taken as equal to the last one
+    const bool noHist=(ih==_hotInHist.end());
+    vector<double> ho; if (!noHist){ho=ih->second;} else {ho.push_back(Tin/_rivTakeDt);}
+    map<long long,int>::const_iterator im=_hotInMode.find(pSB->GetID());
+    const int mode=(im!=_hotInMode.end())?im->second:0;
+    const size_t nLat=(size_t)max(pSB->GetLatHistorySize(),0);
+    vector<double> &h=_sbInHist[p];
+    for (size_t i=0;i<h.size();i++){
+      const double hold=(i<ho.size())?ho[i]:(noHist?ho[0]:0.0);
+      if (mode==0){h[i]=(i<ho.size())?ho[i]:0.0;}
+      else if (i>=nLat){h[i]=0.0;}
+      else if (noHist){h[i]=hold;}
+      else if (mode<0){const size_t j=(size_t)(rvn_floor((double)(i)/(-mode)+0.001)); h[i]=(j<ho.size())?ho[j]:0.0;}
+      else {h[i]=0.0; for (int j=0;j<mode;j++){const size_t jj=i*mode+j; if (jj<ho.size()){h[i]+=ho[jj]/(double)(mode);}}}
+    }
     //a restart with another :TimeStep: the first step's inflow and outflow book the last takes' rates over the new step, not
     //half the takes; the rest of those halves is carried as river loss (negative: returned), so Raven still gives up the whole
-    //takes (Raven averages a longer step's inflow history from the shorter steps' inflows, so for a take from the inflow this
-    //holds when the last takes were equal)
-    if (_rivTakeDt!=_tsDt){_sbLossCarry[p]+=0.5*(it->second.first+it->second.second)*(1.0-_tsDt/_rivTakeDt);}
+    //takes. Where Raven averaged the inflow history, the start-of-step inflow is lowered by the average of the last takes'
+    //rates (h[0]), and that is what the first step books for the inflow take
+    double adj=0.0;
+    if ((mode>0) && !noHist){adj=0.5*_tsDt*(h[0]-Tin/_rivTakeDt); _rivTakeBookAdj+=adj;}
+    if (_rivTakeDt!=_tsDt){_sbLossCarry[p]+=0.5*(Tin+Tout)*(1.0-_tsDt/_rivTakeDt);}
+    _sbLossCarry[p]-=adj;
     map<long long,double>::const_iterator qt=_hotQoutRec.find(_pModel->GetSubBasin(p)->GetID());
     if (qt!=_hotQoutRec.end()){_sbQoutRec[p]=qt->second;}
   }
@@ -3624,6 +3692,7 @@ void CGroundwaterModel::CloseOutputs()
     _nNonConverged=0;
   }
   _mf6.Finalize();
+  if (_active){_closed=true;}
   _X=NULL; _active=false; //MODFLOW memory is released: nothing may read heads after this point
 }
 

@@ -11,6 +11,7 @@
 #include <map>
 #include <unordered_set>
 #include <iomanip>
+#include <sstream>
 
 namespace
 {
@@ -156,6 +157,24 @@ void CGWGrid::ToWorld(const double x,const double y,double &X,double &Y) const
 }
 
 //-- regular grid: one cell size, or variable spacing refined around features ---------------------------
+//////////////////////////////////////////////////////////////////
+/// \brief the stop for a grid with more cells per layer than Raven builds, naming what decides the grid's size: the cell
+///  size, the refinement sizes (also the seeds of an HRU mesh they make), or an imported grid or existing model, whose
+///  cells Raven takes as they are
+//
+string CGWGrid::CellLimitMessage(const int what,const double n,const double limit,const string &file)
+{
+  ostringstream S; S<<std::fixed<<std::setprecision(0);
+  switch (what){
+    case LIMIT_REFINEMENT:   S<<"the :GridRefinement sizes give a grid of "<<n<<" cells per layer, more than "<<limit<<": give larger refinement sizes in metres as plain numbers, or use :GridType QUADTREE or HRU_MESH, which refine only around the features"; break;
+    case LIMIT_MESH:         S<<"the HRU mesh has "<<n<<" cells per layer, more than "<<limit<<": increase :GridCellSize"; break;
+    case LIMIT_MESH_REFINED: S<<"the :GridRefinement sizes give an HRU mesh of "<<n<<" seeds (cells) per layer, more than "<<limit<<": give larger refinement sizes in metres as plain numbers"; break;
+    case LIMIT_IMPORTED:     S<<"the imported grid "<<file<<" has "<<n<<" cells per layer, more than the "<<limit<<" Raven couples: give a grid with fewer cells (Raven uses an imported grid as it is)"; break;
+    case LIMIT_EXISTING:     S<<"the existing model has "<<n<<" cells per layer, more than the "<<limit<<" Raven couples"; break;
+    default:                 S<<"the grid has "<<n<<" cells per layer, more than "<<limit<<": increase :GridCellSize"; break;
+  }
+  return S.str();
+}
 void CGWGrid::RegularAxisCounts(const double xa,const double ya,const double xb,const double yb,const double cellsize,
                                 const vector<gw_refine> &ref,double &ncol,double &nrow)
 {
