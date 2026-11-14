@@ -439,8 +439,9 @@ void CGroundwaterModel::VZStep(const double &tstep)
         if (col.active){
           //a rising water table takes the column's water above equilibrium below it, at most what MODFLOW stores for that
           //rise (Sy dh): without the limit a column holding more than Sy above equilibrium where the water table rises would
-          //release more at each step than the last (a feedback with gain eps/Sy > 1, design note 1.5). The limit binds when
-          //a rise meets more water above equilibrium than Sy dh in the band it crosses: water in transit (the LAG store, a
+          //release more at each step than the last (a feedback with gain eps/Sy > 1, design note 1.5), and at most the room the
+          //top cell has left above the water table. The limit binds when a rise meets more water above equilibrium in the band
+          //it crosses than the smaller of Sy dh and that room: water in transit (the LAG store, a
           //wetting front of RICHARDS, a large recharge pulse), the excess of a column under a steady flux far above the
           //water table when a small Sy makes the water table rise fast, or a nearly full top cell. The smaller Sy is against
           //the drainable porosity, the more readily it binds; a column at rest (at equilibrium) raised by a boundary or
@@ -467,6 +468,11 @@ void CGroundwaterModel::VZStep(const double &tstep)
                                                "column than MODFLOW stores for the rise; the column releases at most Sy dh per step (or the room left in the top cell) and the rest "
                                                "in the next steps. This is expected while water is in transit in the column ("+string((_vzMode==3)?"the LAG store":"a wetting front")+")"+
                                                (_vzSyLow?string("; here a specific yield below the drainable porosity (the warning above) adds to it"):string("")),false);}
+              else if ((_vzSlowed==1) && (_vzMode==2)){ //(KINEMATIC: the mobile water below the new water table is never more than Sy dh,
+                                                        // so only the room left in the top cell holds it back)
+                WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": a rising water table met more mobile water in an unsaturated column than the "
+                             "room left in the top cell above the water table; the column releases at most that room per step and the rest in the next steps",false);
+              }
             }
             else if ((abT<0.0) && (-abT>capU)){                                  //(the bottom then follows more slowly; the column stays)
               double lo=z0,hi=min(zt,col.ztop-1e-3);

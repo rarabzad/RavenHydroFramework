@@ -64,37 +64,58 @@ namespace
     const bool abs=!name.empty() && ((name[0]=='/') || (name[0]=='\\') || ((name.size()>1) && isalpha((unsigned char)name[0]) && (name[1]==':')));
     return abs?name:dir+name;
   }
-  //the lines of a MODFLOW 6 input file as MODFLOW reads its blocks: in any block but GRIDDATA, the lines of an OPEN/CLOSE
-  //file (its path relative to the simulation folder dir, or absolute) take the place of the OPEN/CLOSE line, and the
-  //block's lines after it follow (MODFLOW 6.8.1: LoadMf6File.f90, BlockParser.f90). As for MODFLOW, OPEN/CLOSE may only be
-  //the block's first line other than comments and blank lines; elsewhere, and in an OPEN/CLOSE file, it stops
-  vector<string> BlockLines(const string &file,const string &dir)
+  string DirOf(const string &f){size_t p=f.find_last_of("/\\"); return (p==string::npos)?string("./"):f.substr(0,p+1);}
+  //the lines of a MODFLOW 6 input file as MODFLOW reads its blocks: every reader of the model's text files goes through
+  //it. In any block but GRIDDATA, the lines of an OPEN/CLOSE file (its path relative to the simulation folder dir, or
+  //absolute) take the place of the OPEN/CLOSE line, and the block's lines after it follow (MODFLOW 6.8.1: LoadMf6File.f90,
+  //BlockParser.f90, and the water mover and time-series readers, which read every block so). As for MODFLOW, OPEN/CLOSE
+  //may only be the block's first line other than comments and blank lines; elsewhere, and in an OPEN/CLOSE file, it
+  //stops; a binary file stops (Raven reads text). The OPEN/CLOSE line itself is returned as a comment, so that a working
+  //copy written from these lines holds the rows in place, as MODFLOW reads them.
+  //only: the blocks to read so, as " NAME NAME " (empty: every block); the others are returned as written (their
+  //OPEN/CLOSE lines too, e.g. a package's PERIOD blocks, which Raven copies). where (optional): the file and line of each
+  //returned line, for messages, the main file named by label (default: file)
+  vector<string> BlockLines(const string &file,const string &dir,const string &only="",vector<string> *where=NULL,const string &label="")
   {
-    vector<string> out; ifstream I(file.c_str()); string line,block; bool first=false;
+    vector<string> out; ifstream I(file.c_str()); string line,block; bool first=false; int ln=0;
+    const string lab=label.empty()?file:label;
+    if (where!=NULL){where->clear();}
     while (getline(I,line)){
+      ln++;
       vector<string> w=Words(line);
       if (!w.empty()){
         const string W0=Upper(w[0]);
         if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); first=true;}
         else if (W0=="END"){block=""; first=false;}
-        else if ((W0=="OPEN/CLOSE") && (block!="") && (block!="GRIDDATA")){
-          ExitGracefullyIf(!first,("CGroundwaterModel: the "+block+" block of "+file+" has OPEN/CLOSE after its first line; MODFLOW 6 reads OPEN/CLOSE only as "
+        else if ((W0=="OPEN/CLOSE") && (block!="") && (block!="GRIDDATA") && (only.empty() || (only.find(" "+block+" ")!=string::npos))){
+          ExitGracefullyIf(!first,("CGroundwaterModel: the "+block+" block of "+lab+" has OPEN/CLOSE after its first line; MODFLOW 6 reads OPEN/CLOSE only as "
             "the first line of a block (other than comments): write the rows of the file in the block, or make OPEN/CLOSE the block's only line").c_str(),BAD_DATA);
-          ExitGracefullyIf(w.size()<2,("CGroundwaterModel: OPEN/CLOSE without a file name in "+file).c_str(),BAD_DATA);
+          ExitGracefullyIf(w.size()<2,("CGroundwaterModel: OPEN/CLOSE without a file name in the "+block+" block of "+lab).c_str(),BAD_DATA);
+          for (size_t j=2;j<w.size();j++){
+            ExitGracefullyIf(Upper(w[j]).find("BINARY")!=string::npos,("CGroundwaterModel: the OPEN/CLOSE file "+w[1]+" of the "+block+" block of "+lab+
+              " is binary; Raven reads the rows of this block, and reads text files only: write the rows as text").c_str(),BAD_DATA);
+          }
           const string ef=OCPath(dir,w[1]); ifstream E(ef.c_str());
-          ExitGracefullyIf(!E,("CGroundwaterModel: cannot open the OPEN/CLOSE file "+ef+" named in the "+block+" block of "+file).c_str(),BAD_DATA);
-          string el;
+          ExitGracefullyIf(!E,("CGroundwaterModel: cannot open the OPEN/CLOSE file "+ef+" named in the "+block+" block of "+lab).c_str(),BAD_DATA);
+          const bool cr=!line.empty() && (line[line.size()-1]=='\r');
+          out.push_back("# "+(cr?line.substr(0,line.size()-1):line)+"   # its rows written below by Raven"+(cr?"\r":""));
+          if (where!=NULL){where->push_back(lab+" (line "+to_string(ln)+")");}
+          const string el0=label.empty()?ef:w[1]; //(as messages name it: as the model names it, with a label)
+          string el; int en=0;
           while (getline(E,el)){
+            en++;
             vector<string> ew=Words(el);
-            ExitGracefullyIf(!ew.empty() && (Upper(ew[0])=="OPEN/CLOSE"),("CGroundwaterModel: the OPEN/CLOSE file "+ef+" names another OPEN/CLOSE file; "
+            ExitGracefullyIf(!ew.empty() && (Upper(ew[0])=="OPEN/CLOSE"),("CGroundwaterModel: the OPEN/CLOSE file "+el0+" names another OPEN/CLOSE file; "
               "write its lines in "+w[1]+" itself").c_str(),BAD_DATA);
             out.push_back(el);
+            if (where!=NULL){where->push_back(el0+" (line "+to_string(en)+")");}
           }
           first=false; continue;
         }
         else {first=false;}
       }
       out.push_back(line);
+      if (where!=NULL){where->push_back(lab+" (line "+to_string(ln)+")");}
     }
     return out;
   }
@@ -140,7 +161,6 @@ namespace
   {
     return "CGroundwaterModel: "+what+" in "+where+" is '"+tok+"', which is not a number (MODFLOW 6 reads numbers such as 5, 5.0, 5.0E-1 or 5.0D-1)";
   }
-  string DirOf(const string &f){size_t p=f.find_last_of("/\\"); return (p==string::npos)?string("./"):f.substr(0,p+1);}
   bool IsDir(const string &p){struct stat st; return (stat(p.c_str(),&st)==0) && ((st.st_mode&S_IFMT)==S_IFDIR);}
   void MakeDir(const string &p)
   {
@@ -324,16 +344,17 @@ void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
 {
   string f=_mf6dir+"/"+_extTdisFile;
   const string fu=DirOf(_extSim)+_extTdisFile; //(the model's own file, which messages name; the working copy has the same lines)
-  ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot open "+f).c_str(),BAD_DATA);
-  string line,block,units="DAYS"; vector<double> perlen; vector<string> opts; int ln=0,nper=-1;
-  while (getline(I,line)){
-    ln++;
+  { ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot open "+f).c_str(),BAD_DATA); }
+  string line,block,units="DAYS"; vector<double> perlen; vector<string> opts; int nper=-1;
+  vector<string> at; const vector<string> TL=BlockLines(f,_mf6dir+"/","",&at,fu); //(every block, OPTIONS too, as MODFLOW reads it: rows of OPEN/CLOSE files in place)
+  for (size_t il=0;il<TL.size();il++){
+    line=TL[il];
     vector<string> w=Words(line); if (w.empty()){continue;}
     string W0=Upper(w[0]);
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
     if (W0=="END"){block=""; continue;}
     if ((block=="DIMENSIONS") && (W0=="NPER")){
-      ExitGracefullyIf((w.size()<2) || !MF6Int(w[1],nper),("CGroundwaterModel: NPER in "+fu+" (line "+to_string(ln)+") is not a whole number").c_str(),BAD_DATA);
+      ExitGracefullyIf((w.size()<2) || !MF6Int(w[1],nper),("CGroundwaterModel: NPER in "+at[il]+" is not a whole number").c_str(),BAD_DATA);
     }
     if (block=="OPTIONS"){
       ExitGracefullyIf(W0=="ATS6","CGroundwaterModel: the MODFLOW 6 model uses adaptive time stepping (ATS6); Raven needs fixed time steps. Remove ATS6 from the TDIS options",BAD_DATA);
@@ -342,23 +363,11 @@ void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
     }
     if (block=="PERIODDATA"){
       ExitGracefullyIf(W0=="INTERNAL","CGroundwaterModel: TDIS period data given as INTERNAL cannot be read by Raven; list them in the TDIS file itself or in an OPEN/CLOSE file",BAD_DATA);
-      if (W0=="OPEN/CLOSE"){ //the rows in a file of their own (path relative to the simulation folder): written inline below
-        ExitGracefullyIf(w.size()<2,("CGroundwaterModel: OPEN/CLOSE without a file name in "+f).c_str(),BAD_DATA);
-        for (size_t j=2;j<w.size();j++){ExitGracefullyIf(Upper(w[j]).find("BINARY")!=string::npos,("CGroundwaterModel: the TDIS period data file "+w[1]+" is binary; Raven reads text files only").c_str(),BAD_DATA);}
-        vector<string> rows=ExtReadOpenClose(w[1]);
-        for (size_t j=0;j<rows.size();j++){
-          const string tok=Words(rows[j])[0]; double v;
-          ExitGracefullyIf(!MF6Real(tok,v),NotANumber("the length of stress period "+to_string(perlen.size()+1),tok,"the OPEN/CLOSE file "+w[1]+" (row "+to_string(j+1)+")").c_str(),BAD_DATA);
-          perlen.push_back(v);
-        }
-        continue;
-      }
       double v;
-      ExitGracefullyIf(!MF6Real(w[0],v),NotANumber("the length of stress period "+to_string(perlen.size()+1),w[0],fu+" (line "+to_string(ln)+")").c_str(),BAD_DATA);
+      ExitGracefullyIf(!MF6Real(w[0],v),NotANumber("the length of stress period "+to_string(perlen.size()+1),w[0],at[il]).c_str(),BAD_DATA);
       perlen.push_back(v);
     }
   }
-  I.close();
   for (size_t p=0;p<perlen.size();p++){
     ExitGracefullyIf(perlen[p]<0.0,("CGroundwaterModel: the length of stress period "+to_string(p+1)+" in "+fu+" is "+ToStr(perlen[p])+
       "; a stress period cannot be shorter than 0 (MODFLOW 6: PERLEN cannot be less than 0.0)").c_str(),BAD_DATA);
@@ -383,9 +392,9 @@ void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
     for (size_t i=0;i<_extPkgs.size();i++){
       if (Upper(_extPkgs[i].ftype)!="STO6"){continue;}
       hasSto=true;
-      ifstream S((_mf6dir+"/"+_extPkgs[i].fname).c_str()); string l,b;
-      while (getline(S,l)){
-        vector<string> w=Words(l); if (w.empty()){continue;}
+      const vector<string> SL=BlockLines(_mf6dir+"/"+_extPkgs[i].fname,_mf6dir+"/"," PERIOD "); string b; //(a PERIOD block through OPEN/CLOSE too)
+      for (size_t il=0;il<SL.size();il++){
+        vector<string> w=Words(SL[il]); if (w.empty()){continue;}
         string W0=Upper(w[0]);
         if ((W0=="BEGIN") && (w.size()>1)){b=Upper(w[1]); continue;}
         if (W0=="END"){b=""; continue;}
@@ -431,23 +440,6 @@ void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
 }
 
 //////////////////////////////////////////////////////////////////
-/// \brief the data rows of an OPEN/CLOSE file of the working copy (path relative to the simulation folder; comments and
-///  blank lines left out)
-//
-vector<string> CGroundwaterModel::ExtReadOpenClose(const string &name) const
-{
-  string fn=name; if ((fn.size()>1) && ((fn[0]=='\'') || (fn[0]=='"'))){fn=fn.substr(1,fn.size()-2);}
-  const string ef=OCPath(_mf6dir+"/",fn); ifstream I(ef.c_str());
-  ExitGracefullyIf(!I,("CGroundwaterModel: cannot open the OPEN/CLOSE file "+ef).c_str(),BAD_DATA);
-  vector<string> rows; string line;
-  while (getline(I,line)){
-    if (!line.empty() && (line[line.size()-1]=='\r')){line.erase(line.size()-1);}
-    if (!Words(line).empty()){rows.push_back(line);}
-  }
-  return rows;
-}
-
-//////////////////////////////////////////////////////////////////
 /// \brief days since 1970-01-01 of a yyyy-mm-dd date (proleptic Gregorian); LLONG_MIN if malformed
 //
 long long CGroundwaterModel::CivilDays(const string &date)
@@ -486,13 +478,23 @@ void CGroundwaterModel::ExtRenumberPeriods()
       }
       if ((k>=0) && (W0=="END")){k=-1; continue;}
       if (k>=0){blk[k].push_back(line); continue;}
-      if (W0=="READASARRAYS"){arrays=true;}
-      if ((W0=="TAS6") || (W0=="TIMESERIESFILE")){ts=true;}
-      if ((W0=="TS6") && (w.size()>2) && (Upper(w[1])=="FILEIN")){tsFiles.push_back(w[2]);}
-      if ((W0=="TVK6") || (W0=="TVS6")){tv=true;} //time-varying K or storage: their own period blocks accumulate
-      pre.push_back(line);
+      pre.push_back(line); //(the lines outside the PERIOD blocks are written back as they are: an OPEN/CLOSE line stays valid)
     }
     I.close();
+    { //the package's options as MODFLOW reads them (also from an OPEN/CLOSE file of the OPTIONS block)
+      const vector<string> OL=BlockLines(f,_mf6dir+"/"," OPTIONS "); string b;
+      for (size_t il=0;il<OL.size();il++){
+        vector<string> w=Words(OL[il]); if (w.empty()){continue;}
+        const string W0=Upper(w[0]);
+        if ((W0=="BEGIN") && (w.size()>1)){b=Upper(w[1]); continue;}
+        if (W0=="END"){b=""; continue;}
+        if (b!="OPTIONS"){continue;}
+        if (W0=="READASARRAYS"){arrays=true;}
+        if ((W0=="TAS6") || (W0=="TIMESERIESFILE")){ts=true;}
+        if ((W0=="TS6") && (w.size()>2) && (Upper(w[1])=="FILEIN")){tsFiles.push_back(w[2]);}
+        if ((W0=="TVK6") || (W0=="TVS6")){tv=true;} //time-varying K or storage: their own period blocks accumulate
+      }
+    }
     //time series count from the model's time zero: any later start shifts them, even if no period is dropped. TS6 files are
     //shifted (ExtShiftTimeSeries); time-array series (TAS6) are not
     ExitGracefullyIf(ts,("CGroundwaterModel: "+P.pname+" uses time-array series (TAS6), whose times count from the model's time zero; start Raven at :MF6StartDate").c_str(),BAD_DATA);
@@ -537,10 +539,9 @@ void CGroundwaterModel::ExtShiftTimeSeries(const string &name)
 {
   string fn=name; if ((fn.size()>1) && ((fn[0]=='\'') || (fn[0]=='"'))){fn=fn.substr(1,fn.size()-2);}
   const string f=_mf6dir+"/"+fn;
-  ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot open the time-series file "+f).c_str(),BAD_DATA);
-  vector<string> L; string line,block;
-  while (getline(I,line)){if (!line.empty() && (line[line.size()-1]=='\r')){line.erase(line.size()-1);} L.push_back(line);}
-  I.close();
+  { ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot open the time-series file "+f).c_str(),BAD_DATA); }
+  vector<string> at,L=BlockLines(f,_mf6dir+"/","",&at,DirOf(_extSim)+fn); string block; //(rows of an OPEN/CLOSE file shifted and written in place)
+  for (size_t i=0;i<L.size();i++){if (!L[i].empty() && (L[i][L[i].size()-1]=='\r')){L[i].erase(L[i].size()-1);}}
   const double shift=_extOffset*_extTf; //[model time units]
   ofstream O(f.c_str()); ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+f).c_str(),BAD_DATA);
   O<<"# times shifted by Raven by -"<<setprecision(15)<<shift<<" (Raven starts "<<_extOffset<<" d after the model's time zero)\n";
@@ -549,8 +550,7 @@ void CGroundwaterModel::ExtShiftTimeSeries(const string &name)
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); O<<L[i]<<"\n"; continue;}
     if (W0=="END"){block=""; O<<L[i]<<"\n"; continue;}
     if ((block=="TIMESERIES") && !w.empty()){
-      ExitGracefullyIf((W0=="OPEN/CLOSE") || (W0=="INTERNAL"),("CGroundwaterModel: the time-series file "+f+" reads its rows from another file; list them in the file itself").c_str(),BAD_DATA);
-      double tm; ExitGracefullyIf(!MF6Real(w[0],tm),NotANumber("the time of a row",w[0],DirOf(_extSim)+fn+" (line "+to_string(i+1)+")").c_str(),BAD_DATA);
+      double tm; ExitGracefullyIf(!MF6Real(w[0],tm),NotANumber("the time of a row",w[0],at[i]).c_str(),BAD_DATA);
       O<<"  "<<setprecision(15)<<tm-shift; for (size_t j=1;j<w.size();j++){O<<" "<<w[j];} O<<"\n"; continue;
     }
     O<<L[i]<<"\n";
@@ -628,10 +628,10 @@ void CGroundwaterModel::ExtEditMover()
   for (size_t i=0;i<_extPkgs.size();i++){if (Upper(_extPkgs[i].ftype).find("MVR")==0){fn=_extPkgs[i].fname;}}
   if (fn==""){return;}
   string f=_mf6dir+"/"+fn;
-  ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot read the copied water mover file "+f).c_str(),BAD_DATA);
-  vector<string> L; string line,block;
-  while (getline(I,line)){L.push_back(line);}
-  I.close();
+  { ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot read the copied water mover file "+f).c_str(),BAD_DATA); }
+  vector<string> L=BlockLines(f,_mf6dir+"/","",NULL,DirOf(_extSim)+fn); string block; //(every block as MODFLOW reads it: PACKAGES and PERIOD rows of OPEN/CLOSE files in place)
+  for (size_t i=0;i<L.size();i++){if (!L[i].empty() && (L[i][L[i].size()-1]=='\r')){L[i].erase(L[i].size()-1);}} //(a rewritten copy has LF line ends: no carriage
+                                                                                  // return is left inside a line Raven comments out or annotates)
   set<string> tk(_takeOver.begin(),_takeOver.end());
   vector<string> keepPk; bool anyTk=false;
   for (size_t i=0;i<L.size();i++){ //the packages the mover connects
@@ -664,19 +664,8 @@ void CGroundwaterModel::ExtEditMover()
     if (block=="PERIOD"){
       ExitGracefullyIf(W0=="INTERNAL",("CGroundwaterModel: the water mover "+fn+" gives its period data as INTERNAL; Raven cannot remove "
         "the movers of the packages it takes over there (list them in the file or in an OPEN/CLOSE file)").c_str(),BAD_DATA);
-      vector<string> rows; //the period's rows: inline, or read from an OPEN/CLOSE file and written inline
-      if (W0=="OPEN/CLOSE"){
-        ExitGracefullyIf(w.size()<2,("CGroundwaterModel: OPEN/CLOSE without a file name in "+fn).c_str(),BAD_DATA);
-        rows=ExtReadOpenClose(w[1]); O<<"# "<<L[i]<<"   # read by Raven and written below\n";
-      }
-      else {rows.push_back(L[i]);}
-      for (size_t j=0;j<rows.size();j++){
-        vector<string> v=Words(rows[j]);
-        //provider id receiver id type value (model-level): a mover from or to a taken-over package goes
-        if ((v.size()>=4) && (tk.count(Upper(v[0])) || tk.count(Upper(v[2])))){ndrop++; continue;}
-        O<<rows[j]<<"\n";
-      }
-      continue;
+      //provider id receiver id type value (model-level): a mover from or to a taken-over package goes
+      if ((w.size()>=4) && (tk.count(Upper(w[0])) || tk.count(Upper(w[2])))){ndrop++; continue;}
     }
     O<<L[i]<<"\n";
   }
@@ -690,29 +679,11 @@ void CGroundwaterModel::ExtEditMover()
 void CGroundwaterModel::ExtEditNameFile(const bool addRaven)
 {
   string f=_mf6dir+"/"+_extNamFile;
-  ifstream I(f.c_str()); vector<string> L; string line,block;
-  ExitGracefullyIf(!I,("CGroundwaterModel: cannot read the copied model name file "+f).c_str(),BAD_DATA);
-  while (getline(I,line)){L.push_back(line);}
-  I.close();
+  { ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot read the copied model name file "+f).c_str(),BAD_DATA); }
+  //the rows of an OPEN/CLOSE file in the PACKAGES block are written into the working copy in its place, so that the rows
+  //Raven takes over and the names it writes apply to them as to the others (the other blocks are kept as written)
+  const vector<string> L=BlockLines(f,_mf6dir+"/"," PACKAGES ",NULL,DirOf(_extSim)+_extNamFile); string block;
   ExitGracefullyIf(L.empty(),("CGroundwaterModel: the copied model name file "+f+" is empty").c_str(),BAD_DATA);
-  { //the rows of an OPEN/CLOSE file in the PACKAGES block are written into the working copy in its place, so that the rows
-    //Raven takes over and the names it writes apply to them as to the others
-    vector<string> X; string b;
-    for (size_t i=0;i<L.size();i++){
-      vector<string> w=Words(L[i]);
-      if (!w.empty() && (Upper(w[0])=="BEGIN") && (w.size()>1)){b=Upper(w[1]);}
-      else if (!w.empty() && (Upper(w[0])=="END")){b="";}
-      else if (!w.empty() && (b=="PACKAGES") && (Upper(w[0])=="OPEN/CLOSE") && (w.size()>=2)){
-        const bool cr=!L[i].empty() && (L[i][L[i].size()-1]=='\r');
-        X.push_back("# "+(cr?L[i].substr(0,L[i].size()-1):L[i])+"   # its rows written below by Raven"+(cr?"\r":""));
-        const vector<string> R=ExtReadOpenClose(w[1]);
-        for (size_t j=0;j<R.size();j++){X.push_back(R[j]+(cr?"\r":""));}
-        continue;
-      }
-      X.push_back(L[i]);
-    }
-    L.swap(X);
-  }
   ofstream O(f.c_str());
   ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+f).c_str(),BAD_DATA);
   vector<bool> used(_extPkgs.size(),false);
@@ -783,6 +754,18 @@ void CGroundwaterModel::ExtProbe()
     }
   }
   if (!_mf6.Initialize(_mf6dir)){ExitGracefully(("CGroundwaterModel: the MODFLOW 6 model does not initialise: "+_mf6.GetLastError()+" (see "+_mf6dir+"/mfsim.lst)").c_str(),RUNTIME_ERR);}
+  { //the time unit and the fixed time steps Raven read from the TDIS file must be MODFLOW's (TDIS ITMUNI: 0 undefined, which
+    //Raven takes as days, 1 seconds, 2 minutes, 3 hours, 4 days, 5 years; INATS: adaptive time stepping)
+    const char *nm[6]={"undefined (days)","seconds","minutes","hours","days","years"}; const double tf[6]={1.0,86400.0,1440.0,24.0,1.0,1.0/365.25};
+    int *it=_mf6.HasVar("TDIS/ITMUNI")?_mf6.GetIntPtr("TDIS/ITMUNI"):NULL;
+    ExitGracefullyIf(it==NULL,"CGroundwaterModel: cannot read the time unit of the MODFLOW 6 model (TDIS ITMUNI) from MODFLOW's memory",RUNTIME_ERR);
+    const int iu=(it!=NULL)?*it:-1;
+    int ir=-1; for (int k=1;k<6;k++){if (_extTf==tf[k]){ir=k;}}
+    ExitGracefullyIf((iu<0) || (iu>5) || (tf[iu]!=_extTf),("CGroundwaterModel: MODFLOW 6 reads the time unit of the model as "+string(((iu>=0) && (iu<=5))?nm[iu]:"unknown")+
+      ", Raven read "+string((ir>0)?nm[ir]:"undefined (days)")+" from the TDIS file "+DirOf(_extSim)+_extTdisFile+"; write TIME_UNITS in the TDIS file's OPTIONS block").c_str(),BAD_DATA);
+    int *ia=_mf6.HasVar("TDIS/INATS")?_mf6.GetIntPtr("TDIS/INATS"):NULL;
+    ExitGracefullyIf((ia!=NULL) && (*ia>0),"CGroundwaterModel: the MODFLOW 6 model uses adaptive time stepping (ATS6); Raven needs fixed time steps. Remove ATS6 from the TDIS options",BAD_DATA);
+  }
   { //every package Raven looks up by name (the stream package, the packages in the balance) must have that name in
     //MODFLOW's memory: the model's package names as MODFLOW gave them (PKGNAMES), else the package's own memory
     vector<string> mn; const bool haveNames=_mf6.GetStrings("__INPUT__/"+_mname+"/PKGNAMES",mn);
@@ -1147,9 +1130,9 @@ void CGroundwaterModel::ExtBuild(const optStruct &Options)
     string fn; for (size_t i=0;i<_extPkgs.size();i++){if (_extPkgs[i].pname==Upper(_streamPkg)){fn=_extPkgs[i].fname;}}
     //the auxiliary names of the file: MODFLOW 6 keeps those of the first AUXILIARY line of the OPTIONS block (every word
     //of the line is a name); a later AUXILIARY line is not used
-    ifstream P((_mf6dir+"/"+fn).c_str()); string line,block; vector<string> fileAux; int nline=0;
-    while (getline(P,line)){
-      vector<string> w=Words(line,true); if (w.empty()){continue;}
+    const vector<string> PL=BlockLines(_mf6dir+"/"+fn,_mf6dir+"/"," OPTIONS "); string block; vector<string> fileAux; int nline=0; //(OPTIONS through OPEN/CLOSE too)
+    for (size_t il=0;il<PL.size();il++){
+      vector<string> w=Words(PL[il],true); if (w.empty()){continue;}
       string W0=Upper(w[0]);
       if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
       if (W0=="END"){block=""; continue;}
@@ -1334,9 +1317,10 @@ void CGroundwaterModel::ExtStreamFlows()
 //
 void CGroundwaterModel::ExtConnect()
 {
-  _extOther.clear();
+  _extOther.clear(); _extCsub.clear();
   for (size_t i=0;i<_extPkgs.size();i++){
     const gw_ext_pkg &P=_extPkgs[i];
+    if (P.ftype=="CSUB6"){_extCsub.push_back(P.pname); continue;} //(its storage flows are booked with STO's)
     if ((find(_takeOver.begin(),_takeOver.end(),P.pname)!=_takeOver.end()) || (P.pname==Upper(_streamPkg))){continue;}
     string a=_mf6.GetVarAddress(_mname,P.pname,"SIMVALS");
     if (_mf6.HasVar(a)){_extOther.push_back(P.pname);}

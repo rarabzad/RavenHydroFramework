@@ -53,7 +53,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _gridType=GWGRID_REGULAR; _gridAngle=0.0; _qtMaxLevel=-1; _gridFileID="CELL_ID"; _flowCorr="AUTO"; _gridTypeGiven=false;
   _connectByElevation=false; _disType=0; _meshFidelity=1.0;
   _mname="GWF"; _hf=1.0; _qf=1.0; _rf=1.0;
-  _extGridID="CELL_ID"; _streamMap="AUX"; _streamAux="SUBBASIN"; _extSeepage=true; _extTf=_extLf=1.0; _extDvclose=-1.0; _extAreaCheck=0.0;
+  _extGridID="CELL_ID"; _streamMap="AUX"; _streamAux="SUBBASIN"; _extSeepage=true; _extTf=_extLf=1.0; _demMetres=_bedMetres=false; _extDvclose=-1.0; _extAreaCheck=0.0;
   _Qother=0.0; _extAux=-1; _extNaux=0; _extNauxMem=-1; _extOffset=0.0; _extDrop=0; _extNModels=0; _extMoverDropped=0; _extTSShifted=0; _extSteady=false; _extNoSto=false; _mf6Version=""; _stoName="STO"; _disName="DIS";
   _iGW=_iReturnSV=DOESNT_EXIST;
   _maxiter=500;
@@ -168,10 +168,10 @@ double CGroundwaterModel::MeanRaster(const CGWRaster &R,const int ic,bool &ok) c
 /// \brief reads a :LandSurface or :BedrockSurface raster (ESRI ASCII, or GeoTIFF for .tif/.tiff) in the coordinates of
 /// :InputCRS (else longitude/latitude); stops on a read error or a raster left in longitude/latitude under :InputCRS
 //
-void CGroundwaterModel::ReadRaster(CGWRaster &R,const string &file,const optStruct &Options) const
+void CGroundwaterModel::ReadRaster(CGWRaster &R,const string &file,const optStruct &Options,const bool metres,const string &cmd) const
 {
   string err;
-  R.SetCRS(InCRS());
+  R.SetCRS(InCRS()); R.SetMetres(metres); R.SetCommand(cmd);
   if (!R.Read(file,err)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
   istringstream notes(R.Note()); string note;
   while (getline(notes,note)){if (note!=""){WriteWarning("CGroundwaterModel: "+note,Options.noisy);}}
@@ -1407,7 +1407,7 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   }
   CGWRaster &dem=_dem;
   dem.SetCRS(InCRS());
-  if (_demFile!=""){ReadRaster(dem,_demFile,Options);}
+  if (_demFile!=""){ReadRaster(dem,_demFile,Options,_demMetres,":LandSurface "+(_demUser.empty()?_demFile:_demUser));}
   _land.assign(_ncpl,0.0);
   vector<int> act; int nCov=0; //(active columns, and how many of them the DEM gives a value for)
   for (int ic=0;ic<_ncpl;ic++)
@@ -1428,7 +1428,7 @@ void CGroundwaterModel::BuildVertical(const optStruct &Options)
 {
   CGWRaster bed;
   bed.SetCRS(InCRS());
-  if (_bedrockFile!=""){ReadRaster(bed,_bedrockFile,Options);}
+  if (_bedrockFile!=""){ReadRaster(bed,_bedrockFile,Options,_bedMetres,":BedrockSurface "+(_bedUser.empty()?_bedrockFile:_bedUser));}
   vector<int> act; int nCov=0; //(active columns, and how many of them the bedrock raster gives a value for)
   _nlay=1;
   for (size_t i=0;i<_aProfiles.size();i++){_nlay=max(_nlay,(int)_aProfiles[i].layers.size());}
@@ -2235,6 +2235,24 @@ void CGroundwaterModel::ConnectEngine()
   string a1=_mf6.GetVarAddress(_mname,_stoName,"STRGSS"),a2=_mf6.GetVarAddress(_mname,_stoName,"STRGSY");
   if (_mf6.HasVar(a1) && _mf6.HasVar(a2)){_strgss=_mf6.GetDoublePtr(a1);_strgsy=_mf6.GetDoublePtr(a2);}
   else if (!(IsExternal() && _extNoSto)){WriteWarning("CGroundwaterModel: MODFLOW 6 storage flows not accessible; GWBudget.csv storage column will be inferred",false);}
+  _csubArr.clear(); _csubLen.clear();
+  if (IsExternal() && (_strgss!=NULL)){ //CSUB: its storage flows (coarse-grained, interbed elastic and inelastic, water compressibility) are
+    //terms of MODFLOW's own budget beside STO's (gwf-csub.f90, csub_bd): booked as storage, as MODFLOW books them
+    for (size_t i=0;i<_extCsub.size();i++){
+      //(MODFLOW 6 keeps the package under its fixed name CSUB whatever the name file calls it (gwf-csub.f90), as it keeps STO: that
+      // name first, then the name file's)
+      string cn=_extCsub[i]; if (_mf6.HasVar(_mf6.GetVarAddress(_mname,"CSUB","NINTERBEDS"))){cn="CSUB";}
+      int *nib=_mf6.HasVar(_mf6.GetVarAddress(_mname,cn,"NINTERBEDS"))?_mf6.GetIntPtr(_mf6.GetVarAddress(_mname,cn,"NINTERBEDS")):NULL;
+      ExitGracefullyIf(nib==NULL,("CGroundwaterModel: cannot read the CSUB package "+_extCsub[i]+" from MODFLOW 6 memory").c_str(),RUNTIME_ERR);
+      const char *nm[4]={"CG_STOR","CELL_WCSTOR","STORAGEE","STORAGEI"};
+      for (int k=0;k<((*nib>0)?4:2);k++){
+        const string a=_mf6.GetVarAddress(_mname,cn,nm[k]);
+        double *p=_mf6.HasVar(a)?_mf6.GetDoublePtr(a):NULL;
+        ExitGracefullyIf(p==NULL,("CGroundwaterModel: cannot read the storage flows ("+string(nm[k])+") of the CSUB package "+_extCsub[i]+" from MODFLOW 6 memory").c_str(),RUNTIME_ERR);
+        _csubArr.push_back(p); _csubLen.push_back((k<2)?_mf6.GetVarSize(a):*nib);
+      }
+    }
+  }
   //(an existing model without STO6 is steady state: its storage is 0, nothing to infer)
   //convertible cells (KeepColumnsWet): a generated model's from the layer types it was written with (an existing model's
   //from MODFLOW's memory, ExtConnect)
@@ -2767,6 +2785,7 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   if (_strgss!=NULL){
     int nn=0; for (int n=0;n<_nlay*_ncpl;n++){if (_idomain[n]>0){nn++;}}
     for (int n=0;n<nn;n++){_Qsto+=(_strgss[n]+_strgsy[n])*_qf; gross+=(fabs(_strgss[n])+fabs(_strgsy[n]))*_qf;}
+    for (size_t j=0;j<_csubArr.size();j++){for (int n=0;n<_csubLen[j];n++){_Qsto+=_csubArr[j][n]*_qf; gross+=fabs(_csubArr[j][n])*_qf;}} //(CSUB storage)
     _Qerr=resid();
   }
   else if (IsExternal() && _extNoSto){_Qsto=0.0; _Qerr=resid();} //an existing model without a storage package is steady state: no storage flow
@@ -3602,6 +3621,7 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
     S<<"  cells linked by       : "<<(_extCRS.IsSet()?"cell outlines from MODFLOW, "+_extCRS.Describe():(_extGridFile!="")?"cell polygons in "+_extGridFile+" (layout matches MODFLOW's; area ratio "+ToStr(_extAreaCheck)+")":string(":OverlapWeights table"))<<endl;
     S<<"  packages taken over   :"; for (size_t i=0;i<_takeOver.size();i++){S<<" "<<_takeOver[i];} S<<((_takeOver.empty())?" none":"")<<endl;
     S<<"  packages in balance   :"; for (size_t i=0;i<_extOther.size();i++){S<<" "<<_extOther[i];} S<<endl;
+    if (!_extCsub.empty()){S<<"  storage in balance    : "<<_stoName; for (size_t i=0;i<_extCsub.size();i++){S<<", "<<_extCsub[i]<<" (CSUB)";} S<<endl;}
     if (_extSteady){S<<"  time                  : steady-state model with one stress period, stretched over Raven's run: every Raven step is a steady-state solution (no storage)"<<endl;}
     if (_extMoverDropped>0){S<<"  water mover           : "<<_extMoverDropped<<" movers from or to packages taken over by Raven removed"<<endl;}
     if (_extTSShifted>0){S<<"  time series           : "<<_extTSShifted<<" TS6 files shifted to Raven's start ("<<_extOffset<<" d after the model's time zero)"<<endl;}

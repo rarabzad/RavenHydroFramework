@@ -57,7 +57,7 @@ void CGWProjection::Inverse(const double x,const double y,double &lon,double &la
 // Raster
 //=================================================================
 const double CGWRaster::MAX_PIXELS=GWGeoTIFF::MAX_PIXELS;
-CGWRaster::CGWRaster(){_ncols=_nrows=0;_xll=_yll=0;_dx=_dy=1;_nodata=-9999;_hasNodata=true;_crs=NULL;}
+CGWRaster::CGWRaster(){_ncols=_nrows=0;_xll=_yll=0;_dx=_dy=1;_nodata=-9999;_hasNodata=true;_crs=NULL;_metres=false;}
 bool CGWRaster::Read(const string &filename,string &err)
 {
   _note=""; _format="";
@@ -158,7 +158,7 @@ bool CGWRaster::CheckLonLatRange(const string &filename,string &err)
 bool CGWRaster::ReadTIFF(const string &filename,string &err)
 {
   gw_geotiff T; _ncols=0;
-  if (!GWGeoTIFF::Read(filename,T,err)){return false;}
+  if (!GWGeoTIFF::Read(filename,T,err,_metres,_cmd)){return false;}
   if (T.epsg>0){
     ostringstream cs; cs<<"EPSG:"<<T.epsg;
     string inp=(_crs==NULL)?"":((_crs->Code()!="")?_crs->Code()+" ("+_crs->Describe()+")":_crs->Describe());
@@ -464,11 +464,13 @@ namespace
       r.push_back(q);
     }
     if ((r.size()>1) && (r.front().x==r.back().x) && (r.front().y==r.back().y)){r.pop_back();}
-    for (size_t i=0;i<r.size();i++){r[i]=C.Point(r[i].x,r[i].y);}
+    //the area is tested in the coordinates as written in the file (before a projected file is taken to longitude/latitude,
+    //which would bend a straight ring into a lens):
     set<pair<double,double> > d; for (size_t i=0;(i<r.size()) && (d.size()<3);i++){d.insert(make_pair(r[i].x,r[i].y));}
     if (d.size()<3){return false;} //(a ring of fewer than 3 distinct vertices has no area)
     //(nor has one whose vertices lie on one line, that runs back over itself, or whose loops cancel (a figure eight of
-    // equal lobes): its signed area, taken from the first vertex, is 0 against the square of its extent)
+    // equal lobes): its signed area, taken from the first vertex, is at most 1e-9 of the square of its extent, a sliver a
+    // billionth of its length wide, well above the rounding of the coordinates)
     double A=0,x0=r[0].x,y0=r[0].y,xmin=x0,xmax=x0,ymin=y0,ymax=y0;
     for (size_t i=0;i<r.size();i++){
       const gw_pt &a=r[i],&b=r[(i+1)%r.size()];
@@ -476,7 +478,9 @@ namespace
       xmin=min(xmin,a.x); xmax=max(xmax,a.x); ymin=min(ymin,a.y); ymax=max(ymax,a.y);
     }
     const double ext=max(xmax-xmin,ymax-ymin);
-    return (fabs(0.5*A)>1e-12*ext*ext);
+    if (!(fabs(0.5*A)>1e-9*ext*ext)){return false;}
+    for (size_t i=0;i<r.size();i++){r[i]=C.Point(r[i].x,r[i].y);}
+    return true;
   }
   void AddPolygon(const JVal &jpoly,vector<gw_ring> &rings,JCoords &C,vector<int> *part,const int ipart,const string &where)
   {

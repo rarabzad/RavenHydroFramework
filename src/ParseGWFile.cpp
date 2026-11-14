@@ -80,14 +80,15 @@ static int GWInteger(const string &cmd,const char *tok,const optStruct &Options)
   }
   return (int)v;
 }
-static long long GWID(const string &cmd,const char *tok,const optStruct &Options)
+//a whole number that names something (role: "HRU ID", "cell number", "well ID", ...), within the long long range
+static long long GWID(const string &cmd,const char *tok,const optStruct &Options,const string &role="ID")
 {
   char *e=NULL; errno=0; long long v=strtoll(tok,&e,10);
   if (errno==ERANGE){
-    ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": the ID '"+string(tok)+"' is out of range (beyond "+(v<0?"-9223372036854775808":"9223372036854775807")+")").c_str(),BAD_DATA);
+    ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": the "+role+" '"+string(tok)+"' is out of range (beyond "+(v<0?"-9223372036854775808":"9223372036854775807")+")").c_str(),BAD_DATA);
   }
   if ((e==tok) || (*e!='\0')){
-    ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": '"+string(tok)+"' is not a whole-number ID").c_str(),BAD_DATA);
+    ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": the "+role+" '"+string(tok)+"' is not a whole number").c_str(),BAD_DATA);
   }
   return v;
 }
@@ -156,13 +157,18 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
       if (Len<2){GWImproperFormat(s,Options);}
       else {pGW->SetRiverGeometry(CorrectForRelativePath(s[1],Options.rvg_filename),(Len>=3)?string(s[2]):string(""));}
     }
-    else if (!strcmp(s[0],":LandSurface"))
-    {
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetLandSurfaceFile(CorrectForRelativePath(s[1],Options.rvg_filename));}
-    }
-    else if (!strcmp(s[0],":BedrockSurface"))
-    {
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetBedrockFile(CorrectForRelativePath(s[1],Options.rvg_filename));}
+    else if (!strcmp(s[0],":LandSurface") || !strcmp(s[0],":BedrockSurface"))
+    {/*:LandSurface [file] [METRES], :BedrockSurface [file] [METRES]: METRES confirms that the raster's elevations are in
+       metres whatever band unit text a GeoTIFF gives (a unit of another length still stops) */
+      if (Len<2){GWImproperFormat(s,Options);}
+      else {
+        GWMaxTokens(s,Len,3,Options);
+        string m=(Len>=3)?string(s[2]):string(""); for (size_t i=0;i<m.size();i++){m[i]=(char)toupper((unsigned char)m[i]);}
+        ExitGracefullyIf((Len>=3) && (m!="METRES") && (m!="METERS"),("ParseGWFile: command "+string(s[0])+" in "+Options.rvg_filename+": '"+string(s[2])+
+          "' after the file name is not METRES (or METERS, the only word it takes, which confirms that the raster's elevations are in metres)").c_str(),BAD_DATA);
+        if (!strcmp(s[0],":LandSurface")){pGW->SetLandSurfaceFile(CorrectForRelativePath(s[1],Options.rvg_filename),Len>=3,s[1]);}
+        else                             {pGW->SetBedrockFile    (CorrectForRelativePath(s[1],Options.rvg_filename),Len>=3,s[1]);}
+      }
     }
     else if (!strcmp(s[0],":GridCellSize"))
     {
@@ -232,9 +238,9 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
         if (Len>3){ExitGracefully(("ParseGWFile: :OverlapWeights row "+string(s[0])+" "+string(s[1])+" in "+Options.rvg_filename+" has the surplus value '"+string(s[3])+"' (each row is HRU ID, cell, weight)").c_str(),BAD_DATA);}
         double w=GWNumber(":OverlapWeights",s[2],Options);
         ExitGracefullyIf((w<0.0) || (w>1.0+1e-9),"ParseGWFile: :OverlapWeights weights must be between 0 and 1",BAD_DATA);
-        long long hid=GWID(":OverlapWeights",s[0],Options);
+        long long hid=GWID(":OverlapWeights",s[0],Options,"HRU ID");
         if (w>0.0){ //(a row of weight 0 is skipped, whatever its cell number)
-          long long lcell=GWID(":OverlapWeights",s[1],Options);
+          long long lcell=GWID(":OverlapWeights",s[1],Options,"cell number");
           if ((lcell<1) || (lcell>INT_MAX)){
             ExitGracefully(("ParseGWFile: :OverlapWeights row "+string(s[0])+" "+string(s[1])+" in "+Options.rvg_filename+": the cell number "+string(s[1])+
                             " is not between 1 and the number of cells per layer").c_str(),BAD_DATA);

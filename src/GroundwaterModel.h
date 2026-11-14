@@ -113,6 +113,8 @@ private:/*----------------------------------------------------*/
   vector<gw_profile>       _aProfiles;
   string _hruGeomFile,_hruIDField;
   string _demFile,_bedrockFile,_libPath,_seepTarget,_riverFile,_riverIDField;
+  string _demUser,_bedUser;       ///< those file names as the .rvg file writes them (for messages)
+  bool   _demMetres,_bedMetres;   ///< METRES after the :LandSurface / :BedrockSurface file: the user confirmed its elevations are in metres
   double _cellSize;          ///< [m]
   double _minCoverage;       ///< fraction of cell covered by aquifer HRUs needed to activate it
   int    _headSaveFreq;      ///< head file save frequency [steps]
@@ -150,6 +152,8 @@ private:/*----------------------------------------------------*/
   string _extTdisFile,_extNamFile,_extDisFtype,_stoName,_disName;
   vector<gw_ext_pkg> _extPkgs;
   vector<string> _extOther;                                     ///< kept packages whose simulated flows enter the balance
+  vector<string> _extCsub;                                      ///< the model's CSUB packages, whose storage flows are booked with STO's
+  vector<double*> _csubArr; vector<int> _csubLen;              ///< their storage arrays in MODFLOW's memory (CG_STOR, CELL_WCSTOR, STORAGEE, STORAGEI) and sizes
   double _extTf,_extLf,_extDvclose,_extAreaCheck,_Qother;       ///< model time units per day, length units per m; solver tolerance [m]
   vector<double> _extArea,_extTopRaw;                           ///< per column: cell area [m2]; top of the top active cell [model units]
   vector<int>    _userOf;                                       ///< reduced node -> user node
@@ -274,7 +278,6 @@ private:/*----------------------------------------------------*/
   void   ExtRewriteTDIS   (const optStruct &Options);
   void   ExtEditNameFile  (const bool addRaven);
   void   ExtEditMover     ();
-  vector<string> ExtReadOpenClose(const string &name) const;
   void   ExtShiftTimeSeries(const string &name);
   int    _extTSShifted;    ///< time-series files shifted to Raven's later start
   void   ExtRenumberPeriods();
@@ -294,7 +297,7 @@ private:/*----------------------------------------------------*/
   void   ExtConnect       ();
   void   WriteGridCells(const optStruct &Options);
   double                 MeanRaster(const CGWRaster &R,const int ic,bool &ok) const;
-  void                   ReadRaster(CGWRaster &R,const string &file,const optStruct &Options) const;
+  void                   ReadRaster(CGWRaster &R,const string &file,const optStruct &Options,const bool metres=false,const string &cmd="") const;
   void                   CheckRasterCover(const CGWRaster &R,const string &file,const string &cmd,const vector<int> &cols,const int nCov,const string &fallback,const optStruct &Options) const;
   ofstream               _HEADS;
   vector<double>         _sbRivLen;      ///< per subbasin: total river length on active cells [m]
@@ -676,8 +679,8 @@ public:/*-------------------------------------------------------*/
   static gw_profile DefaultProfile(const string &name);
 
   void   SetHRUGeometry       (const string &file,const string &idfield){_hruGeomFile=file;_hruIDField=idfield;}
-  void   SetLandSurfaceFile   (const string &file){_demFile=file; _genOnly+=" :LandSurface";}
-  void   SetBedrockFile       (const string &file){_bedrockFile=file; _genOnly+=" :BedrockSurface";}
+  void   SetLandSurfaceFile   (const string &file,const bool metres=false,const string &user=""){_demFile=file; _demMetres=metres; _demUser=user; _genOnly+=" :LandSurface";}
+  void   SetBedrockFile       (const string &file,const bool metres=false,const string &user=""){_bedrockFile=file; _bedMetres=metres; _bedUser=user; _genOnly+=" :BedrockSurface";}
   void   SetCellSize          (const double &cs){_cellSize=cs; _genOnly+=" :GridCellSize";}
   void   SetMinCoverage       (const double &f){_minCoverage=f;}
   void   SetLibraryPath       (const string &path){_libPath=path;}

@@ -48,6 +48,8 @@ private:
   bool _hasNodata;            ///< a NODATA value is given (always for ESRI ASCII grids: -9999 by default)
   vector<double> _v;          ///< row-major, north row first
   const CGWCRS *_crs;         ///< projection of the raster's coordinates (NULL: longitude/latitude)
+  string _cmd;                ///< the command and file name as the user wrote them (":LandSurface dem.tif")
+  bool _metres;               ///< the user confirmed metres (METRES after the file name): a GeoTIFF band unit Raven does not read as metres is accepted
   string _note;               ///< what the caller should report as a warning (set by Read)
   string _format;             ///< encoding of a GeoTIFF file
   bool Valid(int r,int c) const;
@@ -56,6 +58,8 @@ private:
 public:
   CGWRaster();
   void SetCRS(const CGWCRS *crs){_crs=crs;}  ///< (before Read)
+  void SetMetres(const bool m){_metres=m;}    ///< (before Read)
+  void SetCommand(const string &c){_cmd=c;}   ///< the command and file name as the user wrote them, for messages (before Read)
   bool Read  (const string &filename,string &err);
   bool Sample(const double lon,const double lat,double &val) const;
   bool IsLoaded() const {return (_ncols>0);}
