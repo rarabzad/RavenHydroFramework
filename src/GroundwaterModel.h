@@ -507,6 +507,7 @@ private:/*----------------------------------------------------*/
   mutable int           *_ibPtr;         ///< MODFLOW's IBOUND (reduced nodes), fetched on first use
   bool   NodeCHD        (const int n);                          ///< user node n is a specified head now (IBOUND < 0)
   bool                   _farWarned;     ///< the warning about heads far outside the model was written
+  bool                   _balWarned;     ///< a converged step with an MF6 balance error above 1 % of the gross flow was reported
   bool                   _mf6Newton;     ///< the MODFLOW model uses NEWTON (generated models always; existing ones as their name file says)
   vector<double>         _szxUpF;        ///< per SZX entry this step: scale of the upward flows out of _szxUp (1; less when that cell is within max(5 %, 5 cm) of drying)
   vector<double>         _vzUpA;         ///< per SZX entry: water a falling water table's new column nodes took from a lower cell this step [m3/d] (through SZW_RAVEN)

@@ -5,6 +5,8 @@
   SPDX-License-Identifier: Artistic-2.0
   Parsing of the groundwater (.rvg) file for the Raven-MODFLOW 6 coupling
 ----------------------------------------------------------------*/
+#include <cerrno>
+#include <climits>
 #include "RavenInclude.h"
 #include "GWGrid.h"
 #include "GWUtil.h"
@@ -80,7 +82,10 @@ static int GWInteger(const string &cmd,const char *tok,const optStruct &Options)
 }
 static long long GWID(const string &cmd,const char *tok,const optStruct &Options)
 {
-  char *e=NULL; long long v=strtoll(tok,&e,10);
+  char *e=NULL; errno=0; long long v=strtoll(tok,&e,10);
+  if (errno==ERANGE){
+    ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": the ID '"+string(tok)+"' is out of range (beyond "+(v<0?"-9223372036854775808":"9223372036854775807")+")").c_str(),BAD_DATA);
+  }
   if ((e==tok) || (*e!='\0')){
     ExitGracefully(("ParseGWFile: command "+cmd+" in "+Options.rvg_filename+": '"+string(tok)+"' is not a whole-number ID").c_str(),BAD_DATA);
   }
@@ -227,8 +232,15 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
         if (Len>3){ExitGracefully(("ParseGWFile: :OverlapWeights row "+string(s[0])+" "+string(s[1])+" in "+Options.rvg_filename+" has the surplus value '"+string(s[3])+"' (each row is HRU ID, cell, weight)").c_str(),BAD_DATA);}
         double w=GWNumber(":OverlapWeights",s[2],Options);
         ExitGracefullyIf((w<0.0) || (w>1.0+1e-9),"ParseGWFile: :OverlapWeights weights must be between 0 and 1",BAD_DATA);
-        long long hid=GWID(":OverlapWeights",s[0],Options); int cell=(int)GWID(":OverlapWeights",s[1],Options);
-        if (w>0.0){pGW->AddOverlapWeight(hid,cell,w);}
+        long long hid=GWID(":OverlapWeights",s[0],Options);
+        if (w>0.0){ //(a row of weight 0 is skipped, whatever its cell number)
+          long long lcell=GWID(":OverlapWeights",s[1],Options);
+          if ((lcell<1) || (lcell>INT_MAX)){
+            ExitGracefully(("ParseGWFile: :OverlapWeights row "+string(s[0])+" "+string(s[1])+" in "+Options.rvg_filename+": the cell number "+string(s[1])+
+                            " is not between 1 and the number of cells per layer").c_str(),BAD_DATA);
+          }
+          pGW->AddOverlapWeight(hid,(int)lcell,w);
+        }
       }
     }
     else if (!strcmp(s[0],":GridType"))

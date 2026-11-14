@@ -440,11 +440,12 @@ void CGroundwaterModel::VZStep(const double &tstep)
           //a rising water table takes the column's water above equilibrium below it, at most what MODFLOW stores for that
           //rise (Sy dh): without the limit a column holding more than Sy above equilibrium where the water table rises would
           //release more at each step than the last (a feedback with gain eps/Sy > 1, design note 1.5). The limit binds when
-          //a rise meets more water above equilibrium than Sy dh: with water in transit (the LAG store, a wetting front of
-          //RICHARDS) or a top cell nearly full, and the more readily the smaller Sy is against the drainable porosity (with
-          //Sy well below it, every recharge pulse that reaches the water table); a column at rest or under a small steady
-          //flux, or a water table raised by a boundary, does not reach it. The column's bottom then follows more slowly,
-          //releasing the rest in the next steps
+          //a rise meets more water above equilibrium than Sy dh in the band it crosses: water in transit (the LAG store, a
+          //wetting front of RICHARDS, a large recharge pulse), the excess of a column under a steady flux far above the
+          //water table when a small Sy makes the water table rise fast, or a nearly full top cell. The smaller Sy is against
+          //the drainable porosity, the more readily it binds; a column at rest (at equilibrium) raised by a boundary or
+          //lateral inflow holds no excess and does not bind it. The column's bottom then follows more slowly, releasing the
+          //rest in the next steps
           const double zt=(zb-h<=Lmin)?zb:max(h,zlow);                           //(not below the aquifer's bottom: a dry column's head can be)
           if (zt>col.zbot+1e-9){ //a rising water table (to the base: the column goes)
             const double z0=col.zbot;

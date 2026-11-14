@@ -45,6 +45,7 @@ namespace GWGeoTIFF
   bool IsTIFFName(const string &filename);    ///< extension .tif, .tiff or .gtiff (any case)
   bool Read      (const string &filename,gw_geotiff &R,string &err);
   bool ReadMemory(const unsigned char *data,const size_t n,const string &name,gw_geotiff &R,string &err);
+  int  BandUnit  (const string &text);  ///< band unit text (UNITTYPE): 1 metres, 2 another length unit, 0 a unit Raven does not know
 
   //the decoders (exposed for the unit tests): each writes at most `limit` bytes to `out` and returns false with a
   //reason on corrupt input; `full` is set when the output reached `limit` before the end of the encoded data

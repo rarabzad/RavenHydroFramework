@@ -428,13 +428,14 @@ void CModel::CalculateInitialWaterStorage(const optStruct &Options)
   //ParseInitialConditions (before their .rvc is read), so a member-specific .rvc still overrides them.
   if (_initQinHist.size()==0){
     _initQinHist.resize(_nSubBasins); _initQlatHist.resize(_nSubBasins); _initResState.resize(_nSubBasins); _initQlatLast.resize(_nSubBasins);
-    _initRouteMem.assign(_nSubBasins,vector<double>());
+    _initRouteMem.assign(_nSubBasins,vector<double>()); _initChanStore.assign(_nSubBasins,0.0);
     for (int p=0;p<_nSubBasins;p++){
       const double *qi=_pSubBasins[p]->GetInflowHistory(); const double *ql=_pSubBasins[p]->GetLatHistory();
       if (qi!=NULL){_initQinHist [p].assign(qi,qi+_pSubBasins[p]->GetInflowHistorySize());}
       if (ql!=NULL){_initQlatHist[p].assign(ql,ql+_pSubBasins[p]->GetLatHistorySize());}
       _initQlatLast[p]=_pSubBasins[p]->GetQlatLast();
       _pSubBasins[p]->GetRoutingMemory(_initRouteMem[p]);
+      _initChanStore[p]=_pSubBasins[p]->GetChannelStorage();
       if (_pSubBasins[p]->GetReservoir()!=NULL){_pSubBasins[p]->GetReservoir()->GetDynamicState(_initResState[p]);}
     }
   }
@@ -1109,8 +1110,8 @@ void CModel::GenerateGaugeWeights(double **&aWts, const forcing_type forcing, co
 }
 
 //////////////////////////////////////////////////////////////////
-/// \brief restores the routing memory (inflow and lateral histories, local outflow, irrigation and diversion memory) and
-///  the reservoir states of the first initialization (ensemble members)
+/// \brief restores the routing memory (inflow and lateral histories, local outflow, irrigation and diversion memory), the
+///  channel storage and the reservoir states of the first initialization (ensemble members)
 //
 void CModel::RestoreInitialDynamicState(const double &tstep)
 {
@@ -1119,6 +1120,7 @@ void CModel::RestoreInitialDynamicState(const double &tstep)
     if (_initQinHist [p].size()>0){_pSubBasins[p]->SetQinHist ((int)_initQinHist[p].size(),&_initQinHist[p][0],tstep,tstep);}
     if (_initQlatHist[p].size()>0){_pSubBasins[p]->SetQlatHist((int)_initQlatHist[p].size(),&_initQlatHist[p][0],_initQlatLast[p],tstep,tstep);}
     _pSubBasins[p]->SetRoutingMemory(_initRouteMem[p]); //(after SetQlatHist, which recomputes the local outflow from the history)
+    if (_initChanStore.size()==(size_t)_nSubBasins){_pSubBasins[p]->SetChannelStorage(_initChanStore[p]);} //(InitializeBasins recomputed it from the flows)
     if ((_pSubBasins[p]->GetReservoir()!=NULL) && (_initResState[p].size()>0)){_pSubBasins[p]->GetReservoir()->SetDynamicState(_initResState[p]);}
   }
 }

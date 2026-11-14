@@ -75,7 +75,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _ravenRchVol=_Qrch=_Qseep_tot=_Qsto=_Qerr=_returnVol=0.0;
   _nNonConverged=0;_lastIter=0;_lastConverged=true;
   _szMode=0; _szNLayers=0; _szMaxIter=100; _szTolH=1e-4; _szTolQ=1e-6; _szSubgrid=5;
-  _vzMode=0; _vzPar=0.0; _vzQ0=0.0; _vzClsDev=0.0; _vzBackV=_vzBackWV=0.0; _vzClasses=1; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _vzSyLow=false; _ibPtr=NULL; _mf6Newton=true; _farWarned=false; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
+  _vzMode=0; _vzPar=0.0; _vzQ0=0.0; _vzClsDev=0.0; _vzBackV=_vzBackWV=0.0; _vzClasses=1; _vzAcc=0.02; _vzN=16; _szCapWT=0.0; _szwQ=NULL; _szwNcol=0; _vzUpQ=0.0; _vzSlowed=0; _vzSyLow=false; _ibPtr=NULL; _mf6Newton=true; _farWarned=false; _balWarned=false; _szCapRise=-1; _szTiming=1; _szClasses=1; _szClsWarned=false; _szDebtVol=_szRepayQ=0.0; _QszCHD_in=_QszCHD_out=_szRchCHD=_QrchCHD0=0.0; _vzInVol=_vzOutVol=_vzCapVol=_vzStoreVol=_vzStore0=0.0; _vzSub=_vzNewton=0;
   _szxHead=_szxCond=_szxHcof=_szxRhs=NULL; _szxNcol=0; _szqQ=_szqHcof=_szqRhs=NULL; _szqNcol=0; _szdElev=_szdCond=_szdAux=_szdHcof=_szdRhs=NULL; _szdNcol=0;
   _Qsz_in=_Qsz_out=_szRejVol=_szOvfVol=_szAppliedVol=_szShortVol=0.0; _szIter=0; _szResid=0.0; _szConv=true; _szNotConv=0; _szShortN=0; _szRchByArea.clear(); _szCapUpd=false; _szOneOK=true; _szMovedV=0.0; _szWithheldV=0.0; _szWithheldG=0.0; _szWithheldS=0.0; _szGuardN=0; _ncWithheldVol=0.0; _ncWithheldN=0;
   _szTstep=1.0; _szPrevQ=0.0; _szRatioMin=_szRatioMax=0.0; _szColInit=false; _szInitVol=0.0; _szInitHot=0; _szResE=-1; _szDQ=_szDQtol=0.0; _szExtra=0;
@@ -83,7 +83,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _szNegCutQ=_szNegUnheldV=0.0; _negCutVol=_negUnheldVol=0.0; _negUnheldN=0; _negWarned=false; _Qgross=1.0; _QabsOther=0.0; _rchLostQ=_rchLostVol=0.0; _rchLostN=0;
   _resUndelVol=_resUndelTot=0.0; _resUndelN=0; _resUnsent.clear(); _resUse.clear(); _resWs.clear(); _resOff.clear(); _resShortTot=0.0; _resShortN=0;
   _vzChdV=0.0; _vzChdN=0; _vzHotUnusedV=0.0; _vzHotUnusedN=0; _vzHotBadN=0; _szDebtHotUnused=0.0;
-  _wetKeptIt=_wetKeptSteps=0; _farSlowN=0; _farWarned=false; _xPrevIt.clear(); _xStart.clear(); _keptCol.clear(); _stepEnd=""; _lastConverged=true;
+  _wetKeptIt=_wetKeptSteps=0; _farSlowN=0; _farWarned=false; _balWarned=false; _xPrevIt.clear(); _xStart.clear(); _keptCol.clear(); _stepEnd=""; _lastConverged=true;
   _summaryFile="";
 }
 CGroundwaterModel::~CGroundwaterModel()
@@ -131,7 +131,7 @@ void CGroundwaterModel::ResetState()
   _szNegCutQ=_szNegUnheldV=0.0; _negCutVol=_negUnheldVol=0.0; _negUnheldN=0; _negWarned=false; _Qgross=1.0; _QabsOther=0.0; _rchLostQ=_rchLostVol=0.0; _rchLostN=0;
   _resUndelVol=_resUndelTot=0.0; _resUndelN=0; _resUnsent.clear(); _resUse.clear(); _resWs.clear(); _resOff.clear(); _resShortTot=0.0; _resShortN=0;
   _vzChdV=0.0; _vzChdN=0; _vzHotUnusedV=0.0; _vzHotUnusedN=0; _vzHotBadN=0; _szDebtHotUnused=0.0;
-  _wetKeptIt=_wetKeptSteps=0; _farSlowN=0; _farWarned=false; _xPrevIt.clear(); _xStart.clear(); _keptCol.clear(); _stepEnd=""; _lastConverged=true;
+  _wetKeptIt=_wetKeptSteps=0; _farSlowN=0; _farWarned=false; _balWarned=false; _xPrevIt.clear(); _xStart.clear(); _keptCol.clear(); _stepEnd=""; _lastConverged=true;
   _szxRs.clear(); _szxRq.clear(); _szxRqP.clear(); _szxRl.clear(); _szxRqc.clear(); _szxF0.clear(); _szxDrn.clear(); _szxKink.clear(); _szxNegCap.clear(); _vzUsed.clear(); _cellConv.clear(); _szResE=-1; _szExtra=0;
 }
 void CGroundwaterModel::Reinitialize(const optStruct &Options)
@@ -1127,10 +1127,25 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   for (size_t i=0;i<_aqHRUs.size();i++){key<<"|"<<_pModel->GetHydroUnit(_aqHRUs[i])->GetHRUID();}
   string cachefile=(_cacheFile!="")?_cacheFile:Options.output_dir+"mf6/linkage.cache";
   GW_MKDIR(Options.output_dir.c_str()); GW_MKDIR((Options.output_dir+"mf6").c_str());
+  //-- projection origin = mean centroid of the coupled HRUs; when their longitudes span more than 180 degrees as written,
+  //   they are taken across the antimeridian (those west of 0 plus 360 degrees) if that gives them a smaller span, so
+  //   that a model across 180 degrees is centred on it (179.998 and -179.998 average to 180, not to 0)
+  double olat=0,olon=0;
+  { double slat=0,slon=0,slonE=0,mn=1e300,mx=-1e300,mnE=1e300,mxE=-1e300;
+    for (size_t i=0;i<_aqHRUs.size();i++){
+      location loc=_pModel->GetHydroUnit(_aqHRUs[i])->GetCentroid();
+      slat+=loc.latitude; slon+=loc.longitude;
+      const double lE=(loc.longitude<0.0)?loc.longitude+360.0:loc.longitude;
+      slonE+=lE; mn=min(mn,loc.longitude); mx=max(mx,loc.longitude); mnE=min(mnE,lE); mxE=max(mxE,lE);
+    }
+    olat=slat/_aqHRUs.size(); olon=slon/_aqHRUs.size();
+    if ((mx-mn>180.0) && (mxE-mnE<mx-mn)){olon=slonE/_aqHRUs.size(); if (olon>180.0){olon-=360.0;}}
+  }
   _cacheHit=false;
   { ifstream CF(cachefile.c_str());
-    string ckey; if (CF && getline(CF,ckey) && (ckey==key.str())){
-      double lat0,lon0; int nH; CF>>lat0>>lon0;
+    string ckey; double lat0=0,lon0=0;
+    if (CF && getline(CF,ckey) && (ckey==key.str()) && (CF>>lat0>>lon0) && (lat0==olat) && (lon0==olon)){ //(a cache of the same origin)
+      int nH;
       _proj.SetOrigin(lat0,lon0);
       bool gok=_grid.Read(CF); CF>>nH; if (!gok){CF.setstate(ios::failbit);}
       _ncpl=_grid.ncpl; _nrow=_grid.nrow; _ncol=_grid.ncol; _x0=_grid.x0; _y0=_grid.y0;
@@ -1153,13 +1168,7 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   CheckInputLonLat(_hruGeomFile,rb,"GeoJSON file");
 
   int nHRUs=_pModel->GetNumHRUs();
-  //-- projection origin = mean centroid of coupled HRUs
-  double slat=0,slon=0;
-  for (size_t i=0;i<_aqHRUs.size();i++){
-    location loc=_pModel->GetHydroUnit(_aqHRUs[i])->GetCentroid();
-    slat+=loc.latitude; slon+=loc.longitude;
-  }
-  _proj.SetOrigin(slat/_aqHRUs.size(),slon/_aqHRUs.size());
+  _proj.SetOrigin(olat,olon);
 
   double cs;
   //-- project polygons
@@ -2766,6 +2775,12 @@ void CGroundwaterModel::Exchange(double **aPhinew,const double &tstep,const optS
   //computed once, before the guard: the far-head test and GWBudget's "MF6 balance error [%]" (signed package totals
   //would cancel: a well taking 1e4 m3/d resupplied by a specified head would give 1 m3/d)
   _Qgross=max(gross,1.0);
+  if (_lastConverged && (fabs(_Qerr)>0.01*_Qgross) && !_balWarned){ //(water MODFLOW books outside Raven's: a package of the model that
+    _balWarned=true;                                                //Raven does not know, or a solver tolerance too loose; once a run)
+    WriteWarning("CGroundwaterModel: in the step ending "+_stepEnd+" MODFLOW converged with a balance error of "+ToStr(_Qerr)+" m3/d, "+ToStr(100.0*_Qerr/_Qgross)+
+                 " % of the gross flow "+ToStr(_Qgross)+" m3/d (GWBudget.csv, MF6 balance error): check the model's packages (GWModelSummary.txt lists those in the "
+                 "balance) and its solver tolerances",false);
+  }
 
   { //far heads: an unconverged step that holds a head far outside the model's elevations (more than 10 times its relief, at
     //least 1 km, beyond its highest top or lowest bottom) is carried on only if every far head that moved in the step (not

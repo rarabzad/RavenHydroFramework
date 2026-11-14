@@ -58,6 +58,46 @@ namespace
     }
     return w;
   }
+  //the path of a file a MODFLOW input names (OPEN/CLOSE): as written when absolute (/..., \..., C:...), else relative to dir
+  string OCPath(const string &dir,const string &name)
+  {
+    const bool abs=!name.empty() && ((name[0]=='/') || (name[0]=='\\') || ((name.size()>1) && isalpha((unsigned char)name[0]) && (name[1]==':')));
+    return abs?name:dir+name;
+  }
+  //the lines of a MODFLOW 6 input file as MODFLOW reads its blocks: in any block but GRIDDATA, the lines of an OPEN/CLOSE
+  //file (its path relative to the simulation folder dir, or absolute) take the place of the OPEN/CLOSE line, and the
+  //block's lines after it follow (MODFLOW 6.8.1: LoadMf6File.f90, BlockParser.f90). As for MODFLOW, OPEN/CLOSE may only be
+  //the block's first line other than comments and blank lines; elsewhere, and in an OPEN/CLOSE file, it stops
+  vector<string> BlockLines(const string &file,const string &dir)
+  {
+    vector<string> out; ifstream I(file.c_str()); string line,block; bool first=false;
+    while (getline(I,line)){
+      vector<string> w=Words(line);
+      if (!w.empty()){
+        const string W0=Upper(w[0]);
+        if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); first=true;}
+        else if (W0=="END"){block=""; first=false;}
+        else if ((W0=="OPEN/CLOSE") && (block!="") && (block!="GRIDDATA")){
+          ExitGracefullyIf(!first,("CGroundwaterModel: the "+block+" block of "+file+" has OPEN/CLOSE after its first line; MODFLOW 6 reads OPEN/CLOSE only as "
+            "the first line of a block (other than comments): write the rows of the file in the block, or make OPEN/CLOSE the block's only line").c_str(),BAD_DATA);
+          ExitGracefullyIf(w.size()<2,("CGroundwaterModel: OPEN/CLOSE without a file name in "+file).c_str(),BAD_DATA);
+          const string ef=OCPath(dir,w[1]); ifstream E(ef.c_str());
+          ExitGracefullyIf(!E,("CGroundwaterModel: cannot open the OPEN/CLOSE file "+ef+" named in the "+block+" block of "+file).c_str(),BAD_DATA);
+          string el;
+          while (getline(E,el)){
+            vector<string> ew=Words(el);
+            ExitGracefullyIf(!ew.empty() && (Upper(ew[0])=="OPEN/CLOSE"),("CGroundwaterModel: the OPEN/CLOSE file "+ef+" names another OPEN/CLOSE file; "
+              "write its lines in "+w[1]+" itself").c_str(),BAD_DATA);
+            out.push_back(el);
+          }
+          first=false; continue;
+        }
+        else {first=false;}
+      }
+      out.push_back(line);
+    }
+    return out;
+  }
   //a real number as MODFLOW 6 reads it (Fortran list-directed input, checked against mf6 6.8.1): digits with an optional
   //decimal point, and an optional exponent written with E, D or Q (either case; without digits it is 0) or with its sign
   //alone: 5, 5., .5, 5.0E-1, 50.0D-1, 0.5d1, 1.0+1, 1.0e; a slash ends the value (5.0/), and a repeat count r*c gives c
@@ -160,10 +200,12 @@ namespace
 //
 void CGroundwaterModel::ExtReadSimulation()
 {
-  ifstream S(_extSim.c_str());
-  ExitGracefullyIf(!S,("CGroundwaterModel: cannot open MODFLOW 6 simulation file "+_extSim).c_str(),BAD_DATA);
+  { ifstream S(_extSim.c_str());
+    ExitGracefullyIf(!S,("CGroundwaterModel: cannot open MODFLOW 6 simulation file "+_extSim).c_str(),BAD_DATA); }
   string line,block,tdis; vector<string> mnam,mname; int nsol=0; _extNModels=0;
-  while (getline(S,line)){
+  const vector<string> SL=BlockLines(_extSim,DirOf(_extSim)); //(OPEN/CLOSE files of its blocks read in place, as MODFLOW reads them)
+  for (size_t il=0;il<SL.size();il++){
+    line=SL[il];
     vector<string> w=Words(line); if (w.empty()){continue;}
     string W0=Upper(w[0]);
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
@@ -188,10 +230,12 @@ void CGroundwaterModel::ExtReadSimulation()
   _extTdisFile=tdis; _extNamFile=mnam[im]; _mname=Upper(mname[im]);
 
   string dir=DirOf(_extSim);
-  ifstream N((dir+_extNamFile).c_str());
-  ExitGracefullyIf(!N,("CGroundwaterModel: cannot open the model name file "+dir+_extNamFile).c_str(),BAD_DATA);
+  { ifstream N((dir+_extNamFile).c_str());
+    ExitGracefullyIf(!N,("CGroundwaterModel: cannot open the model name file "+dir+_extNamFile).c_str(),BAD_DATA); }
   _extPkgs.clear(); block=""; map<string,int> count;
-  while (getline(N,line)){
+  const vector<string> NL=BlockLines(dir+_extNamFile,dir); //(the package rows of an OPEN/CLOSE file in the PACKAGES block too)
+  for (size_t il=0;il<NL.size();il++){
+    line=NL[il];
     vector<string> w=Words(line,block=="PACKAGES"); if (w.empty()){continue;}
     string W0=Upper(w[0]);
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
@@ -393,8 +437,8 @@ void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
 vector<string> CGroundwaterModel::ExtReadOpenClose(const string &name) const
 {
   string fn=name; if ((fn.size()>1) && ((fn[0]=='\'') || (fn[0]=='"'))){fn=fn.substr(1,fn.size()-2);}
-  ifstream I((_mf6dir+"/"+fn).c_str());
-  ExitGracefullyIf(!I,("CGroundwaterModel: cannot open the OPEN/CLOSE file "+_mf6dir+"/"+fn).c_str(),BAD_DATA);
+  const string ef=OCPath(_mf6dir+"/",fn); ifstream I(ef.c_str());
+  ExitGracefullyIf(!I,("CGroundwaterModel: cannot open the OPEN/CLOSE file "+ef).c_str(),BAD_DATA);
   vector<string> rows; string line;
   while (getline(I,line)){
     if (!line.empty() && (line[line.size()-1]=='\r')){line.erase(line.size()-1);}
@@ -546,20 +590,29 @@ void CGroundwaterModel::ExtWriteSimFile()
   vector<string> L; string line; bool inOpt=false,hasOpt=false,hasCont=false;
   while (getline(I,line)){
     if (!line.empty() && (line[line.size()-1]=='\r')){line.erase(line.size()-1);}
-    vector<string> w=Words(line); string W0=w.empty()?"":Upper(w[0]);
-    if ((W0=="BEGIN") && (w.size()>1) && (Upper(w[1])=="OPTIONS")){inOpt=true; hasOpt=true;}
-    else if (inOpt && (W0=="END")){inOpt=false;}
-    else if (inOpt && (W0=="CONTINUE")){hasCont=true;}
     L.push_back(line);
   }
   I.close();
+  { const vector<string> BL=BlockLines(src,_mf6dir+"/"); //(CONTINUE also in an OPEN/CLOSE file of the OPTIONS block)
+    for (size_t i=0;i<BL.size();i++){
+      vector<string> w=Words(BL[i]); string W0=w.empty()?"":Upper(w[0]);
+      if ((W0=="BEGIN") && (w.size()>1) && (Upper(w[1])=="OPTIONS")){inOpt=true; hasOpt=true;}
+      else if (inOpt && (W0=="END")){inOpt=false;}
+      else if (inOpt && (W0=="CONTINUE")){hasCont=true;}
+    }
+  }
   ofstream O((_mf6dir+"/mfsim.nam").c_str());
   ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+_mf6dir+"/mfsim.nam").c_str(),BAD_DATA);
   if (!hasOpt){O<<"# CONTINUE added by Raven: a step that does not converge is flagged in GWBudget.csv\nBEGIN OPTIONS\n  CONTINUE\nEND OPTIONS\n\n";}
+  bool pending=false; //(CONTINUE goes after the OPTIONS block's OPEN/CLOSE line, which MODFLOW reads only as the block's first line)
   for (size_t i=0;i<L.size();i++){
+    vector<string> w=Words(L[i]); const string W0=w.empty()?"":Upper(w[0]);
+    if (pending && !w.empty()){
+      if (W0=="OPEN/CLOSE"){O<<L[i]<<"\n"<<"  CONTINUE  # added by Raven\n"; pending=false; continue;}
+      O<<"  CONTINUE  # added by Raven\n"; pending=false;
+    }
     O<<L[i]<<"\n";
-    vector<string> w=Words(L[i]);
-    if (hasOpt && !hasCont && (w.size()>1) && (Upper(w[0])=="BEGIN") && (Upper(w[1])=="OPTIONS")){O<<"  CONTINUE  # added by Raven\n";}
+    if (hasOpt && !hasCont && (w.size()>1) && (W0=="BEGIN") && (Upper(w[1])=="OPTIONS")){pending=true;}
   }
   ExitGracefullyIf(!O.good(),("CGroundwaterModel: failed writing "+_mf6dir+"/mfsim.nam").c_str(),BAD_DATA);
 }
@@ -642,6 +695,24 @@ void CGroundwaterModel::ExtEditNameFile(const bool addRaven)
   while (getline(I,line)){L.push_back(line);}
   I.close();
   ExitGracefullyIf(L.empty(),("CGroundwaterModel: the copied model name file "+f+" is empty").c_str(),BAD_DATA);
+  { //the rows of an OPEN/CLOSE file in the PACKAGES block are written into the working copy in its place, so that the rows
+    //Raven takes over and the names it writes apply to them as to the others
+    vector<string> X; string b;
+    for (size_t i=0;i<L.size();i++){
+      vector<string> w=Words(L[i]);
+      if (!w.empty() && (Upper(w[0])=="BEGIN") && (w.size()>1)){b=Upper(w[1]);}
+      else if (!w.empty() && (Upper(w[0])=="END")){b="";}
+      else if (!w.empty() && (b=="PACKAGES") && (Upper(w[0])=="OPEN/CLOSE") && (w.size()>=2)){
+        const bool cr=!L[i].empty() && (L[i][L[i].size()-1]=='\r');
+        X.push_back("# "+(cr?L[i].substr(0,L[i].size()-1):L[i])+"   # its rows written below by Raven"+(cr?"\r":""));
+        const vector<string> R=ExtReadOpenClose(w[1]);
+        for (size_t j=0;j<R.size();j++){X.push_back(R[j]+(cr?"\r":""));}
+        continue;
+      }
+      X.push_back(L[i]);
+    }
+    L.swap(X);
+  }
   ofstream O(f.c_str());
   ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+f).c_str(),BAD_DATA);
   vector<bool> used(_extPkgs.size(),false);
@@ -692,8 +763,9 @@ void CGroundwaterModel::ExtProbe()
     //change repeats every iteration and the step never converges (6.8.1 converges); warn, as the model is the user's
     int ma=0,mi=0; bool uo=false;
     if (sscanf(_mf6Version.c_str(),"%d.%d",&ma,&mi)==2){uo=(ma<6) || ((ma==6) && (mi<8));}
-    ifstream N((_mf6dir+"/"+_extNamFile).c_str()); string l,b; bool nu=false,nw=false;
-    while (getline(N,l)){
+    const vector<string> NL=BlockLines(_mf6dir+"/"+_extNamFile,_mf6dir+"/"); string l,b; bool nu=false,nw=false; //(OPTIONS may start with OPEN/CLOSE)
+    for (size_t il=0;il<NL.size();il++){
+      l=NL[il];
       vector<string> w=Words(l); if (w.empty()){continue;}
       string W0=Upper(w[0]);
       if ((W0=="BEGIN") && (w.size()>1)){b=Upper(w[1]); continue;}
@@ -723,6 +795,19 @@ void CGroundwaterModel::ExtProbe()
       if (!in){missing+=(missing.empty()?"":", ")+P.pname+" ("+P.ftype+" "+P.fname+")";}
     }
     string have; for (size_t i=0;i<mn.size();i++){have+=(i?", ":"")+mn[i];}
+    { //the other way: every package of a type the model may hold several of that MODFLOW read must be one Raven read from the
+      //name file (else it would run beside Raven's, outside its books); Raven's own packages are left out
+      vector<string> mt; const bool haveTypes=haveNames && _mf6.GetStrings("__INPUT__/"+_mname+"/PKGTYPES",mt) && (mt.size()==mn.size());
+      string unread;
+      for (size_t i=0;haveTypes && (i<mn.size());i++){
+        const string t=Upper(mt[i]),base=((t.size()>1) && (t[t.size()-1]=='6'))?t.substr(0,t.size()-1):t;
+        if (!IsMultiType(base) || ((mn[i].size()>6) && (mn[i].compare(mn[i].size()-6,6,"_RAVEN")==0))){continue;}
+        bool known=false; for (size_t j=0;j<_extPkgs.size();j++){if (_extPkgs[j].pname==mn[i]){known=true;}}
+        if (!known){unread+=(unread.empty()?"":", ")+mn[i]+" ("+t+")";}
+      }
+      ExitGracefullyIf(!unread.empty(),("CGroundwaterModel: MODFLOW 6 reads the package "+unread+" in the model "+_mname+", which Raven did not find in the "
+        "name file "+_extNamFile+"; write the package's row in the PACKAGES block of the name file itself").c_str(),BAD_DATA);
+    }
     ExitGracefullyIf(!missing.empty(),("CGroundwaterModel: MODFLOW 6 has no package named "+missing+" in the model "+_mname+
       (have.empty()?string(""):" (its packages: "+have+")")+"; give each package of the name file "+_extNamFile+" a name as the third word of its row").c_str(),BAD_DATA);
     //the stream package's auxiliary variables as MODFLOW read them (it keeps the names of the first AUXILIARY line only)

@@ -50,6 +50,7 @@ void CGWProjection::Inverse(const double x,const double y,double &lon,double &la
   double phi=asin(cos(c)*_sinp0+y*sin(c)*_cosp0/rho);
   double lam=atan2(x*sin(c),rho*_cosp0*cos(c)-y*_sinp0*sin(c));
   lat=phi/GW_D2R; lon=_lon0+lam/GW_D2R;
+  if (lon>180.0){lon-=360.0;} else if (lon<-180.0){lon+=360.0;} //(an origin near the antimeridian: longitudes within +-180)
 }
 
 //=================================================================
@@ -213,6 +214,12 @@ bool CGWRaster::Sample(const double lon,const double lat,double &val) const
   if (_crs!=NULL){_crs->Forward(lon,lat,px,py);} //(a projected raster: interpolated in its own coordinates)
   double ytop=_yll+_nrows*_dy;
   double fc=(px-_xll)/_dx-0.5;
+  if ((_crs==NULL) && ((fc<-1.0) || (fc>_ncols))){ //(a longitude/latitude raster across the antimeridian, written beyond +-180)
+    for (int k=-1;k<=1;k+=2){
+      const double f=(px+k*360.0-_xll)/_dx-0.5;
+      if ((f>=-1.0) && (f<=_ncols)){fc=f; break;}
+    }
+  }
   double fr=(ytop-py)/_dy-0.5;
   if ((fc<-1.0) || (fr<-1.0) || (fc>_ncols) || (fr>_nrows)){return false;}
   fc=std::max(0.0,std::min((double)(_ncols-1),fc));
@@ -459,7 +466,17 @@ namespace
     if ((r.size()>1) && (r.front().x==r.back().x) && (r.front().y==r.back().y)){r.pop_back();}
     for (size_t i=0;i<r.size();i++){r[i]=C.Point(r[i].x,r[i].y);}
     set<pair<double,double> > d; for (size_t i=0;(i<r.size()) && (d.size()<3);i++){d.insert(make_pair(r[i].x,r[i].y));}
-    return (d.size()>=3); //(a ring of fewer than 3 distinct vertices has no area)
+    if (d.size()<3){return false;} //(a ring of fewer than 3 distinct vertices has no area)
+    //(nor has one whose vertices lie on one line, that runs back over itself, or whose loops cancel (a figure eight of
+    // equal lobes): its signed area, taken from the first vertex, is 0 against the square of its extent)
+    double A=0,x0=r[0].x,y0=r[0].y,xmin=x0,xmax=x0,ymin=y0,ymax=y0;
+    for (size_t i=0;i<r.size();i++){
+      const gw_pt &a=r[i],&b=r[(i+1)%r.size()];
+      A+=(a.x-x0)*(b.y-y0)-(b.x-x0)*(a.y-y0);
+      xmin=min(xmin,a.x); xmax=max(xmax,a.x); ymin=min(ymin,a.y); ymax=max(ymax,a.y);
+    }
+    const double ext=max(xmax-xmin,ymax-ymin);
+    return (fabs(0.5*A)>1e-12*ext*ext);
   }
   void AddPolygon(const JVal &jpoly,vector<gw_ring> &rings,JCoords &C,vector<int> *part,const int ipart,const string &where)
   {
@@ -599,7 +616,7 @@ bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
     if (rings.empty() && (first.find(id)==first.end())){
       size_t nr=0; //(the rings written: none is an empty geometry)
       if (gt->s=="Polygon"){nr=co->a.size();} else {for (size_t i=0;i<co->a.size();i++){nr+=(co->a[i].t==J_ARR)?co->a[i].a.size():1;}}
-      first[id]=C.feature+((nr==0)?": it has no polygon (its coordinates are empty)":": its polygon has no outline of 3 or more distinct vertices, so no area");
+      first[id]=C.feature+((nr==0)?": it has no polygon (its coordinates are empty)":": its polygon has no area (its outline has fewer than 3 distinct vertices, lies on one line or encloses no net area)");
     }
     nfound++;
   }
@@ -798,9 +815,11 @@ bool CGWCRS::Parse(const string &spec0,string &err)
 }
 void CGWCRS::Forward(const double lon,const double lat,double &x,double &y) const
 {
-  double p=lat*D2R,l=lon*D2R-_lon0;
-  if (fabs(l)>CRS_PI+1e-12){l=remainder(l,2*CRS_PI);} //(the longitude from the central meridian within +-180 degrees, as PROJ's
-                                                      // adjlon takes it: the cones are not periodic in it)
+  //(the longitude within +-180 degrees first, then its difference from the central meridian, as PROJ takes them (its
+  // adjlon, which leaves an angle within pi+1e-12 as it is): the cones are not periodic in it, and a point 180 degrees
+  // away keeps the side PROJ gives it)
+  struct A{static double Adj(double v){if (fabs(v)<CRS_PI+1e-12){return v;} v+=CRS_PI; v-=2*CRS_PI*floor(v/(2*CRS_PI)); return v-CRS_PI;}};
+  const double p=lat*D2R,l=A::Adj(A::Adj(lon*D2R)-_lon0);
   if (_type==1){
     double s=sin(p),c2=2*sqrt(_n)/(1+_n);
     double t=sinh(atanh(s)-c2*atanh(c2*s));
@@ -809,7 +828,11 @@ void CGWCRS::Forward(const double lon,const double lat,double &x,double &y) cons
     x=_fe+_k0*_A*eta; y=_fn+_k0*_A*(xi-_xi0);
   }
   else if (_type==2){double rho=_a*sqrt(_C-_nc*Q(p))/_nc,th=_nc*l; x=_fe+rho*sin(th); y=_fn+_rho0-rho*cos(th);}
-  else if (_type==3){double rho=_a*_F*pow(T(p),_nc),th=_nc*l; x=_fe+rho*sin(th); y=_fn+_rho0-rho*cos(th);}
+  else if (_type==3){
+    double rho=_a*_F*pow(T(p),_nc),th=_nc*l;
+    if ((_nc<0) && (fabs(p+CRS_PI/2)<1e-12)){rho=0.0;} //(the apex of a southern cone: T(-pi/2) is no infinity in floating point)
+    x=_fe+rho*sin(th); y=_fn+_rho0-rho*cos(th);
+  }
   else {x=lon; y=lat;}
 }
 void CGWCRS::Inverse(const double x,const double y,double &lon,double &lat) const

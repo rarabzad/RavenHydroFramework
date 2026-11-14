@@ -633,6 +633,320 @@ namespace
   }
 }
 
+//---------------------------------------------------------------
+// band unit (UNITTYPE in GDAL_METADATA): the first unit expression of the text decides
+//---------------------------------------------------------------
+namespace
+{
+  //The table of length units (one list per class). A text is split into words: runs of letters (ASCII and other
+  //alphabets), also split where a lower-case ASCII letter is followed by a capital ("SurveyFeet", "mASL") and where a
+  //Chinese, Japanese or Korean run meets other letters. Words are compared whole, in lower case (the capitals of
+  //ASCII, Latin-1, Latin Extended-A, Greek and Cyrillic are lowered). A word directly followed by a digit is part of a
+  //name ("CH1903", "NAVD88", "LN02", "RH2000") and no unit. Chinese, Japanese and Korean runs are searched for the
+  //entries of their own lists, the longest entry first at each place.
+  //
+  //metre: the metre written out (English, French, Spanish, Portuguese, Italian, German, Dutch, Scandinavian, Polish,
+  //Czech, Hungarian, Romanian, Finnish, Russian, Ukrainian, Greek), its symbol and the metre-above-sea-level abbreviations
+  const char *BU_METRE_WORD[]={"metre","metres","meter","meters","metern","m\xC3\xA8tre","m\xC3\xA8tres","m\xC3\xA9ter","m\xC3\xA9terben",
+    "metro","metros","metri","metr","metra","metry","metr\xC3\xB3w","metrach","metrami","metrze","metrem","metr\xC5\xAF",
+    "metrech","metru","metrin","metri\xC3\xA4","metrit",
+    "\xD0\xBC\xD0\xB5\xD1\x82\xD1\x80","\xD0\xBC\xD0\xB5\xD1\x82\xD1\x80\xD0\xB0","\xD0\xBC\xD0\xB5\xD1\x82\xD1\x80\xD0\xBE\xD0\xB2",
+    "\xD0\xBC\xD0\xB5\xD1\x82\xD1\x80\xD1\x8B","\xD0\xBC\xD0\xB5\xD1\x82\xD1\x80\xD0\xB0\xD1\x85","\xD0\xBC\xD0\xB5\xD1\x82\xD1\x80\xD0\xB0\xD0\xBC\xD0\xB8",
+    "\xD0\xBC\xD0\xB5\xD1\x82\xD1\x80\xD0\xB5","\xD0\xBC\xD0\xB5\xD1\x82\xD1\x80\xD1\x96\xD0\xB2",       //(метр, метра, метров, метры, метрах, метрами, метре, метрів)
+    "\xCE\xBC\xCE\xAD\xCF\x84\xCF\x81\xCE\xBF","\xCE\xBC\xCE\xAD\xCF\x84\xCF\x81\xCE\xB1"};                       //(μέτρο, μέτρα)
+  const char *BU_METRE_ABBR[]={"m","masl","mamsl","moh","m\xC3\xB6h","m\xC3\xBC","\xD0\xBC"};               //(m, ..., möh, mü (müNN), м)
+  //other lengths: feet, inches, yards, miles, fathoms, chains in English and other languages; the metre's multiples and
+  //parts written as symbols (also Cyrillic); feet fused with a qualifier are matched separately (BUFusedFeet)
+  const char *BU_OTHER[]={"ft","foot","feet","fasl","fmsl","inch","inches","yard","yards","yd","yds","mile","miles","kmi","nmi",
+    "fathom","fathoms","chain","chains","furlong","furlongs",
+    "pie","pies","pied","pieds","piede","piedi","p\xC3\xA9","p\xC3\xA9s","voet","voeten","fu\xC3\x9F","fuss","fot","fod","stopa","stopy",
+    "st\xC3\xB3p","jalka","jalkaa","l\xC3\xA1\x62",
+    "zoll","pouce","pouces","pulgada","pulgadas","pollice","pollici","duim","yarda","yardas","milla","millas","meile","meilen",
+    "mijl","miglio","miglia",
+    "\xD1\x84\xD1\x83\xD1\x82","\xD1\x84\xD1\x83\xD1\x82\xD0\xB0","\xD1\x84\xD1\x83\xD1\x82\xD0\xBE\xD0\xB2","\xD1\x84\xD1\x83\xD1\x82\xD1\x8B", //(фут, фута, футов, футы)
+    "\xD0\xB4\xD1\x8E\xD0\xB9\xD0\xBC","\xD1\x8F\xD1\x80\xD0\xB4","\xD0\xBC\xD0\xB8\xD0\xBB\xD1\x8F","\xD0\xBC\xD0\xB8\xD0\xBB\xD0\xB8","\xD0\xBC\xD0\xB8\xD0\xBB\xD1\x8C", //(дюйм, ярд, миля, мили, миль)
+    "\xCF\x80\xCF\x8C\xCE\xB4\xCE\xB9","\xCF\x80\xCF\x8C\xCE\xB4\xCE\xB9\xCE\xB1",                               //(πόδι, πόδια)
+    "km","cm","mm","dm","nm","kms","cms","mms","\xC2\xB5m","\xCE\xBCm",                                     //(..., µm, μm)
+    "\xD0\xBA\xD0\xBC","\xD1\x81\xD0\xBC","\xD0\xBC\xD0\xBC","\xD0\xB4\xD0\xBC","\xD0\xBC\xD0\xBA\xD0\xBC","\xD0\xBD\xD0\xBC"}; //(км, см, мм, дм, мкм, нм)
+  //short ids that are also ordinary words (PROJ's ch, mi, fath, link, in; the decametre and hectometre dam, hm): a unit
+  //only as the first word, or the second after us, ind, int or intl ("us-in"), of a text that has no other unit
+  const char *BU_AMBIG[]={"in","ch","mi","fath","link","links","dam","hm"};
+  const char *BU_QUAL[]={"us","ind","int","intl"};
+  //SI prefixes written as words: another unit joined to a metre word ("kilometres", "Zentimeter", "centímetros",
+  //"milimetry", "километр"), right before one ("Kilo Meter", "milli-metres", "kiloMeters") or as the whole text
+  const char *BU_PREFIX[]={"kilo","kil\xC3\xB3","quilo","quil\xC3\xB4","chilo","hecto","hekto","hect\xC3\xB3","deca","deka","d\xC3\xA9\x63\x61","d\xC3\xA9ka","deci","d\xC3\xA9\x63i","dezi","decy",
+    "centi","cent\xC3\xAD","centy","zenti","milli","mili","mil\xC3\xAD","micro","mikro","nano","mega","giga",
+    "\xD0\xBA\xD0\xB8\xD0\xBB\xD0\xBE","\xD0\xB3\xD0\xB5\xD0\xBA\xD1\x82\xD0\xBE","\xD0\xB4\xD0\xB5\xD0\xBA\xD0\xB0","\xD0\xB4\xD0\xB5\xD1\x86\xD0\xB8",
+    "\xD1\x81\xD0\xB0\xD0\xBD\xD1\x82\xD0\xB8","\xD0\xBC\xD0\xB8\xD0\xBB\xD0\xBB\xD0\xB8","\xD0\xBC\xD0\xB8\xD0\xBA\xD1\x80\xD0\xBE",
+    "\xD0\xBD\xD0\xB0\xD0\xBD\xD0\xBE","\xD0\xBC\xD0\xB5\xD0\xB3\xD0\xB0","\xD0\xBA\xD1\x96\xD0\xBB\xD0\xBE"};                              //(кило, гекто, дека, деци, санти, милли, микро, нано, мега)
+  //parts and multiples: another unit before a unit word, with "of" and one of a, an, the, one between ("tenths of a
+  //metre", "thousands of metres"), right after a metre word ("m (thousands)") or as the whole text
+  const char *BU_PART[]={"tenth","tenths","hundredth","hundredths","thousandth","thousandths","tens","hundreds","thousands"};
+  const char *BU_LINK[]={"a","an","the","one"};
+  //Chinese, Japanese and Korean
+  const char *BU_CJK_METRE[]={"\xE7\xB1\xB3","\xE5\x85\xAC\xE5\xB0\xBA","\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB",
+    "\xE3\x83\xA1\xE3\x83\xBC\xE3\x82\xBF\xE3\x83\xBC","\xEB\xAF\xB8\xED\x84\xB0"};                       //(米, 公尺, メートル, メーター, 미터)
+  const char *BU_CJK_OTHER[]={"\xE5\x8E\x98\xE7\xB1\xB3","\xE6\xAF\xAB\xE7\xB1\xB3","\xE5\x88\x86\xE7\xB1\xB3","\xE5\x8D\x83\xE7\xB1\xB3",
+    "\xE5\x85\xAC\xE9\x87\x8C","\xE5\xBE\xAE\xE7\xB1\xB3","\xE7\xBA\xB3\xE7\xB1\xB3","\xE7\xB4\x8D\xE7\xB1\xB3","\xE5\x85\xAC\xE5\x88\x86",
+    "\xE8\x8B\xB1\xE5\xB0\xBA","\xE5\x91\x8E","\xE8\x8B\xB1\xE5\xAF\xB8","\xE5\x90\x8B","\xE8\x8B\xB1\xE9\x87\x8C","\xE7\xA0\x81","\xE7\xA2\xBC",
+    "\xE6\xB5\xB7\xE9\x87\x8C",                                       //(厘米, 毫米, 分米, 千米, 公里, 微米, 纳米, 納米, 公分, 英尺, 呎, 英寸, 吋, 英里, 码, 碼, 海里)
+    "\xE3\x82\xAD\xE3\x83\xAD\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB","\xE3\x82\xBB\xE3\x83\xB3\xE3\x83\x81",
+    "\xE3\x83\x9F\xE3\x83\xAA","\xE3\x83\x95\xE3\x82\xA3\xE3\x83\xBC\xE3\x83\x88","\xE3\x82\xA4\xE3\x83\xB3\xE3\x83\x81",
+    "\xE3\x83\x9E\xE3\x82\xA4\xE3\x83\xAB","\xE3\x83\xA4\xE3\x83\xBC\xE3\x83\x89",                       //(キロメートル, センチ, ミリ, フィート, インチ, マイル, ヤード)
+    "\xED\x82\xAC\xEB\xA1\x9C\xEB\xAF\xB8\xED\x84\xB0","\xEC\x84\xBC\xED\x8B\xB0\xEB\xAF\xB8\xED\x84\xB0",
+    "\xEB\xB0\x80\xEB\xA6\xAC\xEB\xAF\xB8\xED\x84\xB0","\xED\x94\xBC\xED\x8A\xB8","\xEC\x9D\xB8\xEC\xB9\x98",
+    "\xEB\xA7\x88\xEC\x9D\xBC","\xEC\x95\xBC\xEB\x93\x9C"};                                               //(킬로미터, 센티미터, 밀리미터, 피트, 인치, 마일, 야드)
+  const char *BU_CJK_NONE[]={"\xE7\xB1\xB3\xE5\x9B\xBD","\xE7\xB1\xB3\xE8\xBB\x8D"};                      //(米国, 米軍: the United States)
+  //EPSG unit codes of length (PROJ's unit_of_measure table): 9001 is the metre; the others are the codes 9002-9099
+  //and 9300-9302 of length units (coordinate-system codes in that range, such as 9057, are no unit), the millimetre
+  //1025 and the centimetre 1033
+  const int BU_EPSG_OTHER[]={1025,1033,9002,9003,9005,9014,9030,9031,9033,9034,9035,9036,9037,9038,9039,9040,9041,9042,9043,
+    9050,9051,9052,9053,9060,9061,9062,9063,9070,9080,9081,9082,9083,9084,9085,9086,9087,9093,9094,9095,9096,9097,9098,9099,
+    9300,9301,9302};
+  const char *BU_FEET[]={"ft","feet","foot"};                            //(feet fused with a qualifier: ftus, footus, ...
+  const char *BU_FEETQ[]={"us","s","m","i","int","intl","ind","uk","br"};// ... and usft, sft, usfeet, intfoot, ...)
+
+  template<size_t N> bool BUIn(const char *(&tab)[N],const string &w){for (size_t i=0;i<N;i++){if (w==tab[i]){return true;}} return false;}
+
+  //(a blank-separated token that is a number as a whole, also with punctuation or a factor sign: 0.1, (0.1, [0.1, 1,5,
+  // 1/1000, 10^-3, x0.1, *0.1, 1:1000)
+  bool BUNumber(const string &tok){
+    bool dig=false,word=false;
+    for (size_t q=0;q<tok.size();q++){
+      const unsigned char c=(unsigned char)tok[q];
+      if (isdigit(c)){dig=true;}
+      else if ((c>=0x80) || (isalpha(c) && !(((c=='e') || (c=='E')) && dig) && !(((c=='x') || (c=='X')) && (q==tok.find_first_not_of("([{=*:"))))){word=true;}
+    }
+    return dig && !word;
+  }
+  //(a fraction: a decimal point or comma, a slash or an exponent between digits, 0.1, 1,5, 1/1000, 1e-3)
+  bool BUFraction(const string &t){
+    for (size_t q=0;q+1<t.size();q++){
+      const unsigned char c=(unsigned char)t[q],d=(unsigned char)t[q+1];
+      if (((c=='.') || (c==',') || (c=='/')) && isdigit(d) && ((c=='.') || ((q>0) && isdigit((unsigned char)t[q-1])))){return true;}
+      if (((c=='e') || (c=='E')) && (q>0) && isdigit((unsigned char)t[q-1]) && (isdigit(d) || (((d=='-') || (d=='+')) && (q+2<t.size()) && isdigit((unsigned char)t[q+2])))){return true;}
+    }
+    return false;
+  }
+  //(a factor sign or word: x, *, the multiplication sign, /, by, scale(d), factor, per, divide(d), multiply/multiplied)
+  bool BUFactor(string t){
+    for (size_t q=0;q<t.size();q++){t[q]=(char)tolower((unsigned char)t[q]);}
+    const size_t a=t.find_first_not_of("([{"),b=t.find_last_not_of(")]}:,;");
+    t=((a==string::npos) || (b==string::npos) || (b<a))?string(""):t.substr(a,b-a+1);
+    return (t=="x") || (t=="*") || (t=="\xC3\x97") || (t=="/") || (t=="by") || (t=="scale") || (t=="scaled") || (t=="factor") || (t=="per") ||
+           (t=="divide") || (t=="divided") || (t=="multiply") || (t=="multiplied");
+  }
+  //(a number token with a factor sign in front of it: *0.1, x0.1, /10, the multiplication sign)
+  bool BUFactorLead(const string &t){
+    const size_t a=t.find_first_not_of("([{"); if (a==string::npos){return false;}
+    return (t[a]=='*') || (t[a]=='x') || (t[a]=='X') || (t[a]=='/') || (t.compare(a,2,"\xC3\x97")==0);
+  }
+  bool BUBlank(const unsigned char c){return (c==' ') || (c=='\t') || (c=='\r') || (c=='\n');}
+
+  //UTF-8: the code point at s[i] and its length (a malformed byte is U+FFFD of length 1)
+  uint32_t BUDecode(const string &s,const size_t i,size_t &len){
+    const unsigned char c=(unsigned char)s[i]; len=1;
+    if (c<0x80){return c;}
+    int n=0; uint32_t cp=0;
+    if      ((c&0xE0)==0xC0){n=1; cp=c&0x1F;}
+    else if ((c&0xF0)==0xE0){n=2; cp=c&0x0F;}
+    else if ((c&0xF8)==0xF0){n=3; cp=c&0x07;}
+    else {return 0xFFFD;}
+    for (int k=1;k<=n;k++){
+      if (i+k>=s.size()){return 0xFFFD;}
+      const unsigned char d=(unsigned char)s[i+k]; if ((d&0xC0)!=0x80){return 0xFFFD;}
+      cp=(cp<<6)|(d&0x3F);
+    }
+    len=n+1; return cp;
+  }
+  void BUEncode(string &s,const uint32_t c){
+    if      (c<0x80)   {s+=(char)c;}
+    else if (c<0x800)  {s+=(char)(0xC0|(c>>6)); s+=(char)(0x80|(c&0x3F));}
+    else if (c<0x10000){s+=(char)(0xE0|(c>>12)); s+=(char)(0x80|((c>>6)&0x3F)); s+=(char)(0x80|(c&0x3F));}
+    else               {s+=(char)(0xF0|(c>>18)); s+=(char)(0x80|((c>>12)&0x3F)); s+=(char)(0x80|((c>>6)&0x3F)); s+=(char)(0x80|(c&0x3F));}
+  }
+  uint32_t BULower(const uint32_t c){
+    if ((c>='A') && (c<='Z')){return c+32;}
+    if ((c>=0xC0) && (c<=0xDE) && (c!=0xD7)){return c+32;}                          //(Latin-1)
+    if ((c>=0x100) && (c<=0x137) && (c%2==0)){return c+1;}                          //(Latin Extended-A)
+    if ((c>=0x139) && (c<=0x148) && (c%2==1)){return c+1;}
+    if ((c>=0x14A) && (c<=0x177) && (c%2==0)){return c+1;}
+    if ((c==0x179) || (c==0x17B) || (c==0x17D)){return c+1;}
+    if ((c>=0x391) && (c<=0x3A9) && (c!=0x3A2)){return c+32;}                       //(Greek)
+    if ((c>=0x410) && (c<=0x42F)){return c+32;}                                     //(Cyrillic)
+    if ((c>=0x400) && (c<=0x40F)){return c+80;}
+    return c;
+  }
+  bool BULetter(const uint32_t c){
+    if (c<0x80){return isalpha((int)c)!=0;}
+    if (c==0xB5){return true;}                                                      //(the micro sign)
+    if (c<0xC0){return false;}                                                      //(Latin-1 signs)
+    if ((c==0xD7) || (c==0xF7)){return false;}                                      //(multiplication and division signs)
+    if ((c>=0x2000) && (c<=0x2BFF)){return false;}                                  //(punctuation, symbols, arrows, ...)
+    if ((c>=0x3000) && (c<=0x303F)){return false;}                                  //(CJK punctuation)
+    if ((c>=0xFE30) && (c<=0xFE4F)){return false;}
+    if ((c>=0xFF00) && (c<=0xFF20)){return false;}                                  //(full-width signs and digits)
+    if ((c>=0xFF3B) && (c<=0xFF40)){return false;}
+    if ((c>=0xFF5B) && (c<=0xFF65)){return false;}
+    if ((c==0xFFFD) || (c>=0xFFF0 && c<=0xFFFF)){return false;}
+    return true;
+  }
+  bool BUCJK(const uint32_t c){return (c>=0x2E80) && BULetter(c);}
+
+  struct BUWord{string w; size_t b,e; bool digAfter,numBefore,cjk;};
+
+  bool BUMetre(const string &w){return BUIn(BU_METRE_WORD,w) || BUIn(BU_METRE_ABBR,w);}
+  bool BUFusedFeet(const string &w){
+    for (int i=0;i<3;i++){
+      const size_t n=strlen(BU_FEET[i]);
+      if (w.compare(0,n,BU_FEET[i])==0){return true;}                                //(ftus, footus, feet_us, ...)
+      if ((w.size()>n) && (w.compare(w.size()-n,n,BU_FEET[i])==0)){
+        if (i>0){return true;}                                                      //(...feet, ...foot)
+        if (BUIn(BU_FEETQ,w.substr(0,w.size()-n))){return true;}                    //(usft, sft, ...)
+      }
+    }
+    return false;
+  }
+  bool BUPrefixed(const string &w){                                                 //(a prefix joined to a metre word)
+    for (size_t i=0;i<sizeof(BU_PREFIX)/sizeof(BU_PREFIX[0]);i++){
+      const size_t n=strlen(BU_PREFIX[i]);
+      if ((w.size()>n) && (w.compare(0,n,BU_PREFIX[i])==0) && BUIn(BU_METRE_WORD,w.substr(n))){return true;}
+    }
+    return false;
+  }
+  bool BUUnitWord(const string &w){return BUMetre(w) || BUIn(BU_OTHER,w) || BUFusedFeet(w) || BUPrefixed(w);}
+}
+
+//the class of a band unit text: 1 metres, 2 another length unit, 0 a unit Raven does not know (also a scaled metre)
+int GWGeoTIFF::BandUnit(const string &ut0)
+{
+  string ut; //(full-width ASCII, U+FF01-FF5E, and the ideographic space read as ASCII)
+  for (size_t i=0;i<ut0.size();){
+    size_t len=1; const uint32_t c=BUDecode(ut0,i,len);
+    if ((c>=0xFF01) && (c<=0xFF5E)){ut+=(char)(c-0xFEE0);} else if (c==0x3000){ut+=' ';} else {ut.append(ut0,i,len);}
+    i+=len;
+  }
+  if (ut.find_first_not_of(" \t\r\n")==string::npos){return 1;}                    //(no unit)
+  //-- the words
+  vector<BUWord> wd; string cur; bool curCJK=false; size_t wb=0; bool numB=false;
+  bool afterNum=false; size_t ts=0; uint32_t prev=' ';
+  for (size_t i=0;i<=ut.size();){
+    size_t len=1; const uint32_t c=(i<ut.size())?BUDecode(ut,i,len):(uint32_t)' ';
+    const bool let=BULetter(c),cjk=BUCJK(c);
+    const bool prevLower=(prev<0x80)?(islower((int)prev)!=0):(BULetter(prev) && !BUCJK(prev) && (BULower(prev)==prev)); //("müNN": mü, NN)
+    if (!cur.empty() && (!let || (cjk!=curCJK) || ((c<0x80) && isupper((int)c) && prevLower))){
+      BUWord W; W.w=cur; W.b=wb; W.e=i; W.digAfter=(c<0x80) && isdigit((int)c); W.numBefore=numB; W.cjk=curCJK; wd.push_back(W); cur="";
+    }
+    if (let){
+      if (cur.empty()){wb=i; curCJK=cjk; numB=((prev<0x80) && isdigit((int)prev)) || ((i==ts) && afterNum);}
+      BUEncode(cur,BULower(c));
+    }
+    if ((i>=ut.size()) || BUBlank((unsigned char)ut[i])){
+      if (i>ts){afterNum=BUNumber(ut.substr(ts,i-ts));}
+      ts=i+1;
+    }
+    prev=c; i+=len;
+  }
+  //-- the first unit expression
+  int cls=0; size_t at=0; bool found=false;
+  for (size_t j=0;(j<wd.size()) && !found;j++){
+    const string &w=wd[j].w;
+    if (wd[j].cjk){                                                                 //(the longest entry at the first place)
+      for (size_t p=0;(p<w.size()) && !found;p++){
+        size_t best=0; int bc=0;
+        for (int k=0;k<3;k++){
+          const char **tab=(k==0)?BU_CJK_NONE:((k==1)?BU_CJK_OTHER:BU_CJK_METRE);
+          const size_t n=(k==0)?sizeof(BU_CJK_NONE)/sizeof(char*):((k==1)?sizeof(BU_CJK_OTHER)/sizeof(char*):sizeof(BU_CJK_METRE)/sizeof(char*));
+          for (size_t q=0;q<n;q++){const size_t L=strlen(tab[q]); if ((L>best) && (w.compare(p,L,tab[q])==0)){best=L; bc=k;}}
+        }
+        if (best==0){continue;}
+        if (bc==0){p+=best-1; continue;}
+        cls=(bc==2)?1:2; found=true; at=j;
+      }
+      continue;
+    }
+    if (wd[j].digAfter){continue;}                                                  //(a name with digits: CH1903, NAVD88)
+    if (w=="epsg"){                                                                 //(EPSG:9002, urn:ogc:def:uom:EPSG::9001)
+      size_t r=wd[j].e; while ((r<ut.size()) && ((ut[r]==':') || (ut[r]==' '))){r++;}
+      size_t s=r; while ((s<ut.size()) && isdigit((unsigned char)ut[s])){s++;}
+      const long code=((s>r) && (s-r<9))?atol(ut.substr(r,s-r).c_str()):0;
+      if (code==9001){return 1;}
+      for (size_t q=0;q<sizeof(BU_EPSG_OTHER)/sizeof(int);q++){if (code==BU_EPSG_OTHER[q]){return 2;}}
+      continue;
+    }
+    if (BUMetre(w)){cls=1; found=true; at=j; break;}
+    if ((w=="nm") && ((ut.compare(wd[j].b,2,"NM")==0) || ((j+2<wd.size()) && (wd[j+1].w=="state") && (wd[j+2].w=="plane")))){continue;} //(New Mexico)
+    if (BUIn(BU_OTHER,w) || BUFusedFeet(w) || BUPrefixed(w)){return 2;}
+    if (BUIn(BU_PREFIX,w)){
+      if (wd.size()==1){return 2;}
+      if ((j+1<wd.size()) && !wd[j+1].digAfter && BUMetre(wd[j+1].w)){return 2;}
+      continue;
+    }
+    if (BUIn(BU_PART,w)){
+      if (wd.size()==1){return 2;}
+      size_t n=j+1; if ((n<wd.size()) && (wd[n].w=="of")){n++;} if ((n<wd.size()) && BUIn(BU_LINK,wd[n].w)){n++;}
+      if ((n<wd.size()) && !wd[n].digAfter && BUUnitWord(wd[n].w)){return 2;}
+      continue;
+    }
+  }
+  if (!found){                                                                      //(a short id as the whole unit)
+    bool qual=!wd.empty() && BUIn(BU_QUAL,wd[0].w);
+    for (size_t j=0;(j<wd.size()) && (j<(qual?2u:1u));j++){if (!wd[j].digAfter && BUIn(BU_AMBIG,wd[j].w)){return 2;}}
+    return 0;
+  }
+  if (cls==2){return 2;}
+  //-- a metre word: a part or multiple right after it ("m (thousands)", "m (in 1000s)"; not "m (tenths of a metre
+  //   precision)") makes another unit; a number
+  //   before it ("0.1 m", "[0.1 m]", "10m", "10 x m", "0.1 of a metre") or a scale after it, past punctuation (a number
+  //   after a factor sign or word, or a fraction: "m*0.1", "metres x 0.1", "m (scaled by 0.1)", "m 0.1", "(m) x 0.1",
+  //   "m, 1/10") makes a unit Raven does not know
+  if (at+1<wd.size()){
+    const string gap=ut.substr(wd[at].e,wd[at+1].b-wd[at].e);
+    if ((gap.find_first_not_of(" \t([{,")==string::npos) && BUIn(BU_PART,wd[at+1].w) && !((at+2<wd.size()) && (wd[at+2].w=="of"))){return 2;}
+    if ((wd[at+1].w=="in") && (at+2<wd.size()) && (wd[at+2].w=="s") && (gap.find_first_not_of(" \t([{,")==string::npos)){
+      const string g2=ut.substr(wd[at+1].e,wd[at+2].b-wd[at+1].e);
+      if ((g2.find_first_not_of(" \t")!=string::npos) && (g2.find_first_not_of(" \t0123456789")==string::npos)){return 2;}
+    }
+  }
+  if (wd[at].numBefore){return 0;}
+  { //(a number, then x, * or "of a/an/the/one", before the metre word: "10 x m", "10*m", "0.1 of a metre")
+    string t=ut.substr(0,wd[at].b);
+    { const size_t e=t.find_last_not_of(" \t\r\n"); t=(e==string::npos)?string(""):t.substr(0,e+1); }
+    bool sign=false;                                                                              //("10*m", "10 * m")
+    if (!t.empty() && (t[t.size()-1]=='*')){t.erase(t.size()-1); sign=true;}
+    else if ((t.size()>=2) && (t.compare(t.size()-2,2,"\xC3\x97")==0)){t.erase(t.size()-2); sign=true;}
+    for (int k=(sign?1:0);k<2;k++){
+      size_t e=t.find_last_not_of(" \t\r\n"); t=(e==string::npos)?string(""):t.substr(0,e+1);
+      size_t q=t.find_last_of(" \t\r\n"); string last=(q==string::npos)?t:t.substr(q+1);
+      string L=last; for (size_t r=0;r<L.size();r++){L[r]=(char)tolower((unsigned char)L[r]);}
+      if ((k==0) && ((L=="x") || (L=="*") || (L=="\xC3\x97") || BUIn(BU_LINK,L))){
+        t=(q==string::npos)?string(""):t.substr(0,q);
+        if (BUIn(BU_LINK,L)){e=t.find_last_not_of(" \t\r\n"); t=(e==string::npos)?string(""):t.substr(0,e+1);
+          q=t.find_last_of(" \t\r\n"); string o=(q==string::npos)?t:t.substr(q+1); for (size_t r=0;r<o.size();r++){o[r]=(char)tolower((unsigned char)o[r]);}
+          if (o!="of"){break;} t=(q==string::npos)?string(""):t.substr(0,q);}
+        continue;
+      }
+      if ((k==1) && BUNumber(last)){return 0;}
+      break;
+    }
+  }
+  const string rest=ut.substr(wd[at].e);
+  size_t a=0; string prevTok;
+  while (a<rest.size()){
+    while ((a<rest.size()) && BUBlank((unsigned char)rest[a])){a++;}
+    size_t b=a; while ((b<rest.size()) && !BUBlank((unsigned char)rest[b])){b++;}
+    if (b==a){break;}
+    string tok=rest.substr(a,b-a);
+    if (tok.find_first_not_of(")]},;:-")==string::npos){a=b; continue;}            //(punctuation between: "(m) x 0.1", "m, 1/10")
+    { const size_t e=tok.find_last_not_of(")]},;:"); tok=tok.substr(0,e+1); }
+    const size_t m=tok.find("\xC3\x97"); if ((m!=string::npos) && (tok.find_first_not_of("([{")==m)){tok.erase(m,2); tok.insert(m,"*");}
+    if (BUNumber(tok) && (BUFactorLead(tok) || BUFactor(prevTok) || BUFraction(tok))){return 0;}
+    if (!BUFactor(tok)){break;}                                                     //(only factor signs and words lead to a scale)
+    prevTok=tok; a=b;
+  }
+  return 1;
+}
+
 bool GWGeoTIFF::IsTIFFName(const string &filename)
 {
   size_t p=filename.find_last_of('.'); if (p==string::npos){return false;}
@@ -813,151 +1127,13 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
     if (bscale==0.0){err=F+"its band SCALE in GDAL_METADATA is 0 (every value would be the OFFSET): save the raster with its elevations (e.g. gdal_translate -unscale)"; return false;}
     map<string,string>::const_iterator iu=items.find("UNITTYPE");
     if (iu!=items.end()){
-      //the unit's words (ASCII letters only, lower case; a lower-case letter followed by a capital starts a new word, as in
-      //"SurveyFeet" or "mASL"): "m (Admiralty datum)" and "metres above Hydrographic Datum" are metres, "feet above sea
-      //level" and "US survey foot" are not; a word is matched whole (not "dm" inside "admiralty"). Feet fused with a
-      //qualifier, as GDAL and PROJ write US survey feet ("ftUS", "usft", "USfeet"), and any word ending in feet or foot
-      //("surveyfeet", "decimalfeet") are feet too. A word glued to a digit or a non-ASCII letter ("µm", "10m"), or that
-      //follows a number ("0.1 m", "[0.1 m]", "1,5 m", "1:1000 m": a scaled unit), is no metre word; a token with letters
-      //other than an exponent is no number ("CH1903 m", "NAVD88 m" are metres), and so is one followed by a number
-      //("m*0.1", "metres x 0.1", "m (scaled by 0.1)"). Prefixes written as words ("kiloMeters", "Kilo Meter") and parts
-      //("tenths of metres") make another unit
-      const string &ut=iu->second;
-      //(a blank-separated token that is a number as a whole, also with punctuation or a factor sign: 0.1, (0.1, [0.1, 1,5,
-      // 1/1000, 10^-3, x0.1, *0.1, 1:1000)
-      struct Num {static bool Is(const string &tok){
-        bool dig=false,word=false;
-        for (size_t q=0;q<tok.size();q++){
-          const unsigned char c=(unsigned char)tok[q];
-          if (isdigit(c)){dig=true;}
-          else if ((c>=0x80) || (isalpha(c) && !(((c=='e') || (c=='E')) && dig) && !(((c=='x') || (c=='X')) && (q==tok.find_first_not_of("([{=*:"))))){word=true;}
-        }
-        return dig && !word;
-      }
-      //(a fraction: a decimal point or comma, a slash or an exponent between digits, 0.1, 1,5, 1/1000, 1e-3)
-      static bool Fraction(const string &t){
-        for (size_t q=0;q+1<t.size();q++){
-          const unsigned char c=(unsigned char)t[q],d=(unsigned char)t[q+1];
-          if (((c=='.') || (c==',') || (c=='/')) && isdigit(d) && ((c=='.') || ((q>0) && isdigit((unsigned char)t[q-1])))){return true;}
-          if (((c=='e') || (c=='E')) && (q>0) && isdigit((unsigned char)t[q-1]) && (isdigit(d) || (((d=='-') || (d=='+')) && (q+2<t.size()) && isdigit((unsigned char)t[q+2])))){return true;}
-        }
-        return false;
-      }
-      //(a factor sign or word: x, *, the multiplication sign, /, by, scale(d), factor)
-      static bool Factor(string t){
-        for (size_t q=0;q<t.size();q++){t[q]=(char)tolower((unsigned char)t[q]);}
-        const size_t a=t.find_first_not_of("([{"),b=t.find_last_not_of(")]}:,;");
-        t=(a==string::npos)?string(""):t.substr(a,b-a+1);
-        return (t=="x") || (t=="*") || (t=="\xC3\x97") || (t=="/") || (t=="by") || (t=="scale") || (t=="scaled") || (t=="factor");
-      }
-      //(the number token after a metre word, with a factor sign in front of it: *0.1, x0.1, /10, the multiplication sign)
-      static bool FactorLead(const string &t){
-        const size_t a=t.find_first_not_of("([{"); if (a==string::npos){return false;}
-        return (t[a]=='*') || (t[a]=='x') || (t[a]=='X') || (t[a]=='/') || (t.compare(a,2,"\xC3\x97")==0);
-      }
-    };
-      vector<string> wd; vector<char> glued; vector<size_t> wend; string cur; bool gl=false; unsigned char prev=' ';
-      bool afterNum=false; //(the blank-separated token before the current one is a number as a whole)
-      size_t ts=0;         //(where the current blank-separated token starts)
-      for (size_t i=0;i<=ut.size();i++){
-        const unsigned char ch=(i<ut.size())?(unsigned char)ut[i]:' ';
-        const bool blank=(ch==' ') || (ch=='\t') || (ch=='\r') || (ch=='\n');
-        if ((ch<0x80) && isalpha(ch) && !cur.empty() && islower(prev) && isupper(ch)){wd.push_back(cur); glued.push_back(gl?1:0); wend.push_back(i); cur=""; gl=false;}
-        if ((ch<0x80) && isalpha(ch)){if (cur.empty() && !((prev<0x80) && isalpha(prev))){gl=(prev>=0x80) || isdigit(prev) || ((i==ts) && afterNum);} cur+=(char)tolower(ch);}
-        else if (!cur.empty()){wd.push_back(cur); glued.push_back(gl?1:0); wend.push_back(i); cur="";}
-        if (blank){
-          if (i>ts){afterNum=Num::Is(ut.substr(ts,i-ts));}
-          ts=i+1;
-        }
-        prev=ch;
-      }
-      for (size_t j=0;j<wd.size();j++){ //(a number after the word: the word is a scaled unit)
-        if (glued[j]){continue;}
-        const string rest=(wend[j]<ut.size())?ut.substr(wend[j]):string("");
-        size_t a=0; string prevTok;
-        while (a<rest.size()){ //(a scale: a number after a factor sign or word, or a fraction; "m NAVD 88", "m, version 2" are no scale)
-          while ((a<rest.size()) && ((rest[a]==' ') || (rest[a]=='\t') || (rest[a]=='\r') || (rest[a]=='\n'))){a++;}
-          size_t b=a; while ((b<rest.size()) && !((rest[b]==' ') || (rest[b]=='\t') || (rest[b]=='\r') || (rest[b]=='\n'))){b++;}
-          if (b>a){
-            string tok=rest.substr(a,b-a);
-            const size_t m=tok.find("\xC3\x97"); if ((m!=string::npos) && (tok.find_first_not_of("([{")==m)){tok.erase(m,2); tok.insert(m,"*");}
-            if (Num::Is(tok) && (Num::FactorLead(tok) || Num::Factor(prevTok) || Num::Fraction(tok))){glued[j]=1; break;}
-            prevTok=tok;
-          }
-          a=b;
-        }
-      }
-      const char *mw[]={"m","metre","metres","meter","meters"};
-      const char *ow[]={"ft","foot","feet","cm","mm","dm","km","inch","inches","yard","yards","yd","yds","mile","miles",
-                        "fathom","fathoms","chain","chains","kmi","fasl","fmsl","pies","pie","pieds","pied","voet",
-                        "fuss","piedi","piede","fot","fod"};                                   //(feet: German, Italian, Swedish, Danish)
-      //(a prefix written as a word, and parts of a metre: another unit when attached to a metre word, "kiloMeters", "Kilo
-      // Meter", "tenths of metres", or standing as the unit; "nano DEM m" is metres)
-      const char *pw[]={"kilo","centi","milli","deci","micro","nano","tenth","tenths","hundredth","hundredths","thousandth","thousandths"};
-      //(PROJ's short unit ids, which are also ordinary words or abbreviations ("CH1903", "mi-marée", "see link"): another unit
-      //only when no metre word is given and they stand first, or after a qualifier as in us-ch, us-mi, us-in)
-      const char *sw[]={"ch","mi","fath","link","links","in"};
-      const char *sq[]={"us","ind","int","intl"};
-      const char *op[]={"centimet","millimet","decimet","kilomet","micromet","nanomet"}; //(word prefixes: centimetre(s), centimeter(s), ...)
-      const char *fw[]={"ft","feet","foot"};                                  //(feet fused with a qualifier: ftus, footus, ...
-      const char *fq[]={"us","s","m","i","int","intl","ind","uk","br"};      // ... and usft, sft, usfeet, intfoot, ...)
-      bool anyM=false,other=false;
-      for (size_t j=0;j<wd.size();j++){
-        for (int i=0;i<5;i++){if ((wd[j]==mw[i]) && !glued[j]){anyM=true;}}
-        for (size_t i=0;i<sizeof(ow)/sizeof(ow[0]);i++){if (wd[j]==ow[i]){other=true;}}
-        for (size_t i=0;i<sizeof(pw)/sizeof(pw[0]);i++){
-          if (wd[j]!=pw[i]){continue;}
-          size_t n=j+1; if ((n<wd.size()) && (wd[n]=="of")){n++;}
-          bool mnext=false; for (int k=0;(k<5) && (n<wd.size());k++){if (wd[n]==mw[k]){mnext=true;}}
-          if (mnext || (wd.size()==1)){other=true;}
-        }
-        for (size_t i=0;i<sizeof(op)/sizeof(op[0]);i++){if (wd[j].compare(0,strlen(op[i]),op[i])==0){other=true;}}
-        for (int i=0;i<3;i++){
-          const size_t n=strlen(fw[i]);
-          if (wd[j].compare(0,n,fw[i])==0){other=true;}
-          if (wd[j].size()>n){
-            const string q=wd[j].substr(0,wd[j].size()-n);
-            if (wd[j].compare(wd[j].size()-n,n,fw[i])==0){
-              if (i>0){other=true;}                                       //(...feet, ...foot)
-              for (int k=0;k<9;k++){if (q==fq[k]){other=true;}}           //(usft, sft, ...)
-            }
-          }
-        }
-      }
-      { //an EPSG unit code of length (9001 is metre; 9002-9099 are other lengths, such as the feet 9002, 9003 and 9005, the
-        //kilometre 9036, the mile 9093; 9300-9302 the British feet, chain and link of 1922; 1025 is the millimetre, 1033 the
-        //centimetre), the German Fuss written with sharp s
-        //and the Portuguese pé(s)
-        string U=ut; for (size_t q=0;q<U.size();q++){U[q]=(char)toupper((unsigned char)U[q]);}
-        for (size_t q=U.find("EPSG");q!=string::npos;q=U.find("EPSG",q+4)){
-          size_t r=q+4; while ((r<U.size()) && ((U[r]==':') || (U[r]==' '))){r++;}
-          size_t s=r; while ((s<U.size()) && isdigit((unsigned char)U[s])){s++;}
-          const long code=(s>r)?atol(U.substr(r,s-r).c_str()):0;
-          if (code==9001){anyM=true;} else if (((code>=9002) && (code<=9099)) || ((code>=9300) && (code<=9302)) || (code==1025) || (code==1033)){other=true;}
-        }
-        if (U.find("FU\xC3\x9F")!=string::npos){other=true;}
-        const char *pe[]={"P\xC3\xA9","P\xC3\x89"};                    //(pé, PÉ: a word of its own, also as pés)
-        for (int k=0;k<2;k++){
-          for (size_t q=U.find(pe[k]);q!=string::npos;q=U.find(pe[k],q+1)){
-            size_t r=q+3; if ((r<U.size()) && (U[r]=='S')){r++;}
-            const bool before=(q==0) || (((unsigned char)U[q-1]<0x80) && !isalpha((unsigned char)U[q-1]));
-            const bool after=(r>=U.size()) || (((unsigned char)U[r]<0x80) && !isalpha((unsigned char)U[r]));
-            if (before && after){other=true;}
-          }
-        }
-      }
-      //(an empty unit is no unit; a text without a word, such as ' or ?, is a unit Raven does not know)
-      bool firstM=(ut.find_first_not_of(" \t\r\n")==string::npos);
-      for (int i=0;(i<5) && !wd.empty();i++){if ((wd[0]==mw[i]) && !glued[0]){firstM=true;}}
-      bool qual=false; for (int k=0;(k<4) && !wd.empty();k++){if (wd[0]==sq[k]){qual=true;}}
-      for (size_t j=0;(j<wd.size()) && (j<(qual?2u:1u)) && !anyM;j++){ //("in" first: inches unless a metre word follows, as in "in metres")
-        for (int i=0;i<6;i++){if (wd[j]==sw[i]){other=true;}}
-      }
-      const bool metre=firstM || (anyM && !other);
-      if (!metre && other){
+      //the band unit: the first unit expression of the text decides (GWGeoTIFF::BandUnit and its table): metres are read,
+      //another length unit stops the run, any other text (no unit, a scaled metre) gives a warning
+      const int bu=GWGeoTIFF::BandUnit(iu->second);
+      if (bu==2){
         err=F+"its elevations are in "+iu->second+" (the band unit, UNITTYPE in GDAL_METADATA); Raven reads elevations in metres: convert the values to metres (e.g. gdal_calc.py) and set the unit to metres (gdal_edit.py -units m)"; return false;
       }
-      if (!metre){
+      if (bu==0){
         R.notes+=string(R.notes.empty()?"":"\n")+"raster "+name+" has the band unit '"+iu->second+"' (UNITTYPE in GDAL_METADATA), which Raven does not know; its elevations are read as metres";
       }
     }
