@@ -59,10 +59,27 @@ namespace
     return w;
   }
   //the path of a file a MODFLOW input names (OPEN/CLOSE): as written when absolute (/..., \..., C:...), else relative to dir
-  string OCPath(const string &dir,const string &name)
+  bool IsAbsPath(const string &name){return !name.empty() && ((name[0]=='/') || (name[0]=='\\') || ((name.size()>1) && isalpha((unsigned char)name[0]) && (name[1]==':')));}
+  string OCPath(const string &dir,const string &name){return IsAbsPath(name)?name:dir+name;}
+  //a relative path that leaves its folder ("../x.wel", "a/../../x.wel")
+  bool LeavesFolder(const string &name)
   {
-    const bool abs=!name.empty() && ((name[0]=='/') || (name[0]=='\\') || ((name.size()>1) && isalpha((unsigned char)name[0]) && (name[1]==':')));
-    return abs?name:dir+name;
+    int depth=0; size_t i=0;
+    while (i<=name.size()){
+      size_t j=name.find_first_of("/\\",i); if (j==string::npos){j=name.size();}
+      const string c=name.substr(i,j-i);
+      if (c==".."){if (--depth<0){return true;}} else if (!c.empty() && (c!=".")){depth++;}
+      i=j+1;
+    }
+    return false;
+  }
+  bool FileExists(const string &f){ifstream I(f.c_str()); return (bool)I;}
+  //an existing file f inside folder d (both resolved, symbolic links too): its path relative to d, else ""
+  string RelativeInside(const string &f,const string &d)
+  {
+    if (!FileExists(f)){return "";}
+    const string a=gwutil::NormPath(f),b=gwutil::NormPath(d);
+    return ((a.size()>b.size()+1) && (a.compare(0,b.size(),b)==0) && (a[b.size()]=='/'))?a.substr(b.size()+1):string("");
   }
   string DirOf(const string &f){size_t p=f.find_last_of("/\\"); return (p==string::npos)?string("./"):f.substr(0,p+1);}
   //the lines of a MODFLOW 6 input file as MODFLOW reads its blocks: every reader of the model's text files goes through
@@ -79,6 +96,7 @@ namespace
   {
     vector<string> out; ifstream I(file.c_str()); string line,block; bool first=false; int ln=0;
     const string lab=label.empty()?file:label;
+    ExitGracefullyIf(!I,("CGroundwaterModel: cannot open the MODFLOW 6 file "+lab).c_str(),BAD_DATA);
     if (where!=NULL){where->clear();}
     while (getline(I,line)){
       ln++;
@@ -222,7 +240,7 @@ void CGroundwaterModel::ExtReadSimulation()
 {
   { ifstream S(_extSim.c_str());
     ExitGracefullyIf(!S,("CGroundwaterModel: cannot open MODFLOW 6 simulation file "+_extSim).c_str(),BAD_DATA); }
-  string line,block,tdis; vector<string> mnam,mname; int nsol=0; _extNModels=0;
+  string line,block,tdis; vector<string> mnam,mname,mall,exg; int nsol=0; _extNModels=0;
   const vector<string> SL=BlockLines(_extSim,DirOf(_extSim)); //(OPEN/CLOSE files of its blocks read in place, as MODFLOW reads them)
   for (size_t il=0;il<SL.size();il++){
     line=SL[il];
@@ -231,29 +249,36 @@ void CGroundwaterModel::ExtReadSimulation()
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
     if (W0=="END"){block=""; continue;}
     if ((block=="TIMING") && (W0=="TDIS6") && (w.size()>1)){tdis=w[1];}
-    if ((block=="MODELS") && (w.size()>2)){_extNModels++;}
+    if ((block=="MODELS") && (w.size()>2)){_extNModels++; mall.push_back(w[2]+" ("+W0+")");}
+    if ((block=="EXCHANGES") && (w.size()>1)){exg.push_back(w[0]+" "+w[1]);}
     if ((block=="MODELS") && (W0=="GWF6") && (w.size()>2)){mnam.push_back(w[1]); mname.push_back(w[2]);}
     if ((block=="SOLUTIONGROUP") && (W0!="MXITER") && (W0.size()>1) && (W0[W0.size()-1]=='6')){nsol++;} //IMS6, EMS6, ...
   }
   ExitGracefullyIf(tdis=="","CGroundwaterModel: no TDIS6 entry in the MODFLOW 6 simulation file",BAD_DATA);
   ExitGracefullyIf(mnam.empty(),"CGroundwaterModel: no GWF6 model in the MODFLOW 6 simulation file",BAD_DATA);
+  //Raven couples one MODFLOW model: water that crosses an exchange to another model, a mover or time series of another
+  //model would lie outside Raven's books and its restart rules
+  if ((_extNModels>1) || !exg.empty()){
+    string ms,es; for (size_t i=0;i<mall.size();i++){ms+=(i?", ":"")+mall[i];} for (size_t i=0;i<exg.size();i++){es+=(i?", ":"")+exg[i];}
+    ExitGracefully(("CGroundwaterModel: the MODFLOW 6 simulation "+_extSim+" holds "+((_extNModels>1)?to_string(_extNModels)+" models ("+ms+")":string("one model"))+
+      (exg.empty()?string(""):" and "+to_string(exg.size())+" exchange"+((exg.size()>1)?"s":"")+" ("+es+")")+
+      "; Raven couples one MODFLOW 6 groundwater-flow model and books only that model's water, so the flow across an exchange would be outside "
+      "Raven's balance. Couple a simulation that holds the one GWF model alone, with no EXCHANGES rows").c_str(),BAD_DATA);
+  }
   //Raven drives one solution (SLN_1): a second solution (e.g. a transport model) would not be solved
   ExitGracefullyIf(nsol>1,"CGroundwaterModel: the MODFLOW 6 simulation has more than one solution (e.g. a GWT or GWE model with its own IMS); "
     "only simulations with a single groundwater-flow solution can be coupled at present",BAD_DATA);
   int im=-1;
-  if (_extModel==""){
-    ExitGracefullyIf(mnam.size()>1,"CGroundwaterModel: the simulation holds several GWF models; name the one to couple with :MF6Model",BAD_DATA);
-    im=0;
-  }
+  if (_extModel==""){im=0;}
   else {for (size_t i=0;i<mname.size();i++){if (Upper(mname[i])==Upper(_extModel)){im=(int)i;}}}
   ExitGracefullyIf(im<0,("CGroundwaterModel: :MF6Model "+_extModel+" is not a GWF model of the simulation").c_str(),BAD_DATA);
   _extTdisFile=tdis; _extNamFile=mnam[im]; _mname=Upper(mname[im]);
 
   string dir=DirOf(_extSim);
-  { ifstream N((dir+_extNamFile).c_str());
-    ExitGracefullyIf(!N,("CGroundwaterModel: cannot open the model name file "+dir+_extNamFile).c_str(),BAD_DATA); }
+  { ifstream N(OCPath(dir,_extNamFile).c_str());
+    ExitGracefullyIf(!N,("CGroundwaterModel: cannot open the model name file "+OCPath(dir,_extNamFile)).c_str(),BAD_DATA); }
   _extPkgs.clear(); block=""; map<string,int> count;
-  const vector<string> NL=BlockLines(dir+_extNamFile,dir); //(the package rows of an OPEN/CLOSE file in the PACKAGES block too)
+  const vector<string> NL=BlockLines(OCPath(dir,_extNamFile),dir); //(the package rows of an OPEN/CLOSE file in the PACKAGES block too)
   for (size_t il=0;il<NL.size();il++){
     line=NL[il];
     vector<string> w=Words(line,block=="PACKAGES"); if (w.empty()){continue;}
@@ -261,7 +286,7 @@ void CGroundwaterModel::ExtReadSimulation()
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
     if (W0=="END"){block=""; continue;}
     if ((block=="PACKAGES") && (w.size()>=2)){
-      gw_ext_pkg P; P.ftype=W0; P.fname=w[1]; P.named=(w.size()>=3);
+      gw_ext_pkg P; P.ftype=W0; P.fname=P.forig=w[1]; P.named=(w.size()>=3);
       string base=W0.substr(0,W0.size()-1); //without the trailing 6
       const int c=++count[base]; //(the row's place among all rows of its type, named or not, as MODFLOW 6 numbers them)
       if (P.named){P.pname=Upper(w[2]);}
@@ -451,6 +476,81 @@ long long CGroundwaterModel::CivilDays(const string &date)
   return era*146097+doe-719468;
 }
 //////////////////////////////////////////////////////////////////
+/// \brief package files the model name file names outside the simulation folder (an absolute path, or a relative path
+///  that leaves the folder) are copied into the working copy and their rows renamed there (ExtEditNameFile), so that
+///  Raven reads, checks and rewrites them as it does the others, at any start; MODFLOW reads the same text (relative names
+///  inside a file are relative to the simulation folder either way). A named package file that does not exist stops the
+///  run. The TDIS file and the model name file, which Raven rewrites, must lie in the simulation folder
+//
+void CGroundwaterModel::ExtLocalizeFiles()
+{
+  const string sd=DirOf(_extSim); _extLocal=0;
+  { const string nm[2]={_extTdisFile,_extNamFile}; const char *what[2]={"TDIS file","model name file"};
+    for (int k=0;k<2;k++){
+      ExitGracefullyIf(IsAbsPath(nm[k]) || LeavesFolder(nm[k]) || !FileExists(_mf6dir+"/"+nm[k]),("CGroundwaterModel: "+_extSim+" names the "+what[k]+" "+nm[k]+
+        ", which is not in the simulation folder "+sd+"; Raven rewrites this file in its working copy of that folder: keep the file in the folder and name it there "
+        "by a relative path").c_str(),BAD_DATA);
+    }
+  }
+  for (size_t i=0;i<_extPkgs.size();i++){
+    gw_ext_pkg &P=_extPkgs[i];
+    if (find(_takeOver.begin(),_takeOver.end(),P.pname)!=_takeOver.end()){continue;} //(its row is removed)
+    const string o=OCPath(sd,P.fname);
+    ExitGracefullyIf(!FileExists(o),("CGroundwaterModel: the model name file "+_extNamFile+" names the "+P.ftype+" file "+o+" ("+P.pname+"), which does not exist").c_str(),BAD_DATA);
+    string rel=(!IsAbsPath(P.fname) && !LeavesFolder(P.fname))?P.fname:RelativeInside(o,sd); //(an absolute path inside the folder: its relative name)
+    if (!rel.empty()){
+      //(a folder that holds Raven's output folder is left out of the working copy: CopyTree)
+      ExitGracefullyIf(!FileExists(_mf6dir+"/"+rel),("CGroundwaterModel: the "+P.ftype+" file "+o+" ("+P.pname+") lies in a folder of the simulation that holds Raven's "
+        "output folder "+_mf6dir+", and Raven leaves that folder out of its working copy of the simulation: give Raven an output folder (-o) outside the "
+        "simulation's folders").c_str(),BAD_DATA);
+      P.fname=rel; continue;
+    }
+    string b=P.fname.substr(P.fname.find_last_of("/\\")==string::npos?0:P.fname.find_last_of("/\\")+1);
+    for (size_t j=0;j<b.size();j++){if (!isalnum((unsigned char)b[j]) && (b[j]!='.') && (b[j]!='_') && (b[j]!='-')){b[j]='_';}}
+    const string local="raven_copy_"+to_string(i+1)+"_"+b;
+    ExitGracefullyIf(!CopyFileBytes(o,_mf6dir+"/"+local),("CGroundwaterModel: could not copy "+o+" into the working copy "+_mf6dir).c_str(),BAD_DATA);
+    P.fname=local; _extLocal++;
+  }
+}
+
+//////////////////////////////////////////////////////////////////
+/// \brief a restart (hotstart heads, :GWHeads) carries only the heads: a kept package that carries its own state from
+///  step to step would start again from its input, so the restarted run would not continue the earlier one. These are,
+///  in MODFLOW 6.8.1 (the packages whose advance routine keeps values of the previous step): LAK (lake stages), MAW (well
+///  heads), UZF (unsaturated-zone water content), CSUB (stresses, preconsolidation stresses, delay-bed heads) and SFR with
+///  the STORAGE option (reach stages and flows); such a restart stops
+//
+void CGroundwaterModel::ExtRestartState()
+{
+  if (_hotHeads.empty()){return;}
+  string held;
+  for (size_t i=0;i<_extPkgs.size();i++){
+    const gw_ext_pkg &P=_extPkgs[i];
+    if (find(_takeOver.begin(),_takeOver.end(),P.pname)!=_takeOver.end()){continue;}
+    string st;
+    if      (P.ftype=="LAK6") {st="lake stages";}
+    else if (P.ftype=="MAW6") {st="well heads";}
+    else if (P.ftype=="UZF6") {st="unsaturated-zone water content";}
+    else if (P.ftype=="CSUB6"){st="stresses and preconsolidation stresses";}
+    else if (P.ftype=="SFR6"){
+      const vector<string> OL=BlockLines(_mf6dir+"/"+P.fname,_mf6dir+"/"," OPTIONS "); string b;
+      for (size_t il=0;il<OL.size();il++){
+        vector<string> w=Words(OL[il]); if (w.empty()){continue;}
+        const string W0=Upper(w[0]);
+        if ((W0=="BEGIN") && (w.size()>1)){b=Upper(w[1]); continue;}
+        if (W0=="END"){b=""; continue;}
+        if ((b=="OPTIONS") && (W0=="STORAGE")){st="reach stages and flows (STORAGE)";}
+      }
+    }
+    if (!st.empty()){held+=(held.empty()?"":", ")+P.ftype+" package "+P.pname+" ("+st+")";}
+  }
+  ExitGracefullyIf(!held.empty(),("CGroundwaterModel: the run starts the MODFLOW 6 model from the heads of :GWHeads (a hotstart), which set only the heads, "
+    "and the model keeps the "+held+", which carries its own state from step to step and would start from its own input, not from the state that goes with "
+    "these heads. Remove :GWHeads from the .rvc file (every package then starts from its input), or, to continue an earlier run, simulate the whole period "
+    "in one run").c_str(),BAD_DATA);
+}
+
+//////////////////////////////////////////////////////////////////
 /// \brief restart inside the model period: the first _extDrop stress periods are gone, so every kept package's
 ///  PERIOD blocks are renumbered; the new first period takes the block in effect at Raven's start
 //
@@ -460,27 +560,33 @@ void CGroundwaterModel::ExtRenumberPeriods()
   const char *latest[12]={"WEL6","RIV6","GHB6","CHD6","DRN6","RCH6","EVT6","STO6","OC6","RCHA6","EVTA6","MVR6"};
   //advanced packages: a period block changes only the settings it names, the others carry on (like arrays)
   const char *accum[4]={"SFR6","LAK6","MAW6","UZF6"};
-  //only the coupled model's packages are renumbered: other models' period data would stay on the old numbers
-  ExitGracefullyIf((_extDrop>0) && (_extNModels>1),"CGroundwaterModel: Raven starts after the model's time zero, which renumbers the stress periods, "
-    "but the simulation holds several models; start Raven at :MF6StartDate",BAD_DATA);
-  set<string> tsDone; _extTSShifted=0; //time-series files already shifted (a file may serve several packages)
+  //a file may serve several packages (and be named in several ways): each file and each time-series file, by its resolved
+  //path, is read as it was and rewritten once, while every package that names it is checked
+  set<string> tsDone,written; _extTSShifted=0;
+  map<string,vector<string> > orig;
   for (size_t i=0;i<_extPkgs.size();i++){
     const gw_ext_pkg &P=_extPkgs[i];
     if (find(_takeOver.begin(),_takeOver.end(),P.pname)!=_takeOver.end()){continue;}
-    string f=_mf6dir+"/"+P.fname;
-    ifstream I(f.c_str()); if (!I){continue;}
-    vector<string> pre,tsFiles; map<int,vector<string> > blk; string line; int k=-1; bool arrays=false,ts=false,tv=false;
-    while (getline(I,line)){
+    string f=_mf6dir+"/"+P.fname; //(every package file is in the working copy: ExtLocalizeFiles)
+    const string key=gwutil::NormPath(f);
+    if (!orig.count(key)){
+      ifstream I(f.c_str());
+      ExitGracefullyIf(!I,("CGroundwaterModel: cannot open the package file "+f+" ("+P.pname+")").c_str(),BAD_DATA);
+      string l; vector<string> &L=orig[key]; while (getline(I,l)){L.push_back(l);}
+    }
+    vector<string> &raw=orig[key];
+    vector<string> pre,tsFiles; map<int,vector<string> > blk; string line; int k=-1; bool arrays=false,ts=false,tv=false,retarget=false;
+    for (size_t il=0;il<raw.size();il++){
+      line=raw[il];
       vector<string> w=Words(line); string W0=w.empty()?"":Upper(w[0]);
       if ((W0=="BEGIN") && (w.size()>2) && (Upper(w[1])=="PERIOD")){
-        ExitGracefullyIf(!MF6Int(w[2],k) || (k<1),("CGroundwaterModel: the period number of a BEGIN PERIOD line in "+DirOf(_extSim)+P.fname+" is '"+w[2]+"', not a whole number of at least 1").c_str(),BAD_DATA);
+        ExitGracefullyIf(!MF6Int(w[2],k) || (k<1),("CGroundwaterModel: the period number of a BEGIN PERIOD line in "+OCPath(DirOf(_extSim),P.forig)+" is '"+w[2]+"', not a whole number of at least 1").c_str(),BAD_DATA);
         blk[k].clear(); continue;
       }
       if ((k>=0) && (W0=="END")){k=-1; continue;}
       if (k>=0){blk[k].push_back(line); continue;}
       pre.push_back(line); //(the lines outside the PERIOD blocks are written back as they are: an OPEN/CLOSE line stays valid)
     }
-    I.close();
     { //the package's options as MODFLOW reads them (also from an OPEN/CLOSE file of the OPTIONS block)
       const vector<string> OL=BlockLines(f,_mf6dir+"/"," OPTIONS "); string b;
       for (size_t il=0;il<OL.size();il++){
@@ -498,13 +604,38 @@ void CGroundwaterModel::ExtRenumberPeriods()
     //time series count from the model's time zero: any later start shifts them, even if no period is dropped. TS6 files are
     //shifted (ExtShiftTimeSeries); time-array series (TAS6) are not
     ExitGracefullyIf(ts,("CGroundwaterModel: "+P.pname+" uses time-array series (TAS6), whose times count from the model's time zero; start Raven at :MF6StartDate").c_str(),BAD_DATA);
-    if (!tsFiles.empty()){
-      ExitGracefullyIf(_extNModels>1,("CGroundwaterModel: "+P.pname+" uses time series, whose times count from the model's time zero, and the simulation holds "
-        "several models (whose series Raven would not shift); start Raven at :MF6StartDate").c_str(),BAD_DATA);
-      for (size_t j=0;j<tsFiles.size();j++){if (tsDone.insert(tsFiles[j]).second){ExtShiftTimeSeries(tsFiles[j]);}}
+    //time-varying K or storage (TVK6/TVS6): their period data and time series count from the model's time zero and Raven does
+    //not rewrite them, so any later start stops
+    ExitGracefullyIf(tv,("CGroundwaterModel: "+P.pname+" uses time-varying properties (TVK6/TVS6), whose period data and time series count from the model's "
+      "time zero; Raven does not shift them, so it cannot start after the model's time zero: start Raven at :MF6StartDate").c_str(),BAD_DATA);
+    for (size_t j=0;j<tsFiles.size();j++){ //(a series is shifted in the working copy: its file must lie in the simulation folder)
+      string tf=tsFiles[j];
+      if (IsAbsPath(tf) || LeavesFolder(tf)){ //(a path that leads into the simulation folder is named there relative to it, in the package file)
+        const string rel=RelativeInside(OCPath(DirOf(_extSim),tf),DirOf(_extSim));
+        ExitGracefullyIf(rel.empty() || !FileExists(_mf6dir+"/"+rel),("CGroundwaterModel: "+P.pname+" names the time-series file "+tf+" outside the simulation "
+          "folder; on a start after the model's time zero Raven shifts the series in its working copy of that folder: keep the file in the folder, or start Raven "
+          "at :MF6StartDate").c_str(),BAD_DATA);
+        bool found=false;
+        for (size_t il=0;il<raw.size();il++){
+          vector<string> w=Words(raw[il]);
+          if ((w.size()>2) && (Upper(w[0])=="TS6") && (Upper(w[1])=="FILEIN") && (w[2]==tf)){
+            const string nl="  TS6  FILEIN  "+rel+"   # "+tf+" named relative to the simulation folder";
+            for (size_t q=0;q<pre.size();q++){if (pre[q]==raw[il]){pre[q]=nl;}}
+            raw[il]=nl; found=true;
+          }
+        }
+        ExitGracefullyIf(!found,("CGroundwaterModel: "+P.pname+" names the time-series file "+tf+" by a path Raven cannot rewrite (in an OPEN/CLOSE file of its OPTIONS); "
+          "on a start after the model's time zero Raven shifts the series in its working copy: name the file relative to the simulation folder, or start Raven at "
+          ":MF6StartDate").c_str(),BAD_DATA);
+        tf=rel; retarget=true;
+      }
+      if (tsDone.insert(gwutil::NormPath(_mf6dir+"/"+tf)).second){ExtShiftTimeSeries(tf);}
+    }
+    if (retarget && (_extDrop==0) && written.insert(key).second){ //(only the TS6 line changes)
+      ofstream O(f.c_str()); ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+f).c_str(),BAD_DATA);
+      for (size_t il=0;il<raw.size();il++){O<<raw[il]<<"\n";}
     }
     if (_extDrop==0){continue;} //start inside the first period: period numbers are unchanged
-    ExitGracefullyIf(tv,("CGroundwaterModel: "+P.pname+" uses time-varying properties (TVK6/TVS6), whose period data cannot be renumbered safely; start Raven at :MF6StartDate").c_str(),BAD_DATA);
     if (blk.empty()){continue;}
     bool ok=false; for (int j=0;j<12;j++){if (P.ftype==latest[j]){ok=true;}}
     if ((P.ftype=="RCHA6") || (P.ftype=="EVTA6")){arrays=true;} //array-based by type
@@ -519,6 +650,7 @@ void CGroundwaterModel::ExtRenumberPeriods()
     int first=-1; for (map<int,vector<string> >::iterator it=blk.begin();it!=blk.end();it++){if (it->first<=_extDrop+1){first=it->first;}} //in effect at the start
     if (first>0){nb[1]=blk[first];}
     for (map<int,vector<string> >::iterator it=blk.begin();it!=blk.end();it++){if (it->first>_extDrop+1){nb[it->first-_extDrop]=it->second;}}
+    if (!written.insert(key).second){continue;} //(rewritten for an earlier package that names the same file)
     ofstream O(f.c_str());
     ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+f).c_str(),BAD_DATA);
     for (size_t j=0;j<pre.size();j++){O<<pre[j]<<"\n";}
@@ -624,12 +756,12 @@ void CGroundwaterModel::ExtWriteSimFile()
 //
 void CGroundwaterModel::ExtEditMover()
 {
-  string fn;
-  for (size_t i=0;i<_extPkgs.size();i++){if (Upper(_extPkgs[i].ftype).find("MVR")==0){fn=_extPkgs[i].fname;}}
+  string fn,fu;
+  for (size_t i=0;i<_extPkgs.size();i++){if (Upper(_extPkgs[i].ftype).find("MVR")==0){fn=_extPkgs[i].fname; fu=OCPath(DirOf(_extSim),_extPkgs[i].forig);}}
   if (fn==""){return;}
   string f=_mf6dir+"/"+fn;
   { ifstream I(f.c_str()); ExitGracefullyIf(!I,("CGroundwaterModel: cannot read the copied water mover file "+f).c_str(),BAD_DATA); }
-  vector<string> L=BlockLines(f,_mf6dir+"/","",NULL,DirOf(_extSim)+fn); string block; //(every block as MODFLOW reads it: PACKAGES and PERIOD rows of OPEN/CLOSE files in place)
+  vector<string> L=BlockLines(f,_mf6dir+"/","",NULL,fu); string block; //(every block as MODFLOW reads it: PACKAGES and PERIOD rows of OPEN/CLOSE files in place)
   for (size_t i=0;i<L.size();i++){if (!L[i].empty() && (L[i][L[i].size()-1]=='\r')){L[i].erase(L[i].size()-1);}} //(a rewritten copy has LF line ends: no carriage
                                                                                   // return is left inside a line Raven comments out or annotates)
   set<string> tk(_takeOver.begin(),_takeOver.end());
@@ -705,6 +837,14 @@ void CGroundwaterModel::ExtEditNameFile(const bool addRaven)
       if (tk){ //(the row's carriage return, in a file with CRLF line ends, stays at the end of the line)
         const bool cr=!L[i].empty() && (L[i][L[i].size()-1]=='\r');
         O<<"# "<<(cr?L[i].substr(0,L[i].size()-1):L[i])<<"   # taken over by Raven"<<(cr?"\r":"")<<"\n"; continue;
+      }
+      { //a package file named outside the simulation folder: the row names Raven's copy (ExtLocalizeFiles), and the package's name
+        size_t j=0; for (j=0;j<_extPkgs.size();j++){if (!used[j] && (_extPkgs[j].forig==w[1]) && (_extPkgs[j].fname!=w[1]) && (_extPkgs[j].ftype==Upper(w[0]))){break;}}
+        if (j<_extPkgs.size()){
+          used[j]=true;
+          O<<"  "<<w[0]<<"  "<<_extPkgs[j].fname<<"  "<<_extPkgs[j].pname<<"   # "<<((_extPkgs[j].fname.compare(0,11,"raven_copy_")==0)?"Raven's copy of "+w[1]+
+             ", which lies outside the simulation folder":w[1]+" named relative to the simulation folder")<<"\n"; continue;
+        }
       }
       if (addRaven && (_hotHeads.size()>0) && (Upper(w[0])=="IC6")){O<<"  IC6  raven.ic  "<<((w.size()>=3)?w[2]:string("IC"))<<"   # hotstart heads from Raven\n"; continue;}
       if (w.size()==2){ //an unnamed package of a type the model may hold several of: its name written into the row, so that
@@ -1113,6 +1253,8 @@ void CGroundwaterModel::ExtBuild(const optStruct &Options)
   ExitGracefullyIf(dr<dm,("CGroundwaterModel: Raven's :StartDate "+t0.date_string+" is before the model's time zero (:MF6StartDate "+_extStart+")").c_str(),BAD_DATA);
   //[d] Raven starts this long after the model's time zero (a restart), including a time of day in :StartDate
   _extOffset=(double)(dr-dm)+(Options.julian_start_day-floor(Options.julian_start_day));
+  ExtLocalizeFiles();
+  ExtRestartState();
   ExtWriteSimFile();
   ExtRewriteTDIS(Options);
   ExtEditMover();

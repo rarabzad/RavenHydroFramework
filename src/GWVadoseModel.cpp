@@ -49,10 +49,10 @@ void CGroundwaterModel::VZSetup()
                          "of the unsaturated columns); give every aquifer class the columns pass through a positive POROSITY").c_str(),BAD_DATA);
         if (!C.unsatGiven && !warned[P.layers[l].iclass]){warned[P.layers[l].iclass]=1; noUnsat+=(noUnsat==""?"":", ")+C.name;}
       }
-      if (_vzMode!=2){ //Sy against the drainable porosity of the retention curve 1 m above the water table (soil_zone_columns_plan.md
+      if (_vzMode!=2){ //Sy against the drainable porosity of the retention curve 1 m above the water table (design note, section
         //1.5): a rising water table releases the column's water above equilibrium to MODFLOW, which stores it with Sy; with Sy
         //much smaller each step's rise releases more than the last (a feedback that stops only at the soil-zone base).
-        //(KINEMATIC: its reference is ths - Sy, a rise releases at most Sy dh; the warning is meaningless)
+        //(KINEMATIC: its reference is ths - Sy, so this comparison does not apply)
         const double dp=m.ths-gwvz::Theta(m,-1.0);
         if ((m.Sy>2.0*dp) || (m.Sy<0.5*dp)){
           if (m.Sy<0.5*dp){_vzSyLow=true;}
@@ -451,8 +451,9 @@ void CGroundwaterModel::VZStep(const double &tstep)
           if (zt>col.zbot+1e-9){ //a rising water table (to the base: the column goes)
             const double z0=col.zbot;
             const int tn=TopNode(L.ic); const double ztc=CellTop(tn/_ncpl,L.ic);
-            const double capS=min(gwvz::SyRise(S,z0,zt),gwvz::SyRise(S,h,min(zb,ztc))); //[m] Sy dh across the layers the rise crosses, and the
-                                                                                 // room the top cell has left above the water table (manual, sec:szvadose)
+            const double syDh=gwvz::SyRise(S,z0,zt),room=gwvz::SyRise(S,h,min(zb,ztc)); //[m] Sy dh across the layers the rise crosses, and the
+            const double capS=min(syDh,room);                                    // room the top cell has left above the water table (manual,
+            const bool roomBinds=(room<syDh);                                    // sec:szvadose): the release limit is the smaller
             gwvz::vz_column t=col; const double abT=gwvz::MoveBottom(t,S,zt,_vzN);
             const double capU=_szxUpCHD[e]?1e300:(SZUpCap(e,tstep)-used)*tstep/Ac; //[m] a deficit below it (a column dried by evaporation or
             if ((zt<zb) && (abT>capS*(1.0+1e-9))){                               // capillary rise) is filled out of the source cell, at most what
@@ -464,14 +465,23 @@ void CGroundwaterModel::VZStep(const double &tstep)
               }
               const double zn=(lo>col.ztop-0.01)?col.ztop:lo;                    //(a remainder thinner than 1 cm: the column goes)
               absQ=gwvz::MoveBottom(col,S,zn,_vzN)*Ac/tstep;
-              if ((_vzSlowed++==0) && (_vzMode!=2)){WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": a rising water table met more water above equilibrium in an unsaturated "
-                                               "column than MODFLOW stores for the rise; the column releases at most Sy dh per step (or the room left in the top cell) and the rest "
-                                               "in the next steps. This is expected while water is in transit in the column ("+string((_vzMode==3)?"the LAG store":"a wetting front")+")"+
-                                               (_vzSyLow?string("; here a specific yield below the drainable porosity (the warning above) adds to it"):string("")),false);}
-              else if ((_vzSlowed==1) && (_vzMode==2)){ //(KINEMATIC: the mobile water below the new water table is never more than Sy dh,
-                                                        // so only the room left in the top cell holds it back)
-                WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": a rising water table met more mobile water in an unsaturated column than the "
-                             "room left in the top cell above the water table; the column releases at most that room per step and the rest in the next steps",false);
+              //the warning (once a run) names the limit that bound. KINEMATIC: with one material in the column its mobile water below
+              //the new water table is never more than Sy dh, so only the room can bind; where the column crosses aquifer classes a node
+              //straddling a boundary carries the upper class's mobile water below it, and Sy dh can bind too
+              if (_vzSlowed++==0){
+                const string wat=(_vzMode==2)?"mobile water":"water above equilibrium";
+                if (roomBinds){
+                  WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": a rising water table met more "+wat+" in an unsaturated column than the room left in "
+                               "the top cell above the water table (less than what MODFLOW stores for the rise, Sy dh); the column releases at most that room per step and "
+                               "the rest in the next steps"+((_vzSyLow && (_vzMode!=2))?string("; here a specific yield below the drainable porosity (the warning above) adds to it"):string("")),false);
+                }
+                else {
+                  WriteWarning("CGroundwaterModel: :SoilZoneVadose "+VZName()+": a rising water table met more "+wat+" in an unsaturated column than MODFLOW stores "
+                               "for the rise (Sy dh); the column releases at most Sy dh per step and the rest in the next steps"+
+                               ((_vzMode==2)?string(" (with KINEMATIC this happens where a column crosses aquifer classes of different specific yield)"):
+                                "; this is expected while water is in transit in the column ("+string((_vzMode==3)?"the LAG store":"a wetting front")+")"+
+                                (_vzSyLow?string("; here a specific yield below the drainable porosity (the warning above) adds to it"):string(""))),false);
+                }
               }
             }
             else if ((abT<0.0) && (-abT>capU)){                                  //(the bottom then follows more slowly; the column stays)
@@ -483,9 +493,13 @@ void CGroundwaterModel::VZStep(const double &tstep)
               }
               absQ=(lo>z0+1e-9)?gwvz::MoveBottom(col,S,lo,_vzN)*Ac/tstep:0.0;
             }
-            else if ((zt>=zb) && (abT>capS*(1.0+1e-9))){                       //(rule (ii): a column that vanishes releases at most Sy dh to
-              col=t; absQ=capS*Ac/tstep; _vzBackW[e]+=(abT-capS)*Ac;             // the aquifer; the rest of its water goes back to the soil zone,
-            }                                                                    // as rejected recharge)
+            else if ((zt>=zb) && (abT>capS*(1.0+1e-9))){                       //(rule (ii): a column that vanishes releases to the aquifer at
+              col=t; absQ=capS*Ac/tstep; _vzBackW[e]+=(abT-capS)*Ac;             // most the smaller of Sy dh and the room the top cell has left,
+            }                                                                    // which is at most Sy Lmin, or none once the head has reached
+                                                                                 // the base or the cell top; the rest of its water, usually nearly
+                                                                                 // all of it, goes back to the soil zone as rejected recharge (booked
+                                                                                 // in GWBudget.csv; an expected event where the water table rises
+                                                                                 // into the soil zone, so no warning)
             else {col=t; absQ=abT*Ac/tstep;}
           }
           else if (zt<col.zbot-1e-9){ //a falling water table: the new nodes start at equilibrium, the water they take comes out of the

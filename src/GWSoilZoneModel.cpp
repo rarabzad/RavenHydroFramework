@@ -651,7 +651,7 @@ void CGroundwaterModel::SZRecharge(const double &tstep,const bool write)
       const int e=_linkSzx[li];
       if ((_vzMode>0) && (e>=0) && (e<(int)_vzRl.size())){
         _vzRl[e]=V/tstep*share;                                                  //(for SZRejRate)
-        if (_vzBackW[e]>0.0){rej+=_vzBackW[e]; _vzBackWV+=_vzBackW[e];}          //rule (ii): water of vanished columns beyond Sy dh, back to the soil zone
+        if (_vzBackW[e]>0.0){rej+=_vzBackW[e]; _vzBackWV+=_vzBackW[e];}          //rule (ii): water of vanished columns beyond their release limit, back to the soil zone
         _Qcol[L.ic]+=_vzPass[e];                                                 //(a negative recharge share passed on to the cell)
       }
       if ((_vzMode>0) && (e>=0) && (e<(int)_vzUse.size())){

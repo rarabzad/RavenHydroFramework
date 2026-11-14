@@ -138,7 +138,8 @@ private:/*----------------------------------------------------*/
   vector<int> _topNode;                ///< per column: user node of the top active cell (empty: layer 1)
   int    _disType;
   //-- existing MODFLOW 6 model (see GWExternal.cpp)
-  struct gw_ext_pkg { string ftype,fname,pname; bool named; };  ///< name-file row: file type, file, package name (named: given in the row)
+  struct gw_ext_pkg { string ftype,fname,pname,forig; bool named; };  ///< name-file row: file type, file (in the working copy), package name (named:
+                                                                      ///< given in the row), file as the row names it
   vector<double> _extKv,_extSy;   ///< existing model: vertical conductivity [m/d] and specific yield of every user node (soil zone)
   struct gw_ow      { long long hru; int cell; double w; };  ///< :OverlapWeights row: HRU ID, cell (1..NCPL), A_overlap/A_cell
   string _extSim,_extModel,_extGridFile,_extGridID,_extStart;   ///< .rvg inputs
@@ -280,7 +281,10 @@ private:/*----------------------------------------------------*/
   void   ExtEditMover     ();
   void   ExtShiftTimeSeries(const string &name);
   int    _extTSShifted;    ///< time-series files shifted to Raven's later start
+  int    _extLocal;        ///< package files named outside the simulation folder, copied into the working copy
   void   ExtRenumberPeriods();
+  void   ExtLocalizeFiles ();
+  void   ExtRestartState  ();
   void   ExtWriteSimFile   ();
   void   ExtUpdateCHDTop   ();
   void   ExtCheckGridFile  ();
@@ -481,7 +485,7 @@ private:/*----------------------------------------------------*/
   vector<double>         _vzcRq;         ///< per class column: rate of its outputs on the unsaturated share, _vzcOut/(1-F0_c)/dt [m3/d]
   vector<double>         _vzAbsN;        ///< per SZX entry: water the moving bottoms of its columns took from the source cell this step [m3/d] (>= 0)
   vector<double>         _vzQN;          ///< per SZX entry: upflow through the bottoms of its columns this step [m3/d] (>= 0)
-  vector<double>         _vzBackW;       ///< per SZX entry: water of its vanished columns beyond Sy dh, given back to the soil zone this step [m3] (rule (ii))
+  vector<double>         _vzBackW;       ///< per SZX entry: water of its vanished columns beyond their release limit, given back to the soil zone this step [m3] (rule (ii))
   vector<double>         _vzPass;        ///< per SZX entry: negative recharge share of its columns passed on to the cell this step [m3/d] (never into a column)
   vector<double>         _vzRl;          ///< per SZX entry: its recharge share this step, V share / dt [m3/d] (SZRecharge; for SZRejRate)
   double                 _vzBackV,_vzBackWV; ///< this step, all entries: column outputs handed back on newly saturated ground (rule (i)) and _vzBackW [m3]
@@ -498,7 +502,8 @@ private:/*----------------------------------------------------*/
   vector<double>         _vzFp;          ///< per SZX entry: saturated fraction the column's inflow used this step
   vector<double>         _vzInV,_vzCapV; ///< per SZX entry: inflow [m3] and capillary rise into the soil zone [m3] this step
   bool                   _vzSyLow;        ///< a column material has a specific yield below half its drainable porosity (VZSetup)
-  long                   _vzSlowed;       ///< steps in which a column's bottom followed a rising water table more slowly (released at most Sy dh)
+  long                   _vzSlowed;       ///< steps in which a column's bottom followed a rising water table more slowly (released at most its limit,
+                                          ///< the smaller of Sy dh and the room left in the top cell)
   vector<double>         _vzCapL;        ///< per SZX entry and soil-zone layer (bottom up, e*n+j): its fraction of _vzCapV
   vector<double>         _szxCapQ;       ///< per SZX entry: capillary rise from the water table into the soil zone this step [m3/d] (a fixed rate taken through SZQ_RAVEN)
   vector<int>            _szwStart;      ///< SZW_RAVEN: entries of SZX entry e are _szwStart[e].._szwStart[e+1]-1 (the active cells below its top cell)

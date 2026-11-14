@@ -69,7 +69,7 @@ bool CGWRaster::Read(const string &filename,string &err)
   if (IN.peek()==0xEF){char b[3]={0,0,0}; IN.read(b,3); if (!((unsigned char)b[1]==0xBB && (unsigned char)b[2]==0xBF)){IN.clear(); IN.seekg(0);}} //(a UTF-8 byte-order mark)
   bool center=false,xc=false,yc=false; string tok; double cs=-1,dx=-1,dy=-1; double ncols=0,nrows=0; int nkey=0;
   bool hasX=false,hasY=false; int seen[10]={0,0,0,0,0,0,0,0,0,0};
-  _nodata=-9999; _hasNodata=true; _ncols=_nrows=0;
+  _nodata=-9999; _hasNodata=false; _ncols=_nrows=0; //(no NODATA_value: every number is a value, as GDAL reads the grid)
   while (true)
   {
     streampos pos=IN.tellg();
@@ -138,6 +138,29 @@ bool CGWRaster::Read(const string &filename,string &err)
   if (IN && (tok.find_first_not_of(string("\x1a\0",2))!=string::npos)){
     ostringstream s; s<<"raster "<<filename<<" has more values than ncols*nrows ("<<_ncols<<" x "<<_nrows<<"; the next is '"<<tok<<"'): check ncols and nrows in its header";
     err=s.str();_ncols=0;return false;
+  }
+  if (!_hasNodata && (_nodata==-9999)){ //(no NODATA_value key: -9999 cells are values, as for GDAL; reported, as they often mark no data)
+    size_t c=0; for (size_t i=0;i<_v.size();i++){if (_v[i]==-9999.0){c++;}}
+    if (c>0){
+      ostringstream s; s<<"raster "<<filename<<" has no NODATA_value but holds "<<c<<((c==1)?" cell":" cells")<<" of -9999, a value that often marks missing data; "
+        "they are read as elevations. If they are no data, add the line NODATA_value -9999 to its header";
+      _note+=(_note.empty()?"":"\n")+s.str();
+    }
+  }
+  //GDAL's side file <file>.aux.xml, read as for a GeoTIFF (GWGeoTIFF::BandMeta): GDAL's ESRI ASCII driver takes its Scale,
+  //Offset and UnitType; it keeps the header's NODATA_value and takes no NoDataValue from the side file
+  { string pam,note,pnd; bool has=false,hasPnd=false; double sc=1.0,of=0.0;
+    if (!GWGeoTIFF::ReadSideFile(filename,pam,has,err)){_ncols=0; return false;}
+    if (!GWGeoTIFF::BandMeta("raster "+filename+": ","",has?&pam:NULL,filename+".aux.xml",_metres,_cmd,sc,of,hasPnd,pnd,note,err)){_ncols=0; return false;}
+    if (note!=""){_note+=(_note.empty()?"":"\n")+note;}
+    if ((sc!=1.0) || (of!=0.0)){ //(no-data cells become NaN, so that no scaled value is taken for NODATA)
+      for (size_t i=0;i<_v.size();i++){
+        double &v=_v[i];
+        if ((v!=v) || (_hasNodata && (fabs(v-_nodata)<=1e-6))){v=NAN; continue;}
+        v=v*sc+of; if (!std::isfinite(v)){v=NAN;}
+      }
+      _hasNodata=false; _nodata=0.0;
+    }
   }
   return true;
 }

@@ -150,16 +150,16 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     else if (!strcmp(s[0],":HRUGeometry"))
     {
       if (Len<2){GWImproperFormat(s,Options);}
-      else {pGW->SetHRUGeometry(CorrectForRelativePath(s[1],Options.rvg_filename),(Len>=3)?string(s[2]):string("HRU_ID"));}
+      else {GWMaxTokens(s,Len,3,Options); pGW->SetHRUGeometry(CorrectForRelativePath(s[1],Options.rvg_filename),(Len>=3)?string(s[2]):string("HRU_ID"));}
     }
     else if (!strcmp(s[0],":RiverGeometry"))
     {
       if (Len<2){GWImproperFormat(s,Options);}
-      else {pGW->SetRiverGeometry(CorrectForRelativePath(s[1],Options.rvg_filename),(Len>=3)?string(s[2]):string(""));}
+      else {GWMaxTokens(s,Len,3,Options); pGW->SetRiverGeometry(CorrectForRelativePath(s[1],Options.rvg_filename),(Len>=3)?string(s[2]):string(""));}
     }
     else if (!strcmp(s[0],":LandSurface") || !strcmp(s[0],":BedrockSurface"))
-    {/*:LandSurface [file] [METRES], :BedrockSurface [file] [METRES]: METRES confirms that the raster's elevations are in
-       metres whatever band unit text a GeoTIFF gives (a unit of another length still stops) */
+    {/*:LandSurface [file] [METRES], :BedrockSurface [file] [METRES]: METRES states that the raster's elevations are in
+       metres for a band unit text Raven cannot place (another length or a scaled metre still stops) */
       if (Len<2){GWImproperFormat(s,Options);}
       else {
         GWMaxTokens(s,Len,3,Options);
@@ -270,7 +270,7 @@ bool ParseGWFile(CModel*& pModel, const optStruct& Options)
     }
     else if (!strcmp(s[0],":GridFile"))
     {/*:GridFile [GeoJSON of cell polygons] {ID field (default CELL_ID)} */
-      if (Len<2){GWImproperFormat(s,Options);} else {pGW->SetGridFile(CorrectForRelativePath(s[1],Options.rvg_filename),(Len>=3)?s[2]:"CELL_ID");}
+      if (Len<2){GWImproperFormat(s,Options);} else {GWMaxTokens(s,Len,3,Options); pGW->SetGridFile(CorrectForRelativePath(s[1],Options.rvg_filename),(Len>=3)?s[2]:"CELL_ID");}
     }
     else if (!strcmp(s[0],":QuadtreeMaxLevel"))
     {/*:QuadtreeMaxLevel [halvings of the base cell size] (default: from the refinement sizes) */

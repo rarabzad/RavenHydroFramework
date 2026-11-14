@@ -45,11 +45,12 @@ class CGWRaster
 private:
   int _ncols,_nrows;
   double _xll,_yll,_dx,_dy,_nodata; ///< lower-left corner, cell width and height (equal in an ESRI ASCII grid), NODATA value
-  bool _hasNodata;            ///< a NODATA value is given (always for ESRI ASCII grids: -9999 by default)
+  bool _hasNodata;            ///< a NODATA value is given (an ESRI ASCII grid: its NODATA_value; without it every number is a value, as for GDAL)
   vector<double> _v;          ///< row-major, north row first
   const CGWCRS *_crs;         ///< projection of the raster's coordinates (NULL: longitude/latitude)
   string _cmd;                ///< the command and file name as the user wrote them (":LandSurface dem.tif")
-  bool _metres;               ///< the user confirmed metres (METRES after the file name): a GeoTIFF band unit Raven does not read as metres is accepted
+  bool _metres;               ///< METRES after the file name: a band unit text Raven cannot place (not a metre form, another length or a scaled
+                              ///< metre) is read as metres, with a warning naming it
   string _note;               ///< what the caller should report as a warning (set by Read)
   string _format;             ///< encoding of a GeoTIFF file
   bool Valid(int r,int c) const;

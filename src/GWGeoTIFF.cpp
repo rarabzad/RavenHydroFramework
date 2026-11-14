@@ -543,40 +543,6 @@ namespace
       case 9122: return "degree"; case 32767: return "user-defined"; default: return "code "+to_string((unsigned long long)u);
     }
   }
-  //the scale, offset and unit of band 1 in GDAL's metadata (tag 42112, XML; GDAL writes them as
-  //<Item name="SCALE" sample="0" role="scale">0.1</Item>): upper-case role (SCALE, OFFSET, UNITTYPE) -> text (entities
-  //decoded, blanks trimmed). As GDAL reads them, only items with such a role count: an item without one is ordinary
-  //band metadata
-  void GDALBandItems(const string &x,map<string,string> &items)
-  {
-    size_t p=0;
-    while ((p=x.find("<Item",p))!=string::npos){
-      size_t gt=x.find('>',p); if (gt==string::npos){break;}
-      const string head=x.substr(p,gt-p);
-      if (!head.empty() && (head[head.size()-1]=='/')){p=gt+1; continue;}     //(an empty item)
-      size_t end=x.find("</Item>",gt); if (end==string::npos){break;}
-      string body=x.substr(gt+1,end-gt-1); p=end+7;
-      string role,sample;
-      for (int k=0;k<2;k++){
-        const string a=(k==0)?" role=\"":" sample=\""; size_t q=head.find(a); if (q==string::npos){continue;}
-        q+=a.size(); size_t r=head.find('"',q); if (r!=string::npos){((k==0)?role:sample)=head.substr(q,r-q);}
-      }
-      if (sample!="0"){continue;}                                             //(dataset items and other bands)
-      for (size_t i=0;i<role.size();i++){role[i]=(char)toupper((unsigned char)role[i]);}
-      if ((role!="SCALE") && (role!="OFFSET") && (role!="UNITTYPE")){continue;} //(other band metadata)
-      const char *ent[5][2]={{"&lt;","<"},{"&gt;",">"},{"&quot;","\""},{"&apos;","'"},{"&amp;","&"}};
-      for (int e=0;e<5;e++){size_t q=0; while ((q=body.find(ent[e][0],q))!=string::npos){body.replace(q,strlen(ent[e][0]),ent[e][1]); q+=strlen(ent[e][1]);}}
-      size_t a=body.find_first_not_of(" \t\r\n"),b=body.find_last_not_of(" \t\r\n");
-      body=(a==string::npos)?"":body.substr(a,b-a+1);
-      items[role]=body;
-    }
-  }
-  void BUEncodeCP(string &s,const uint32_t c){
-    if      (c<0x80)   {s+=(char)c;}
-    else if (c<0x800)  {s+=(char)(0xC0|(c>>6)); s+=(char)(0x80|(c&0x3F));}
-    else if (c<0x10000){s+=(char)(0xE0|(c>>12)); s+=(char)(0x80|((c>>6)&0x3F)); s+=(char)(0x80|(c&0x3F));}
-    else               {s+=(char)(0xF0|(c>>18)); s+=(char)(0x80|((c>>12)&0x3F)); s+=(char)(0x80|((c>>6)&0x3F)); s+=(char)(0x80|(c&0x3F));}
-  }
   //a text for a message: bytes that are not UTF-8, and control characters, written as \xNN
   string Shown(const string &s){
     string o;
@@ -591,106 +557,196 @@ namespace
     }
     return o;
   }
-  //XML text: the entities &amp; &lt; &gt; &quot; &apos; &#N; &#xN; and CDATA sections decoded, blanks trimmed
-  string XMLText(const string &b0)
+  //-- GDAL's metadata XML (the GDAL_METADATA tag and the side file <raster>.aux.xml) is read only in the form GDAL's own
+  //   writer lays it out (CPLSerializeXMLTree, cpl_minixml.cpp, with the escapes of CPLEscapeString, cpl_string.cpp): each
+  //   element on its own line, indented by two blanks a level; attributes as ` name="value"`, in double quotes, one blank
+  //   before each; an element with only text as <name>text</name>, one without content as <name />, one with child elements
+  //   as <name>, its children, then </name> at its own indentation. In text GDAL writes &lt; &gt; &amp; for < > & (in an
+  //   attribute also &quot; for "), &#xFEFF; for a byte-order mark, and leaves out other control characters; no comments,
+  //   declarations, CDATA or other entities. A file in any other form may be read differently by GDAL (its parser takes
+  //   other quoting, entities and layouts, and ignores a file that does not start with its element), so the caller stops
+  //   when such a file can hold band values
+  struct gx_node {string name; vector<pair<string,string> > attr; bool text; string value; vector<gx_node> kids; gx_node():text(false){}};
+  bool GXNameChar(const char c){return isalnum((unsigned char)c) || (c=='_') || (c=='-') || (c=='.') || (c==':') || (c=='#');}
+  //the text of an element or attribute value as GDAL escapes it: decoded (false: not GDAL's escaping)
+  bool GXUnescape(const string &s,const bool attr,string &out)
   {
-    string b,o;
-    for (size_t i=0;i<b0.size();){ //(CDATA sections as they stand)
-      if (b0.compare(i,9,"<![CDATA[")==0){const size_t e=b0.find("]]>",i+9); const size_t f=(e==string::npos)?b0.size():e; o+=string("\x01")+b0.substr(i+9,f-i-9)+"\x02"; i=(e==string::npos)?b0.size():e+3; continue;}
-      o+=b0[i++];
-    }
-    bool raw=false;
-    for (size_t i=0;i<o.size();){
-      if (o[i]=='\x01'){raw=true; i++; continue;}
-      if (o[i]=='\x02'){raw=false; i++; continue;}
-      if (!raw && (o[i]=='&')){
-        const size_t sc=o.find(';',i);
-        if ((sc!=string::npos) && (sc-i<=10)){
-          const string e=o.substr(i+1,sc-i-1); long cp=-1;
-          if (e=="amp"){cp='&';} else if (e=="lt"){cp='<';} else if (e=="gt"){cp='>';} else if (e=="quot"){cp='"';} else if (e=="apos"){cp='\'';}
-          else if ((e.size()>1) && (e[0]=='#')){char *ep; cp=((e[1]=='x') || (e[1]=='X'))?strtol(e.c_str()+2,&ep,16):strtol(e.c_str()+1,&ep,10); if (*ep!='\0'){cp=-1;}}
-          if ((cp>0) && (cp<0x110000)){BUEncodeCP(b,(uint32_t)cp); i=sc+1; continue;}
-        }
+    const char *ent[5]={"&lt;","&gt;","&amp;","&quot;","&#xFEFF;"},*chr[5]={"<",">","&","\"","\xEF\xBB\xBF"};
+    out.clear();
+    for (size_t i=0;i<s.size();){
+      const unsigned char c=(unsigned char)s[i];
+      if (c=='&'){
+        int k=0; for (k=0;k<5;k++){if (s.compare(i,strlen(ent[k]),ent[k])==0){break;}}
+        if ((k==5) || ((k==3) && !attr)){return false;}
+        out+=chr[k]; i+=strlen(ent[k]); continue;
       }
-      b+=o[i++];
+      if ((c=='<') || (c=='>') || (attr && (c=='"')) || ((c<0x20) && (c!='\t') && (c!='\n') && (c!='\r'))){return false;}
+      if ((c==0xEF) && (s.compare(i,3,"\xEF\xBB\xBF")==0)){return false;}
+      out+=s[i++];
     }
-    const size_t b0i=b.find_first_not_of(" \t\r\n"),b1=b.find_last_not_of(" \t\r\n");
-    return (b0i==string::npos)?string(""):b.substr(b0i,b1-b0i+1);
+    return true;
   }
-  //GDAL's side file <raster>.aux.xml (PAM: what GDAL keeps outside the TIFF, e.g. for a GeoTIFF written with
-  //-co PROFILE=GeoTIFF or BASELINE): Scale, Offset, UnitType and NoDataValue of the PAMRasterBand whose band attribute is 1
-  //(the last such band, as GDAL reads them) -> upper-case name (SCALE, OFFSET, UNITTYPE, NODATA) -> text (entities and CDATA
-  //decoded, blanks trimmed; an element with no text counts as absent, as for GDAL); element names in any case; comments
-  //left out. Returns 0 when read, 1 when the file holds no PAMDataset (another XML document, which GDAL ignores), 2 when it
-  //is malformed (why in e)
-  int PAMBandItems(const string &x0,map<string,string> &items,string &e)
+  bool GXElement(const string &x,size_t &p,const size_t ind,gx_node &n,string &why)
   {
-    string x=x0;
-    if (x.compare(0,3,"\xEF\xBB\xBF")==0){e="it starts with a UTF-8 byte-order mark, with which GDAL does not read it"; return 2;}
-    { size_t p; while ((p=x.find("<!--"))!=string::npos){const size_t q=x.find("-->",p+4); if (q==string::npos){e="a comment <!-- is not closed"; return 2;} x.erase(p,q+3-p);} }
-    string lx=x; for (size_t i=0;i<lx.size();i++){lx[i]=(char)tolower((unsigned char)lx[i]);}
-    const size_t d0=lx.find("<pamdataset");
-    if (d0==string::npos){
-      const size_t f=lx.find_first_not_of(" \t\r\n");
-      if ((f!=string::npos) && (lx[f]=='<')){return 1;}
-      e="it is not XML"; return 2;
+    const size_t at=p;
+    if ((x.compare(p,ind,string(ind,' '))!=0) || (x.compare(p+ind,1,"<")!=0) || (p+ind+1>=x.size()) || !GXNameChar(x[p+ind+1])){
+      why="byte "+to_string((unsigned long long)at)+": an element at an indentation of "+to_string((unsigned long long)ind)+" blanks expected"; return false;
     }
-    const size_t d1=lx.find("</pamdataset>",d0);
-    if (d1==string::npos){e="it has no closing </PAMDataset>"; return 2;}
-    size_t p=d0,bandAt=string::npos,bandEnd=0;
-    while (((p=lx.find("<pamrasterband",p))!=string::npos) && (p<d1)){
-      const size_t gt=lx.find('>',p); if ((gt==string::npos) || (gt>d1)){e="a PAMRasterBand element is not closed"; return 2;}
-      const string head=lx.substr(p,gt-p);
-      size_t end=gt+1;
-      if (head[head.size()-1]!='/'){
-        end=lx.find("</pamrasterband>",gt);
-        const size_t nx=lx.find("<pamrasterband",gt);
-        if ((end==string::npos) || (end>d1) || ((nx!=string::npos) && (nx<end))){e="a PAMRasterBand element is not closed"; return 2;}
+    p+=ind+1; size_t q=p; while ((q<x.size()) && GXNameChar(x[q])){q++;}
+    n.name=x.substr(p,q-p); p=q;
+    while ((p+1<x.size()) && (x[p]==' ') && GXNameChar(x[p+1])){
+      p++; q=p; while ((q<x.size()) && GXNameChar(x[q])){q++;}
+      const string a=x.substr(p,q-p); p=q;
+      if (x.compare(p,2,"=\"")!=0){why="element "+n.name+", attribute "+a+": =\"value\" expected"; return false;}
+      p+=2; q=x.find('"',p); string v;
+      if ((q==string::npos) || !GXUnescape(x.substr(p,q-p),true,v)){why="element "+n.name+", attribute "+a+": a value GDAL does not write"; return false;}
+      for (size_t k=0;k<n.attr.size();k++){if (n.attr[k].first==a){why="element "+n.name+": attribute "+a+" given twice"; return false;}}
+      n.attr.push_back(make_pair(a,v)); p=q+1;
+    }
+    if (x.compare(p,4," />\n")==0){p+=4; return true;}
+    if (x.compare(p,1,">")!=0){why="element "+n.name+": > expected at byte "+to_string((unsigned long long)p); return false;}
+    p++;
+    const string close="</"+n.name+">\n";
+    const size_t lt=x.find('<',p);
+    const bool textOnly=(lt!=string::npos) && (x.compare(lt,close.size(),close)==0); //(a text may start with a line end: no '<' in it)
+    if (!textOnly && (x.compare(p,1,"\n")==0)){ //(child elements, then the closing tag at this indentation)
+      p++;
+      while (!((x.compare(p,ind,string(ind,' '))==0) && (x.compare(p+ind,close.size(),close)==0))){
+        if (p>=x.size()){why="element "+n.name+" is not closed"; return false;}
+        gx_node c; if (!GXElement(x,p,ind+2,c,why)){return false;}
+        n.kids.push_back(c);
       }
-      p=gt+1;
-      size_t q=head.find("band"); long band=-1;
-      while (q!=string::npos){ //(the attribute band, blanks allowed around =, its value an integer)
-        const bool word=(q>0) && ((head[q-1]==' ') || (head[q-1]=='\t') || (head[q-1]=='\r') || (head[q-1]=='\n'));
-        size_t r=q+4; while ((r<head.size()) && isspace((unsigned char)head[r])){r++;}
-        if (word && (r<head.size()) && (head[r]=='=')){
-          r++; while ((r<head.size()) && isspace((unsigned char)head[r])){r++;}
-          if ((r<head.size()) && ((head[r]=='"') || (head[r]=='\''))){
-            const size_t s=head.find(head[r],r+1);
-            if (s!=string::npos){string v=head.substr(r+1,s-r-1); char *ep; const long n=strtol(v.c_str(),&ep,10); if (!v.empty() && (*ep=='\0')){band=n;}}
-          }
-          break;
+      p+=ind+close.size(); return true;
+    }
+    q=x.find('<',p);
+    if ((q==string::npos) || (x.compare(q,close.size(),close)!=0)){why="element "+n.name+": its text is not followed by </"+n.name+"> and a line end"; return false;}
+    if (!GXUnescape(x.substr(p,q-p),false,n.value)){why="element "+n.name+": its text holds a character or entity GDAL does not write"; return false;}
+    n.text=true; p=q+close.size(); return true;
+  }
+  //the whole text is one element in GDAL's layout (a missing line end after the last tag is allowed: the TIFF tag has none)
+  bool GXDocument(const string &x0,gx_node &root,string &why)
+  {
+    const string x=(!x0.empty() && (x0[x0.size()-1]!='\n'))?x0+"\n":x0;
+    size_t p=0; if (!GXElement(x,p,0,root,why)){return false;}
+    if (p!=x.size()){why="text after the closing </"+root.name+">"; return false;}
+    return true;
+  }
+  //a name GDAL reads in any case (CPLGetXMLNode, EQUAL) written in another case than GDAL writes it
+  bool GXOtherCase(const string &a,const string &gdal)
+  {
+    if ((a.size()!=gdal.size()) || (a==gdal)){return false;}
+    for (size_t i=0;i<a.size();i++){if (tolower((unsigned char)a[i])!=tolower((unsigned char)gdal[i])){return false;}}
+    return true;
+  }
+  bool GXInteger(const string &s){return !s.empty() && (s.find_first_not_of("0123456789")==string::npos) && ((s=="0") || (s[0]!='0'));} //(as GDAL writes %d)
+  const gx_node *GXChild(const gx_node &n,const string &name){for (size_t i=0;i<n.kids.size();i++){if (n.kids[i].name==name){return &n.kids[i];}} return NULL;}
+  bool GXHolds(const string &x,const char **words,const int nw)
+  {
+    string l=x; for (size_t i=0;i<l.size();i++){l[i]=(char)tolower((unsigned char)l[i]);}
+    if (l.find('\0')!=string::npos){return true;}
+    for (int k=0;k<nw;k++){if (l.find(words[k])!=string::npos){return true;}}
+    return false;
+  }
+  //the scale, offset and unit of band 1 in GDAL's metadata (tag 42112), as GDAL writes them:
+  //  <GDALMetadata>
+  //    <Item name="SCALE" sample="0" role="scale">0.1</Item>
+  //  </GDALMetadata>
+  //(an item's attributes name, sample, role, domain in this order; its value escaped twice, as GDAL does). Only items of
+  //sample 0 with the role scale, offset or unittype count (as GDAL reads them; any other item is ordinary metadata):
+  //upper-case role -> text. Returns 0 when read, 1 when the text is not in GDAL's form but names no scale, offset or unit
+  //(GDAL takes none from it), 2 when it is not in GDAL's form and names one (why in e)
+  int GDALBandItems(const string &x,map<string,string> &items,string &e)
+  {
+    gx_node r; string why; bool ok=GXDocument(x,r,why);
+    if (!ok && (x.find("\r\n")!=string::npos)){why="it has CRLF line ends; GDAL writes LF ("+why+")";}
+    if (ok && (r.name!="GDALMetadata")){ok=false; why="its element is "+r.name+", not GDALMetadata";}
+    for (size_t i=0;ok && (i<r.kids.size());i++){
+      const gx_node &it=r.kids[i];
+      if ((it.name!="Item") || !it.kids.empty() || it.attr.empty() || (it.attr[0].first!="name")){ok=false; why="an element that is not <Item name=...>"; break;}
+      const char *order[4]={"name","sample","role","domain"}; int o=0; string sample,role;
+      for (size_t k=0;ok && (k<it.attr.size());k++){
+        while ((o<4) && (it.attr[k].first!=order[o])){o++;}
+        if (o==4){ok=false; why="item "+it.attr[0].second+": attribute "+it.attr[k].first+" (GDAL writes name, sample, role and domain, in this order)"; break;}
+        if (o==1){sample=it.attr[k].second; if (!GXInteger(sample)){ok=false; why="item "+it.attr[0].second+": sample=\""+sample+"\" is not an integer as GDAL writes it";}}
+        if (o==2){role=it.attr[k].second;}
+        o++;
+      }
+      if (ok && (GXOtherCase(role,"scale") || GXOtherCase(role,"offset") || GXOtherCase(role,"unittype"))){ok=false; why="item "+it.attr[0].second+": role=\""+role+"\" (GDAL writes it in lower case)"; break;}
+      if (!ok || (sample!="0") || ((role!="scale") && (role!="offset") && (role!="unittype"))){continue;}
+      string v; if (!GXUnescape(it.value,true,v)){ok=false; why="item "+it.attr[0].second+": its value is not escaped as GDAL escapes it"; break;}
+      string R=role; for (size_t k=0;k<R.size();k++){R[k]=(char)toupper((unsigned char)R[k]);}
+      if (items.count(R)){ok=false; why="two items of band 1 with the role "+role; break;}
+      items[R]=v;
+    }
+    if (ok){return 0;}
+    items.clear();
+    const char *w[4]={"scale","offset","unittype","&#"};
+    if (!GXHolds(x,w,4)){return 1;}
+    e=why; return 2;
+  }
+  //GDAL's side file <raster>.aux.xml (PAM: what GDAL keeps outside the raster file), as GDAL writes it:
+  //  <PAMDataset>
+  //    <PAMRasterBand band="1">
+  //      <UnitType>ft</UnitType>
+  //      <Offset>5</Offset>
+  //      <Scale>0.01</Scale>
+  //      <NoDataValue le_hex_equiv="...">-9999</NoDataValue>
+  //    </PAMRasterBand>
+  //  </PAMDataset>
+  //(PAMRasterBand elements only under PAMDataset, one per band, band="n" an integer; in band 1 each of UnitType, Offset,
+  //Scale and NoDataValue at most once, with text). Band 1's items -> upper-case name (SCALE, OFFSET, UNITTYPE, NODATA) ->
+  //text (NODATA from le_hex_equiv when it is given, as GDAL takes it). Returns 0 when read, 1 when the file is not in
+  //GDAL's form but names no band and no band value (GDAL takes no band value from such a file), 2 when it is not in GDAL's
+  //form and names one (why in e)
+  int PAMBandItems(const string &x,map<string,string> &items,string &e)
+  {
+    gx_node r; string why; bool ok=GXDocument(x,r,why);
+    if (!ok && (x.find("\r\n")!=string::npos)){why="it has CRLF line ends; GDAL writes LF, so convert them (e.g. dos2unix) or let GDAL write the file again";}
+    if (ok && (r.name!="PAMDataset")){ok=false; why="its element is "+r.name+", not PAMDataset";}
+    set<string> bands; const gx_node *b1=NULL;
+    for (size_t i=0;ok && (i<r.kids.size());i++){
+      const gx_node &b=r.kids[i];
+      if (GXOtherCase(b.name,"PAMRasterBand")){ok=false; why="an element "+b.name+" (GDAL writes PAMRasterBand)"; break;}
+      if (b.name!="PAMRasterBand"){ //(no band element below another element)
+        vector<const gx_node*> st(1,&b);
+        while (ok && !st.empty()){
+          const gx_node *c=st.back(); st.pop_back();
+          if ((c->name=="PAMRasterBand") || GXOtherCase(c->name,"PAMRasterBand")){ok=false; why="a PAMRasterBand inside "+b.name;}
+          for (size_t k=0;k<c->kids.size();k++){st.push_back(&c->kids[k]);}
         }
-        q=head.find("band",q+4);
+        continue;
       }
-      if (band==1){bandAt=gt+1; bandEnd=end;}
+      if ((b.attr.size()!=1) || (b.attr[0].first!="band") || !GXInteger(b.attr[0].second)){ok=false; why="a PAMRasterBand without band=\"n\" as GDAL writes it"; break;}
+      if (!bands.insert(b.attr[0].second).second){ok=false; why="two PAMRasterBand elements of band "+b.attr[0].second; break;}
+      if (b.attr[0].second=="1"){b1=&b;}
     }
-    if (bandAt==string::npos){return 0;}
-    const char *nm[4][2]={{"scale","SCALE"},{"offset","OFFSET"},{"unittype","UNITTYPE"},{"nodatavalue","NODATA"}};
-    for (int k=0;k<4;k++){
-      const string open=string("<")+nm[k][0]; size_t a=bandAt;
-      while (((a=lx.find(open,a))!=string::npos) && (a<bandEnd)){
-        const char c=(a+open.size()<lx.size())?lx[a+open.size()]:'\0';
-        if ((c!='>') && (c!='/') && !isspace((unsigned char)c)){a+=open.size(); continue;}
-        const size_t g=lx.find('>',a); if ((g==string::npos) || (g>bandEnd)){e="a "+string(nm[k][0])+" element is not closed"; return 2;}
-        if (lx[g-1]=='/'){break;}  //(empty: absent)
-        const size_t ce=lx.find(string("</")+nm[k][0],g); if ((ce==string::npos) || (ce>bandEnd)){e="a "+string(nm[k][0])+" element is not closed"; return 2;}
-        const string v=XMLText(x.substr(g+1,ce-g-1));
-        if (k==3){ //(GDAL takes the value's IEEE bits from le_hex_equiv when it is given)
-          const string ah=lx.substr(a,g-a); const size_t h=ah.find("le_hex_equiv");
-          if (h!=string::npos){
-            const size_t s=ah.find_first_of("\"'",h);
-            if ((s!=string::npos) && (s+17<=ah.size())){
-              const string hx=ah.substr(s+1,16); unsigned char by[8]; bool okh=(hx.find_first_not_of("0123456789abcdef")==string::npos);
-              for (int j=0;okh && (j<8);j++){by[j]=(unsigned char)strtol(hx.substr(2*j,2).c_str(),NULL,16);}
-              if (okh){double dv; uint64_t u=0; for (int j=7;j>=0;j--){u=(u<<8)|by[j];} memcpy(&dv,&u,8); ostringstream os; os<<setprecision(17)<<dv; items[nm[k][1]]=os.str(); break;}
-            }
-          }
+    if (ok && (b1!=NULL)){
+      const char *nm[4][2]={{"Scale","SCALE"},{"Offset","OFFSET"},{"UnitType","UNITTYPE"},{"NoDataValue","NODATA"}};
+      for (int k=0;ok && (k<4);k++){
+        int cnt=0;
+        for (size_t i=0;i<b1->kids.size();i++){
+          if (b1->kids[i].name==nm[k][0]){cnt++;}
+          if (GXOtherCase(b1->kids[i].name,nm[k][0])){ok=false; why="band 1's element "+b1->kids[i].name+" (GDAL writes "+string(nm[k][0])+")";}
         }
-        if (!v.empty()){items[nm[k][1]]=v;}
-        break;
+        if (!ok){break;}
+        if (cnt==0){continue;}
+        const gx_node *c=GXChild(*b1,nm[k][0]);
+        const bool hex=(k==3) && (c->attr.size()==1) && (c->attr[0].first=="le_hex_equiv") && (c->attr[0].second.size()==16) &&
+                       (c->attr[0].second.find_first_not_of("0123456789ABCDEFabcdef")==string::npos);
+        if ((cnt>1) || !c->text || c->value.empty() || (!c->attr.empty() && !hex)){ok=false; why="band 1's "+string(nm[k][0])+" is not written as GDAL writes it"; break;}
+        items[nm[k][1]]=c->value;
+        if (hex){ //(GDAL takes the value's IEEE bits from le_hex_equiv: little-endian bytes)
+          const string &hx=c->attr[0].second; uint64_t u=0;
+          for (int j=7;j>=0;j--){u=(u<<8)|(uint64_t)strtol(hx.substr(2*j,2).c_str(),NULL,16);}
+          double dv; memcpy(&dv,&u,8); ostringstream os; os<<setprecision(17)<<dv; items[nm[k][1]]=os.str();
+        }
       }
     }
-    return 0;
+    if (ok){return 0;}
+    items.clear();
+    const char *w[5]={"pamrasterband","scale","offset","unittype","nodatavalue"};
+    if (!GXHolds(x,w,5)){return 1;}
+    e=why; return 2;
   }
   const char *Lookup(const gw_epsg_name *tab,const int nt,const int code)
   {
@@ -779,16 +835,18 @@ namespace
     "\xCE\xBC\xCE\xAD\xCF\x84\xCF\x81\xCE\xBF","\xCE\xBC\xCE\xAD\xCF\x84\xCF\x81\xCE\xB1"};                       //(μέτρο, μέτρα)
   const char *BU_METRE_ABBR[]={"m","masl","m asl","m a.s.l.","m.a.s.l.","mamsl","m amsl","m a.m.s.l.","moh","m.o.h.","m\xC3\xB6h","m \xC3\xB6.h.",
     "m\xC3\xBC","m\xC3\xBCnn","m \xC3\xBC. nn","m \xC3\xBC.nn","m \xC3\xBC. m.","m \xC3\xBC.m.","\xD0\xBC","\xD0\xBC\xD0\xB1\xD1\x81","\xD0\xBC \xD0\xB1\xD1\x81", //(..., möh, mü, müNN, m ü. M., м, мБС: Baltic system)
-    "m.","epsg:9001","epsg::9001","epsg 9001","urn:ogc:def:uom:epsg::9001"};
+    "m.","epsg:9001","epsg::9001","epsg 9001","urn:ogc:def:uom:epsg::9001","http://www.opengis.net/def/uom/epsg/0/9001",
+    "https://www.opengis.net/def/uom/epsg/0/9001"};
   //vertical datums and references that may follow a metre form ("m MSL", "m (NAVD88)", "m, AHD", "Meter Ã¼ber NN", fused
   //"mAHD", "msnm", "m.s.n.m."; a datum may end in "geoid": "m (EGM2008 geoid)")
   const char *BU_DATUM[]={"msl","amsl","asl","a.s.l.","a.m.s.l.","above sea level","above mean sea level","ahd","aod","odn","nap","+nap","taw",
     "nn","nhn","\xC3\xBC. nn","\xC3\xBC.nn","\xC3\xBC nn","\xC3\xBC\x62\x65r nn","\xC3\xBC. nhn","\xC3\xBC.nhn","\xC3\xBC\x62\x65r nhn","\xC3\xBC. m.","\xC3\xBC.m.",
     "nn2000","rh2000","dvr90","navd88","navd 88","ngvd29","ngvd 29","cgvd2013","cgvd28","egm96","egm2008","s.l.m.","slm","n.p.m.","npm",
-    "s.n.m.","snm","n. m.","n.m.","ellipsoidal","above ellipsoid","above the ellipsoid"};
+    "s.n.m.","snm","n. m.","n.m.","s. n. m.","ellipsoidal","above ellipsoid","above the ellipsoid","ellipsoid","wgs84 ellipsoid","the wgs84 ellipsoid",
+    "egm08","od","mllw","mlw","mhw","mhhw","lat","hae","orthometric","ngf","ign69","n2000","nzvd2016","t.p."};
   //quantities that may precede a metre form in brackets or after "in": "elevation (m)", "Elevation [m]", "height in metres"
   const char *BU_QUANT[]={"elevation","elevations","height","heights","altitude","elevation above sea level","elevation above mean sea level",
-    "height above sea level","height above mean sea level","height above ellipsoid","ellipsoidal height","orthometric height"};
+    "height above sea level","height above mean sea level","height above ellipsoid","ellipsoidal height","orthometric height","height_above_ellipsoid"};
   //parts and multiples, which with a metre make a scaled metre ("m (in thousands)", "tenths of a metre")
   const char *BU_PART[]={"tenth","tenths","hundredth","hundredths","thousandth","thousandths","tens","hundred","hundreds","thousand","thousands"};
   const char *BU_CJK_METRE[]={"\xE7\xB1\xB3","\xE5\x85\xAC\xE5\xB0\xBA","\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB",
@@ -816,7 +874,7 @@ namespace
   //SI prefixes written as words: another length joined to a metre word or right before one ("kilometres", "Kilo Meter")
   const char *BU_PREFIX[]={"kilo","kil\xC3\xB3","quilo","quil\xC3\xB4","quil\xC3\xB3","chilo","hecto","hekto","hect\xC3\xB3","hect\xC3\xB4","deca","deka","d\xC3\xA9\x63\x61","d\xC3\xA9ka",
     "dec\xC3\xA1","deci","d\xC3\xA9\x63i","dec\xC3\xAD","dezi","decy","desi",
-    "centi","cent\xC3\xAD","centy","zenti","sentti","milli","mili","mil\xC3\xAD","micro","mikro","nano","mega","giga",
+    "centi","cent\xC3\xAD","centy","zenti","sentti","santi","senti","etto","\xCF\x87\xCE\xB9\xCE\xBB\xCE\xB9\xCE\xBF","\xCE\xB5\xCE\xBA\xCE\xB1\xCF\x84\xCE\xBF\xCF\x83\xCF\x84\xCE\xBF","\xCF\x87\xCE\xB9\xCE\xBB\xCE\xB9\xCE\xBF\xCF\x83\xCF\x84\xCE\xBF","\xCE\xB4\xCE\xB5\xCE\xBA\xCE\xB1\xCF\x84\xCE\xBF","\xCE\xB4\xCE\xB5\xCE\xBA\xCE\xB1","\xCE\xB5\xCE\xBA\xCE\xB1\xCF\x84\xCE\xBF","milli","mili","mil\xC3\xAD","micro","mikro","nano","mega","giga",
     "\xD0\xBA\xD0\xB8\xD0\xBB\xD0\xBE","\xD0\xB3\xD0\xB5\xD0\xBA\xD1\x82\xD0\xBE","\xD0\xB4\xD0\xB5\xD0\xBA\xD0\xB0","\xD0\xB4\xD0\xB5\xD1\x86\xD0\xB8",
     "\xD1\x81\xD0\xB0\xD0\xBD\xD1\x82\xD0\xB8","\xD0\xBC\xD0\xB8\xD0\xBB\xD0\xBB\xD0\xB8","\xD0\xBC\xD0\xB8\xD0\xBA\xD1\x80\xD0\xBE",
     "\xD0\xBD\xD0\xB0\xD0\xBD\xD0\xBE","\xD0\xBC\xD0\xB5\xD0\xB3\xD0\xB0","\xD0\xBA\xD1\x96\xD0\xBB\xD0\xBE","\xD0\xBC\xD1\x96\xD0\xBB\xD1\x96"}; //(кило, гекто, дека, деци, санти, милли, микро, нано, мега, кіло, мілі)
@@ -824,7 +882,7 @@ namespace
   const char *BU_CJK_OTHER[]={"\xE5\x8E\x98\xE7\xB1\xB3","\xE6\xAF\xAB\xE7\xB1\xB3","\xE5\x88\x86\xE7\xB1\xB3","\xE5\x8D\x83\xE7\xB1\xB3",
     "\xE5\x85\xAC\xE9\x87\x8C","\xE5\xBE\xAE\xE7\xB1\xB3","\xE7\xBA\xB3\xE7\xB1\xB3","\xE7\xB4\x8D\xE7\xB1\xB3","\xE5\x85\xAC\xE5\x88\x86",
     "\xE8\x8B\xB1\xE5\xB0\xBA","\xE5\x91\x8E","\xE8\x8B\xB1\xE5\xAF\xB8","\xE5\x90\x8B","\xE8\x8B\xB1\xE9\x87\x8C","\xE7\xA0\x81","\xE7\xA2\xBC",
-    "\xE6\xB5\xB7\xE9\x87\x8C","\xE9\x87\x90\xE7\xB1\xB3","\xE5\x85\xAC\xE9\x87\x90","\xE7\x99\xBE\xE7\xB1\xB3","\xE5\x8D\x81\xE7\xB1\xB3",
+    "\xE6\xB5\xB7\xE9\x87\x8C","\xE9\x87\x90\xE7\xB1\xB3","\xE5\x85\xAC\xE9\x87\x90","\xE7\x99\xBE\xE7\xB1\xB3","\xE5\x8D\x81\xE7\xB1\xB3","\xE5\x85\xAC\xE5\x8E\x98",
     //(厘米, 毫米, 分米, 千米, 公里, 微米, 纳米, 納米, 公分, 英尺, 呎, 英寸, 吋, 英里, 码, 碼, 海里, 釐米, 公釐, 百米, 十米)
     "\xE3\x82\xAD\xE3\x83\xAD\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB","\xE3\x82\xBB\xE3\x83\xB3\xE3\x83\x81\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB","\xE3\x83\x9F\xE3\x83\xAA\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB",
     "\xE3\x83\x87\xE3\x82\xB7\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB","\xE3\x83\x87\xE3\x82\xAB\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB","\xE3\x83\x98\xE3\x82\xAF\xE3\x83\x88\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB",
@@ -924,12 +982,26 @@ namespace
   bool BUMetre(const string &w){return BUIn(BU_METRE_WORD,w) || BUIn(BU_METRE_ABBR,w);}
   bool BUMetreForm(const string &w){
     if (BUMetre(w)){return true;}
+    if ((w.size()>1) && (w.find('.')!=string::npos) && BUMetre((w[w.size()-1]=='.')?w.substr(0,w.size()-1):w+".")){return true;} //(a dotted abbreviation
+                                                                                 // with or without its final dot: m.a.s.l, moh.)
+    if ((w.size()>1) && (w[w.size()-1]=='.') && BUMetre(w.substr(0,w.size()-1))){return true;}
     for (size_t q=0;q<sizeof(BU_CJK_METRE)/sizeof(char*);q++){if (w==BU_CJK_METRE[q]){return true;}}
+    return false;
+  }
+  bool BUDatum1(string r){
+    for (size_t i=1;i+1<r.size();i++){                                           //(a blank before a datum's year: rh 2000, egm 96)
+      if ((r[i]==' ') && isalpha((unsigned char)r[i-1]) && isdigit((unsigned char)r[i+1])){r.erase(i,1);}
+    }
+    if (BUIn(BU_DATUM,r)){return true;}
+    if ((r.size()>1) && (r.find('.')!=string::npos)){                            //(a dotted abbreviation with or without its final dot)
+      if (BUIn(BU_DATUM,(r[r.size()-1]=='.')?r.substr(0,r.size()-1):r+".")){return true;}
+    }
+    if ((r.size()>1) && (r[r.size()-1]=='.') && BUIn(BU_DATUM,r.substr(0,r.size()-1))){return true;}
     return false;
   }
   bool BUDatum(string r){
     if ((r.size()>6) && (r.compare(r.size()-6,6," geoid")==0)){r=r.substr(0,r.size()-6);}
-    return BUIn(BU_DATUM,r);
+    return BUDatum1(r) || ((r.size()>6) && (r.compare(0,6,"above ")==0) && BUDatum1(r.substr(6))); //("m above msl")
   }
   //(a text in one pair of brackets: its inside)
   bool BUBracketed(const string &r,string &in){
@@ -964,8 +1036,9 @@ namespace
     if (BUMetreDatum(t)){return true;}
     for (size_t q=0;q<sizeof(BU_QUANT)/sizeof(char*);q++){
       const size_t n=strlen(BU_QUANT[q]);
-      if ((t.size()<=n) || (t.compare(0,n,BU_QUANT[q])!=0) || ((t[n]!=' ') && (t[n]!='(') && (t[n]!='['))){continue;}
+      if ((t.size()<=n) || (t.compare(0,n,BU_QUANT[q])!=0) || ((t[n]!=' ') && (t[n]!='(') && (t[n]!='[') && (t[n]!=','))){continue;}
       string r=t.substr(n); while (!r.empty() && (r[0]==' ')){r.erase(0,1);}
+      if (!r.empty() && (r[0]==',')){r.erase(0,1); while (!r.empty() && (r[0]==' ')){r.erase(0,1);} if (BUMetreDatum(r)){return true;} continue;} //("Elevation, m")
       string in;
       if ((r.compare(0,3,"in ")==0) && BUMetreDatum(r.substr(3))){return true;}
       if (BUBracketed(r,in) && BUMetreDatum(in)){return true;}
@@ -976,7 +1049,7 @@ namespace
   bool BUNumberToken(string k){
     if (!k.empty() && ((k[0]=='x') || (k[0]=='+') || (k[0]=='-'))){k.erase(0,1);}
     if (!k.empty() && (k[k.size()-1]=='s')){k.erase(k.size()-1);}
-    if (k.empty() || !isdigit((unsigned char)k[0])){return false;}
+    if (k.empty() || !(isdigit((unsigned char)k[0]) || ((k[0]=='.') && (k.size()>1) && isdigit((unsigned char)k[1])))){return false;} //(.1 too)
     for (size_t i=0;i<k.size();i++){
       const char c=k[i];
       if (isdigit((unsigned char)c) || (c=='.') || (c==',') || (c==':')){continue;}
@@ -987,6 +1060,7 @@ namespace
     return true;
   }
   bool BUFusedFeet(const string &w){
+    for (int i=0;i<3;i++){const size_t n=strlen(BU_FEET[i]); if ((w.size()>n) && (w.compare(0,n,BU_FEET[i])==0) && BUDatum(w.substr(n))){return true;}} //(ftmsl, ftasl, feetmsl)
     for (int i=0;i<3;i++){
       const size_t n=strlen(BU_FEET[i]);
       if ((w.size()>n) && (w.compare(0,n,BU_FEET[i])==0) && BUIn(BU_FEETQ,w.substr(n))){return true;}  //(ftus, footus, ...)
@@ -1015,9 +1089,11 @@ int GWGeoTIFF::BandUnit(const string &ut0)
   if (BUMetreText(t)){return BU_METRE;}
   //-- another length unit, for the message: an EPSG length code in a unit form, or words of another length and none of the metre
   { size_t r=string::npos;
-    const string urn="urn:ogc:def:uom:epsg::";
-    if (t.compare(0,5,"epsg:")==0){r=5;} else if (t.compare(0,urn.size(),urn)==0){r=urn.size();}
-    if ((r!=string::npos) && (t.find_first_not_of(":0123456789",r)==string::npos)){
+    const string urn="urn:ogc:def:uom:epsg::",uri="http://www.opengis.net/def/uom/epsg/0/",uris="https://www.opengis.net/def/uom/epsg/0/";
+    if ((t.compare(0,4,"epsg")==0) && (t.size()>4) && ((t[4]==':') || (t[4]==' '))){r=4; while ((r<t.size()) && ((t[r]==':') || (t[r]==' '))){r++;}} //(epsg:n, epsg n, epsg: n)
+    else if (t.compare(0,urn.size(),urn)==0){r=urn.size();}
+    else if (t.compare(0,uri.size(),uri)==0){r=uri.size();} else if (t.compare(0,uris.size(),uris)==0){r=uris.size();}
+    if ((r!=string::npos) && (r<t.size()) && (t.find_first_not_of(":0123456789",r)==string::npos)){
       const long code=atol(t.substr(t.find_first_not_of(':',r)==string::npos?r:t.find_first_not_of(':',r)).c_str());
       for (size_t q=0;q<sizeof(BU_EPSG_OTHER)/sizeof(int);q++){if (code==BU_EPSG_OTHER[q]){return BU_LENGTH;}}
     }
@@ -1058,6 +1134,18 @@ int GWGeoTIFF::BandUnit(const string &ut0)
     if (BUIn(BU_PART,w)){part=true;}
   }
   if (other && !metre){return BU_LENGTH;}
+  if (other && metre && !t.empty() && ((t[t.size()-1]==')') || (t[t.size()-1]==']'))){ //-- another length named with its metre conversion:
+    const size_t ob=t.find_last_of("([");                                          //   "ft (0.3048 m)" or a metre form and the length, "m (feet)"
+    if ((ob!=string::npos) && (ob>0)){
+      string head=t.substr(0,ob),in=t.substr(ob+1,t.size()-ob-2);
+      while (!head.empty() && (head[head.size()-1]==' ')){head.erase(head.size()-1);}
+      while (!in.empty() && (in[0]==' ')){in.erase(0,1);} while (!in.empty() && (in[in.size()-1]==' ')){in.erase(in.size()-1);}
+      size_t i=0; while ((i<in.size()) && (isdigit((unsigned char)in[i]) || (in[i]=='.') || (in[i]==','))){i++;}
+      string rest=in.substr(i); while (!rest.empty() && (rest[0]==' ')){rest.erase(0,1);}
+      const bool conv=(i>0) && BUNumberToken(in.substr(0,i)) && BUMetreForm(rest);
+      if ((in.find_first_of("()[]")==string::npos) && ((conv && (GWGeoTIFF::BandUnit(head)==BU_LENGTH)) || (BUMetreForm(head) && (GWGeoTIFF::BandUnit(in)==BU_LENGTH)))){return BU_LENGTH;}
+    }
+  }
   if (metre && !other){ //-- a scaled metre: a part or multiple ("m (in thousands)", "tenths of a metre"), a number with a factor
                         //   sign or word ("m*0.1", "Meter (x0.1)", "m (scaled by 0.1)", "0.1 of a metre", "m^2"), or a number and a
                         //   metre form as the whole text ("0.1 m", "1000 m"); other numbers (datum years, resolutions) are not scales
@@ -1081,12 +1169,105 @@ int GWGeoTIFF::BandUnit(const string &ut0)
     if (num && (hasSign || word)){return BU_SCALED;}
     { const size_t b=t.find_first_of(" "); //(a number, then a metre form, as the whole text)
       string nt=t,rest; while (!nt.empty() && ((nt[0]=='(') || (nt[0]=='['))){nt.erase(0,1);} while (!nt.empty() && ((nt[nt.size()-1]==')') || (nt[nt.size()-1]==']'))){nt.erase(nt.size()-1);}
-      (void)b; size_t i=0; while ((i<nt.size()) && (isdigit((unsigned char)nt[i]) || strchr(".,/:e",nt[i]))){i++;}
+      (void)b; size_t i=0; while ((i<nt.size()) && (isdigit((unsigned char)nt[i]) || strchr(".,/:e",nt[i]) || (((nt[i]=='-') || (nt[i]=='+')) && (i>0) && (nt[i-1]=='e')))){i++;} //(1e-2 m)
       rest=nt.substr(i); while (!rest.empty() && (rest[0]==' ')){rest.erase(0,1);}
       if ((i>0) && BUNumberToken(nt.substr(0,i)) && BUMetreForm(rest)){return BU_SCALED;}
     }
   }
   return BU_TEXT;
+}
+
+//GDAL's side file <file>.aux.xml, as GDAL looks for it (the raster's name with .aux.xml added, in that case): has is set
+//when it exists
+bool GWGeoTIFF::ReadSideFile(const string &filename,string &pam,bool &has,string &err)
+{
+  pam=""; has=false;
+  ifstream X((filename+".aux.xml").c_str(),ios::binary);
+  if (!X){return true;}
+  X.seekg(0,ios::end); const streamoff xs=X.tellg(); X.seekg(0,ios::beg);
+  if ((xs<0) || ((unsigned long long)xs>(16ULL<<20))){err="raster "+filename+": its GDAL side file "+filename+".aux.xml is larger than the 16 MB Raven reads, so its band scale, offset and unit cannot be checked"; return false;}
+  ostringstream s; s<<X.rdbuf(); pam=s.str(); has=true;
+  return true;
+}
+
+//the band's scale, offset, unit and side-file no-data value as GDAL reads them, and the band-unit rule (see GWGeoTIFF.h)
+bool GWGeoTIFF::BandMeta(const string &F,const string &meta,const string *pam,const string &side,const bool metres,const string &cmd,
+                         double &bscale,double &boffset,bool &pamHasNodata,string &pamNodata,string &note,string &err)
+{
+  bscale=1.0; boffset=0.0; pamHasNodata=false; pamNodata=""; note="";
+  const string rewrite="rewrite it with GDAL: copy the raster with gdal_translate, or set the values with gdal_edit.py (-scale, -offset, -units, -a_nodata), "
+                       "which write them in GDAL's form";
+  map<string,string> items; string ge;
+  if ((meta!="") && (GDALBandItems(meta,items,ge)==2)){
+    err=F+"its GDAL_METADATA tag is not in the form GDAL writes ("+ge+") and names a band scale, offset or unit, which GDAL may read differently: "+rewrite; return false;
+  }
+  for (int k=0;k<2;k++){
+    const char *nm=(k==0)?"SCALE":"OFFSET"; map<string,string>::const_iterator it=items.find(nm); if (it==items.end()){continue;}
+    char *endp; const double v=strtod(it->second.c_str(),&endp);
+    if (it->second.empty() || (*endp!='\0') || !std::isfinite(v)){err=F+"its band "+string(nm)+" in GDAL_METADATA ("+it->second+") is not a number"; return false;}
+    if (k==0){bscale=v;} else {boffset=v;}
+  }
+  string bsrc="in GDAL_METADATA";
+  map<string,string>::const_iterator iu=items.find("UNITTYPE");
+  string unit=(iu!=items.end())?iu->second:string(""),usrc="UNITTYPE in GDAL_METADATA";
+  if (pam!=NULL){ //GDAL's side file, which GDAL reads before the file's own metadata: a Scale or Offset there replaces both of
+                  //the file's (the other is then 1 or 0); a UnitType replaces the file's; a NoDataValue replaces GDAL_NODATA
+    map<string,string> pi; string pe;
+    { //georeferencing in the side file (GeoTransform, SRS, GCPs): GDAL may take it in place of the raster's own, in any form
+      string l=*pam; for (size_t i=0;i<l.size();i++){l[i]=(char)tolower((unsigned char)l[i]);}
+      const char *g[4]={"geotransform","<srs","gcplist","<gcp"}; string found;
+      for (int k=0;k<4;k++){if (l.find(g[k])!=string::npos){found=g[k];}}
+      for (size_t i=0;found.empty() && ((i=l.find('<',i))!=string::npos);i++){ //("< SRS", a blank after the bracket)
+        size_t j=i+1; while ((j<l.size()) && isspace((unsigned char)l[j])){j++;}
+        if ((l.compare(j,3,"srs")==0) || (l.compare(j,3,"gcp")==0)){found="srs";}
+      }
+      if (!found.empty()){
+        err=F+"its GDAL side file "+side+" holds georeferencing (GeoTransform, SRS or GCPs), which GDAL may take in place of the raster's own: rewrite it with "
+            "gdal_translate (gdal_translate in.tif out.tif writes the georeferencing into the raster), or remove the side file"; return false;
+      }
+    }
+    if (PAMBandItems(*pam,pi,pe)==2){
+      err=F+"its GDAL side file "+side+" is not in the form GDAL writes ("+pe+") and names a band or a band value (Scale, Offset, UnitType, NoDataValue), "
+          "which GDAL may read differently: "+rewrite+", or remove the side file"; return false;
+    }
+    if (pi.count("SCALE") || pi.count("OFFSET")){
+      bscale=1.0; boffset=0.0; bsrc="in "+side;
+      for (int k=0;k<2;k++){
+        const char *nm=(k==0)?"SCALE":"OFFSET"; map<string,string>::const_iterator it=pi.find(nm); if (it==pi.end()){continue;}
+        char *endp; const double v=strtod(it->second.c_str(),&endp);
+        if (it->second.empty() || (*endp!='\0') || !std::isfinite(v)){err=F+"its band "+string((k==0)?"Scale":"Offset")+" in "+side+" ("+it->second+") is not a number"; return false;}
+        if (k==0){bscale=v;} else {boffset=v;}
+      }
+    }
+    if (pi.count("UNITTYPE")){unit=pi["UNITTYPE"]; usrc="UnitType in "+side;}
+    if (pi.count("NODATA")){pamNodata=pi["NODATA"]; pamHasNodata=true;}
+  }
+  if (bscale==0.0){err=F+"its band scale "+bsrc+" is 0 (every value would be the offset): save the raster with its elevations (e.g. gdal_translate -unscale)"; return false;}
+  //the band unit (BandUnit): read as metres when the whole text is a metre form, or when there is no unit; another length and
+  //a scaled metre stop, also with METRES; any other text stops unless METRES follows the file name: the user's statement that
+  //the values are metres, after which the file's own unit is reported every run (also for a metre form or no unit)
+  const int bu=BandUnit(unit);
+  const string shown=Shown(unit),hint=cmd.empty()?string(":LandSurface or :BedrockSurface <file>"):cmd;
+  if (bu==BU_LENGTH){
+    err=F+"its elevations are in "+shown+" (the band unit, "+usrc+"); Raven reads elevations in metres: convert the values to metres and set the band unit to m "
+        "(e.g. gdal_calc.py, then gdal_edit.py -units m)"+(metres?string("; METRES after the file name does not apply to a unit of another length"):string("")); return false;
+  }
+  if (bu==BU_SCALED){
+    err=F+"its band unit is '"+shown+"' ("+usrc+"), a metre with a number or a part (a scale, factor or exponent), so the values are not plain metres: "
+        "write the elevations unscaled in metres, or give the scale as the band's scale and offset (e.g. gdal_edit.py -scale 0.1 -units m)"+
+        (metres?string("; METRES after the file name does not apply to a scaled unit"):string("")); return false;
+  }
+  if (metres){
+    note=F+"read as metres because METRES follows the file name ("+hint+" METRES); "+((bu==BU_NONE)?string("the file gives no band unit"):
+         "the file's own band unit is '"+shown+"' ("+usrc+")")+": check that its values are metres";
+    return true;
+  }
+  if (bu==BU_TEXT){
+    err=F+"its band unit is '"+shown+"' ("+usrc+"), which is not one of the metre forms Raven reads as metres (m, metre, metres, meter, meters, m MSL, EPSG:9001 and the "
+        "others in the manual's table of band units): if its elevations are in metres, state it by writing METRES after the file name ("+hint+" METRES); otherwise "
+        "convert the values to metres and set the band unit to m (e.g. gdal_calc.py, then gdal_edit.py -units m)"; return false;
+  }
+  return true;
 }
 
 bool GWGeoTIFF::IsTIFFName(const string &filename)
@@ -1111,13 +1292,7 @@ bool GWGeoTIFF::Read(const string &filename,gw_geotiff &R,string &err,const bool
   vector<unsigned char> data((size_t)sz);
   if ((sz>0) && !IN.read((char*)&data[0],sz)){err="cannot read raster file "+filename; return false;}
   string pam; bool hasPam=false; //(GDAL's side file, read before the file's own metadata as GDAL reads it)
-  { ifstream X((filename+".aux.xml").c_str(),ios::binary);
-    if (X){
-      X.seekg(0,ios::end); const streamoff xs=X.tellg(); X.seekg(0,ios::beg);
-      if ((xs<0) || ((unsigned long long)xs>(16ULL<<20))){err="GeoTIFF file "+filename+": its GDAL side file "+filename+".aux.xml is larger than the 16 MB Raven reads, so its band scale, offset and unit cannot be checked"; return false;}
-      ostringstream s; s<<X.rdbuf(); pam=s.str(); hasPam=true;
-    }
-  }
+  if (!ReadSideFile(filename,pam,hasPam,err)){return false;}
   return ReadMemory(data.empty()?NULL:&data[0],data.size(),filename,R,err,metres,hasPam?&pam:NULL,cmd);
 }
 
@@ -1258,7 +1433,7 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
   }
   if ((vertU!=0) && (vertU!=9001)){err=F+"its elevations are in "+UnitName(vertU)+" (VerticalUnitsGeoKey); Raven reads elevations in metres: convert the values to metres and save the raster without that key (e.g. gdal_calc.py)"; return false;}
   //-- GDAL's band scale, offset and unit (GDAL_METADATA, and the side file <raster>.aux.xml, which GDAL reads first): the
-  //   values are read unscaled, as GDAL's -unscale and GIS programs show them; the unit must be a metre form (BandUnit)
+  //   values are read unscaled, as GDAL's -unscale and GIS programs show them; the unit must be a metre form (BandMeta)
   double bscale=1.0,boffset=0.0; string pamNodata; bool pamHasNodata=false;
   { const uint64_t MAXMETA=16ULL<<20;
     const TEntry *tm=T.Tag(42112);
@@ -1266,56 +1441,9 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
       err=F+"its GDAL_METADATA tag holds "+to_string((unsigned long long)(tm->count>>20))+" MB, more than the 16 MB Raven reads, so its band scale, offset and unit cannot be checked: "
           "save the raster without the extra metadata (e.g. gdal_translate -unscale -co PROFILE=GeoTIFF in.tif out.tif)"; return false;
     }
-    const string meta=T.Ascii(42112,MAXMETA);
-    map<string,string> items; if (meta!=""){GDALBandItems(meta,items);}
-    for (int k=0;k<2;k++){
-      const char *nm=(k==0)?"SCALE":"OFFSET"; map<string,string>::const_iterator it=items.find(nm); if (it==items.end()){continue;}
-      char *endp; const double v=strtod(it->second.c_str(),&endp);
-      if (it->second.empty() || (*endp!='\0') || !std::isfinite(v)){err=F+"its band "+string(nm)+" in GDAL_METADATA ("+it->second+") is not a number"; return false;}
-      if (k==0){bscale=v;} else {boffset=v;}
-    }
-    string bsrc="in GDAL_METADATA";
-    map<string,string>::const_iterator iu=items.find("UNITTYPE");
-    string unit=(iu!=items.end())?iu->second:string(""),usrc="UNITTYPE in GDAL_METADATA";
-    if (pam!=NULL){ //GDAL's side file: a Scale or Offset there replaces both of the file's (the other is then 1 or 0); a UnitType
-                    //that is not empty replaces the file's; a NoDataValue replaces GDAL_NODATA
-      const string side=name+".aux.xml"; map<string,string> pi; string pe;
-      if (PAMBandItems(*pam,pi,pe)==2){err=F+"its GDAL side file "+side+" cannot be read ("+pe+"), so its band scale, offset and unit cannot be checked: "
-                                         "correct or remove the side file, or let GDAL write it again (e.g. gdalinfo -stats)"; return false;}
-      if (pi.count("SCALE") || pi.count("OFFSET")){
-        bscale=1.0; boffset=0.0; bsrc="in "+side;
-        for (int k=0;k<2;k++){
-          const char *nm=(k==0)?"SCALE":"OFFSET"; map<string,string>::const_iterator it=pi.find(nm); if (it==pi.end()){continue;}
-          char *endp; const double v=strtod(it->second.c_str(),&endp);
-          if (it->second.empty() || (*endp!='\0') || !std::isfinite(v)){err=F+"its band "+string((k==0)?"Scale":"Offset")+" in "+side+" ("+it->second+") is not a number"; return false;}
-          if (k==0){bscale=v;} else {boffset=v;}
-        }
-      }
-      if (pi.count("UNITTYPE") && !pi["UNITTYPE"].empty()){unit=pi["UNITTYPE"]; usrc="UnitType in "+side;}
-      if (pi.count("NODATA")){pamNodata=pi["NODATA"]; pamHasNodata=true;}
-    }
-    if (bscale==0.0){err=F+"its band SCALE "+bsrc+" is 0 (every value would be the OFFSET): save the raster with its elevations (e.g. gdal_translate -unscale)"; return false;}
-    //the band unit (GWGeoTIFF::BandUnit): read as metres only when the whole text is a metre form, or when there is no unit;
-    //another length unit stops; any other text stops unless the user confirms metres (METRES after the file name)
-    const int bu=GWGeoTIFF::BandUnit(unit);
-    const string shown=Shown(unit),hint=cmd.empty()?string(":LandSurface or :BedrockSurface <file>"):cmd;
-    if (bu==BU_LENGTH){
-      err=F+"its elevations are in "+shown+" (the band unit, "+usrc+"); Raven reads elevations in metres: convert the values to metres and set the band unit to m "
-          "(e.g. gdal_calc.py, then gdal_edit.py -units m)"+(metres?string("; METRES after the file name does not apply to a unit of another length"):string(""));
-      return false;
-    }
-    if (bu==BU_SCALED){
-      err=F+"its band unit is '"+shown+"' ("+usrc+"), a metre with a number or a part (a scale, factor or exponent), so the values are not plain metres: "
-          "write the elevations unscaled in metres, or give the scale as the band's scale and offset (e.g. gdal_edit.py -scale 0.1 -units m)"+
-          (metres?string("; METRES after the file name does not apply to a scaled unit"):string(""));
-      return false;
-    }
-    if ((bu==BU_TEXT) && !metres){
-      err=F+"its band unit is '"+shown+"' ("+usrc+"), which is not one of the metre forms Raven reads as metres (m, metre, metres, meter, meters, m MSL, EPSG:9001 and the "
-          "others in the manual's table of band units): if its elevations are in metres, confirm it by writing METRES after the file name ("+hint+" METRES); otherwise "
-          "convert the values to metres and set the band unit to m (e.g. gdal_calc.py, then gdal_edit.py -units m)";
-      return false;
-    }
+    string note;
+    if (!BandMeta(F,T.Ascii(42112,MAXMETA),pam,name+".aux.xml",metres,cmd,bscale,boffset,pamHasNodata,pamNodata,note,err)){return false;}
+    if (note!=""){R.notes+=string(R.notes.empty()?"":"\n")+note;}
   }
   if (R.rasterType==2){xul-=0.5*sx; yul+=0.5*sy;}    //PixelIsPoint: the tie point is the centre of the pixel
   //-- NODATA
