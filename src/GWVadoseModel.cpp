@@ -49,7 +49,7 @@ void CGroundwaterModel::VZSetup()
                          "of the unsaturated columns); give every aquifer class the columns pass through a positive POROSITY").c_str(),BAD_DATA);
         if (!C.unsatGiven && !warned[P.layers[l].iclass]){warned[P.layers[l].iclass]=1; noUnsat+=(noUnsat==""?"":", ")+C.name;}
       }
-      if (_vzMode!=2){ //Sy against the drainable porosity of the retention curve 1 m above the water table (design note, section
+      if (_vzMode!=2){ //Sy against the drainable porosity of the retention curve 1 m above the water table (soil_zone_columns_plan.md
         //1.5): a rising water table releases the column's water above equilibrium to MODFLOW, which stores it with Sy; with Sy
         //much smaller each step's rise releases more than the last (a feedback that stops only at the soil-zone base).
         //(KINEMATIC: its reference is ths - Sy, so this comparison does not apply)
