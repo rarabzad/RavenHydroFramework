@@ -819,34 +819,81 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
       //qualifier, as GDAL and PROJ write US survey feet ("ftUS", "usft", "USfeet"), and any word ending in feet or foot
       //("surveyfeet", "decimalfeet") are feet too. A word glued to a digit or a non-ASCII letter ("µm", "10m"), or that
       //follows a number ("0.1 m", "[0.1 m]", "1,5 m", "1:1000 m": a scaled unit), is no metre word; a token with letters
-      //other than an exponent is no number ("CH1903 m", "NAVD88 m" are metres)
+      //other than an exponent is no number ("CH1903 m", "NAVD88 m" are metres), and so is one followed by a number
+      //("m*0.1", "metres x 0.1", "m (scaled by 0.1)"). Prefixes written as words ("kiloMeters", "Kilo Meter") and parts
+      //("tenths of metres") make another unit
       const string &ut=iu->second;
-      vector<string> wd; vector<char> glued; string cur; bool gl=false; unsigned char prev=' ';
+      //(a blank-separated token that is a number as a whole, also with punctuation or a factor sign: 0.1, (0.1, [0.1, 1,5,
+      // 1/1000, 10^-3, x0.1, *0.1, 1:1000)
+      struct Num {static bool Is(const string &tok){
+        bool dig=false,word=false;
+        for (size_t q=0;q<tok.size();q++){
+          const unsigned char c=(unsigned char)tok[q];
+          if (isdigit(c)){dig=true;}
+          else if ((c>=0x80) || (isalpha(c) && !(((c=='e') || (c=='E')) && dig) && !(((c=='x') || (c=='X')) && (q==tok.find_first_not_of("([{=*:"))))){word=true;}
+        }
+        return dig && !word;
+      }
+      //(a fraction: a decimal point or comma, a slash or an exponent between digits, 0.1, 1,5, 1/1000, 1e-3)
+      static bool Fraction(const string &t){
+        for (size_t q=0;q+1<t.size();q++){
+          const unsigned char c=(unsigned char)t[q],d=(unsigned char)t[q+1];
+          if (((c=='.') || (c==',') || (c=='/')) && isdigit(d) && ((c=='.') || ((q>0) && isdigit((unsigned char)t[q-1])))){return true;}
+          if (((c=='e') || (c=='E')) && (q>0) && isdigit((unsigned char)t[q-1]) && (isdigit(d) || (((d=='-') || (d=='+')) && (q+2<t.size()) && isdigit((unsigned char)t[q+2])))){return true;}
+        }
+        return false;
+      }
+      //(a factor sign or word: x, *, the multiplication sign, /, by, scale(d), factor)
+      static bool Factor(string t){
+        for (size_t q=0;q<t.size();q++){t[q]=(char)tolower((unsigned char)t[q]);}
+        const size_t a=t.find_first_not_of("([{"),b=t.find_last_not_of(")]}:,;");
+        t=(a==string::npos)?string(""):t.substr(a,b-a+1);
+        return (t=="x") || (t=="*") || (t=="\xC3\x97") || (t=="/") || (t=="by") || (t=="scale") || (t=="scaled") || (t=="factor");
+      }
+      //(the number token after a metre word, with a factor sign in front of it: *0.1, x0.1, /10, the multiplication sign)
+      static bool FactorLead(const string &t){
+        const size_t a=t.find_first_not_of("([{"); if (a==string::npos){return false;}
+        return (t[a]=='*') || (t[a]=='x') || (t[a]=='X') || (t[a]=='/') || (t.compare(a,2,"\xC3\x97")==0);
+      }
+    };
+      vector<string> wd; vector<char> glued; vector<size_t> wend; string cur; bool gl=false; unsigned char prev=' ';
       bool afterNum=false; //(the blank-separated token before the current one is a number as a whole)
       size_t ts=0;         //(where the current blank-separated token starts)
       for (size_t i=0;i<=ut.size();i++){
         const unsigned char ch=(i<ut.size())?(unsigned char)ut[i]:' ';
         const bool blank=(ch==' ') || (ch=='\t') || (ch=='\r') || (ch=='\n');
-        if ((ch<0x80) && isalpha(ch) && !cur.empty() && islower(prev) && isupper(ch)){wd.push_back(cur); glued.push_back(gl?1:0); cur=""; gl=false;}
+        if ((ch<0x80) && isalpha(ch) && !cur.empty() && islower(prev) && isupper(ch)){wd.push_back(cur); glued.push_back(gl?1:0); wend.push_back(i); cur=""; gl=false;}
         if ((ch<0x80) && isalpha(ch)){if (cur.empty() && !((prev<0x80) && isalpha(prev))){gl=(prev>=0x80) || isdigit(prev) || ((i==ts) && afterNum);} cur+=(char)tolower(ch);}
-        else if (!cur.empty()){wd.push_back(cur); glued.push_back(gl?1:0); cur="";}
+        else if (!cur.empty()){wd.push_back(cur); glued.push_back(gl?1:0); wend.push_back(i); cur="";}
         if (blank){
-          if (i>ts){ //(a number, also with punctuation or a factor sign: 0.1, (0.1, [0.1, 1,5, 1/1000, 10^-3, x0.1, *0.1, 1:1000)
-            const string tok=ut.substr(ts,i-ts); bool dig=false,word=false;
-            for (size_t q=0;q<tok.size();q++){
-              const unsigned char c=(unsigned char)tok[q];
-              if (isdigit(c)){dig=true;}
-              else if ((c>=0x80) || (isalpha(c) && !(((c=='e') || (c=='E')) && dig) && !(((c=='x') || (c=='X')) && (q==tok.find_first_not_of("([{=*:"))))){word=true;}
-            }
-            afterNum=dig && !word;
-          }
+          if (i>ts){afterNum=Num::Is(ut.substr(ts,i-ts));}
           ts=i+1;
         }
         prev=ch;
       }
+      for (size_t j=0;j<wd.size();j++){ //(a number after the word: the word is a scaled unit)
+        if (glued[j]){continue;}
+        const string rest=(wend[j]<ut.size())?ut.substr(wend[j]):string("");
+        size_t a=0; string prevTok;
+        while (a<rest.size()){ //(a scale: a number after a factor sign or word, or a fraction; "m NAVD 88", "m, version 2" are no scale)
+          while ((a<rest.size()) && ((rest[a]==' ') || (rest[a]=='\t') || (rest[a]=='\r') || (rest[a]=='\n'))){a++;}
+          size_t b=a; while ((b<rest.size()) && !((rest[b]==' ') || (rest[b]=='\t') || (rest[b]=='\r') || (rest[b]=='\n'))){b++;}
+          if (b>a){
+            string tok=rest.substr(a,b-a);
+            const size_t m=tok.find("\xC3\x97"); if ((m!=string::npos) && (tok.find_first_not_of("([{")==m)){tok.erase(m,2); tok.insert(m,"*");}
+            if (Num::Is(tok) && (Num::FactorLead(tok) || Num::Factor(prevTok) || Num::Fraction(tok))){glued[j]=1; break;}
+            prevTok=tok;
+          }
+          a=b;
+        }
+      }
       const char *mw[]={"m","metre","metres","meter","meters"};
       const char *ow[]={"ft","foot","feet","cm","mm","dm","km","inch","inches","yard","yards","yd","yds","mile","miles",
-                        "fathom","fathoms","chain","chains","kmi","fasl","fmsl","pies","pie","pieds","pied","voet"};
+                        "fathom","fathoms","chain","chains","kmi","fasl","fmsl","pies","pie","pieds","pied","voet",
+                        "fuss","piedi","piede","fot","fod"};                                   //(feet: German, Italian, Swedish, Danish)
+      //(a prefix written as a word, and parts of a metre: another unit when attached to a metre word, "kiloMeters", "Kilo
+      // Meter", "tenths of metres", or standing as the unit; "nano DEM m" is metres)
+      const char *pw[]={"kilo","centi","milli","deci","micro","nano","tenth","tenths","hundredth","hundredths","thousandth","thousandths"};
       //(PROJ's short unit ids, which are also ordinary words or abbreviations ("CH1903", "mi-marée", "see link"): another unit
       //only when no metre word is given and they stand first, or after a qualifier as in us-ch, us-mi, us-in)
       const char *sw[]={"ch","mi","fath","link","links","in"};
@@ -858,6 +905,12 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
       for (size_t j=0;j<wd.size();j++){
         for (int i=0;i<5;i++){if ((wd[j]==mw[i]) && !glued[j]){anyM=true;}}
         for (size_t i=0;i<sizeof(ow)/sizeof(ow[0]);i++){if (wd[j]==ow[i]){other=true;}}
+        for (size_t i=0;i<sizeof(pw)/sizeof(pw[0]);i++){
+          if (wd[j]!=pw[i]){continue;}
+          size_t n=j+1; if ((n<wd.size()) && (wd[n]=="of")){n++;}
+          bool mnext=false; for (int k=0;(k<5) && (n<wd.size());k++){if (wd[n]==mw[k]){mnext=true;}}
+          if (mnext || (wd.size()==1)){other=true;}
+        }
         for (size_t i=0;i<sizeof(op)/sizeof(op[0]);i++){if (wd[j].compare(0,strlen(op[i]),op[i])==0){other=true;}}
         for (int i=0;i<3;i++){
           const size_t n=strlen(fw[i]);
@@ -871,15 +924,27 @@ bool GWGeoTIFF::ReadMemory(const unsigned char *data,const size_t n,const string
           }
         }
       }
-      { //an EPSG unit code of feet (9002, 9003, 9005, 9070, 9080; 9001 is metre) and the German Fuss written with sharp s
+      { //an EPSG unit code of length (9001 is metre; 9002-9099 are other lengths, such as the feet 9002, 9003 and 9005, the
+        //kilometre 9036, the mile 9093; 9300-9302 the British feet, chain and link of 1922; 1025 is the millimetre, 1033 the
+        //centimetre), the German Fuss written with sharp s
+        //and the Portuguese pé(s)
         string U=ut; for (size_t q=0;q<U.size();q++){U[q]=(char)toupper((unsigned char)U[q]);}
         for (size_t q=U.find("EPSG");q!=string::npos;q=U.find("EPSG",q+4)){
           size_t r=q+4; while ((r<U.size()) && ((U[r]==':') || (U[r]==' '))){r++;}
           size_t s=r; while ((s<U.size()) && isdigit((unsigned char)U[s])){s++;}
           const long code=(s>r)?atol(U.substr(r,s-r).c_str()):0;
-          if (code==9001){anyM=true;} else if ((code==9002) || (code==9003) || (code==9005) || (code==9070) || (code==9080)){other=true;} //(the feet codes)
+          if (code==9001){anyM=true;} else if (((code>=9002) && (code<=9099)) || ((code>=9300) && (code<=9302)) || (code==1025) || (code==1033)){other=true;}
         }
         if (U.find("FU\xC3\x9F")!=string::npos){other=true;}
+        const char *pe[]={"P\xC3\xA9","P\xC3\x89"};                    //(pé, PÉ: a word of its own, also as pés)
+        for (int k=0;k<2;k++){
+          for (size_t q=U.find(pe[k]);q!=string::npos;q=U.find(pe[k],q+1)){
+            size_t r=q+3; if ((r<U.size()) && (U[r]=='S')){r++;}
+            const bool before=(q==0) || (((unsigned char)U[q-1]<0x80) && !isalpha((unsigned char)U[q-1]));
+            const bool after=(r>=U.size()) || (((unsigned char)U[r]<0x80) && !isalpha((unsigned char)U[r]));
+            if (before && after){other=true;}
+          }
+        }
       }
       //(an empty unit is no unit; a text without a word, such as ' or ?, is a unit Raven does not know)
       bool firstM=(ut.find_first_not_of(" \t\r\n")==string::npos);

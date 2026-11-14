@@ -40,6 +40,8 @@ private:
   typedef int (*f_addr)  (const char*,const char*,const char*,char*);
   typedef int (*f_rank)  (const char*,int*);
   typedef int (*f_errmsg)(char*);
+  typedef int (*f_sval)  (const char*,void**);
+  typedef int (*f_str2)  (const char*,char*);
 
   f_str  _initialize; f_void _finalize;
   f_dbl  _prepare_time_step; f_void _finalize_time_step;
@@ -49,6 +51,7 @@ private:
   f_errmsg _get_last_bmi_error;
   f_dbl  _get_current_time;
   f_errmsg _get_version;   ///< optional (MODFLOW 6 exports get_version)
+  f_rank   _get_var_itemsize; f_str2 _get_var_type; f_sval _get_value_string; ///< optional (strings of MODFLOW's memory)
 
   void *Sym(const char *name);
   bool  Check(int rc,const string &what);
@@ -78,6 +81,8 @@ public:
   int    GetVarSize      (const string &address);
   double*GetDoublePtr    (const string &address);
   int   *GetIntPtr       (const string &address);
+  bool   GetStrings      (const string &address,vector<string> &s); ///< a string, or an array of strings, of MODFLOW's memory
+                                                                     ///< (false if there is none, or the library cannot give it)
   double GetModelTime  ();
   string GetLastError    () const {return _lasterr;}
   string GetVersion      ();

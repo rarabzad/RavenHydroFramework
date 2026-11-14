@@ -10,6 +10,8 @@
 #include "GWEPSGTable.h"
 #include "GWUtil.h"
 #include <cstring>
+#include <set>
+#include <map>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
@@ -425,6 +427,26 @@ namespace
     for (size_t j=i;j<s.size();j++){if (!isdigit((unsigned char)s[j])){return false;}}
     id=atoll(s.c_str()); return true;
   }
+  //the message for an ID that FeatureID refuses (a whole JSON number beyond 9e15, as GDAL writes an int64 field, is not
+  //held exactly by the reader's numbers; a string holds up to 18 digits)
+  string IDRefused(const JVal &v)
+  {
+    if ((v.t==J_NUM) && std::isfinite(v.n) && (v.n==floor(v.n)) && (fabs(v.n)>9.0e15)){
+      const size_t d=(!v.s.empty() && (v.s[0]=='-'))?1:0;
+      const bool digits=(v.s.size()>d) && (v.s.size()<=d+18) && (v.s.find_first_not_of("0123456789",d)==string::npos);
+      return "the number "+v.s+", larger than 9e15, the largest ID Raven reads as a number ("+
+             (digits?"write it as a string: \""+v.s+"\")":string("write the ID as a string of at most 18 digits)"));
+    }
+    return JCoords::What(v)+", not a whole number";
+  }
+  //the message for a missing ID field: GDAL's ID_FIELD creation option moves the field out of "properties" into the
+  //feature's "id" member
+  string IDMissing(const JVal &F,const string &idField,const string &filename)
+  {
+    string e="GeoJSON feature missing ID field '"+idField+"' in "+filename;
+    if (F.Get("id")!=NULL){e+=" (the feature has an \"id\" member, where GDAL's ID_FIELD option puts the field: write the file without ID_FIELD, so that "+idField+" stays in \"properties\")";}
+    return e;
+  }
   bool RingFromJSON(const JVal &jr,gw_ring &r,JCoords &C)
   {
     r.clear();
@@ -436,7 +458,8 @@ namespace
     }
     if ((r.size()>1) && (r.front().x==r.back().x) && (r.front().y==r.back().y)){r.pop_back();}
     for (size_t i=0;i<r.size();i++){r[i]=C.Point(r[i].x,r[i].y);}
-    return (r.size()>=3);
+    set<pair<double,double> > d; for (size_t i=0;(i<r.size()) && (d.size()<3);i++){d.insert(make_pair(r[i].x,r[i].y));}
+    return (d.size()>=3); //(a ring of fewer than 3 distinct vertices has no area)
   }
   void AddPolygon(const JVal &jpoly,vector<gw_ring> &rings,JCoords &C,vector<int> *part,const int ipart,const string &where)
   {
@@ -444,7 +467,10 @@ namespace
     for (size_t i=0;i<jpoly.a.size();i++){
       gw_ring r;
       C.ring="ring "+to_string((unsigned long long)(i+1))+((i==0)?" (outline), ":" (hole), ");
-      if (!RingFromJSON(jpoly.a[i],r,C)){continue;}
+      if (!RingFromJSON(jpoly.a[i],r,C)){
+        if (i==0){return;} //(an outline without area: the polygon has none, and its holes are not read)
+        continue;
+      }
       double A=GWGeom::SignedArea(r);
       bool outer=(i==0);
       if ((outer && (A<0)) || (!outer && (A>0))){std::reverse(r.begin(),r.end());}
@@ -532,8 +558,9 @@ double GWGeom::SignedArea(const gw_ring &r)
 
 bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
                                  map<long long,vector<gw_ring> > &shapes,string &err,const CGWCRS *crs,double *rawbox,
-                                 map<long long,vector<int> > *parts)
+                                 map<long long,vector<int> > *parts,map<long long,string> *noArea)
 {
+  if (noArea!=NULL){noArea->clear();}
   ifstream IN(filename.c_str(),ios::binary);
   if (IN.fail()){err="cannot open GeoJSON file "+filename;return false;}
   stringstream ss; ss<<IN.rdbuf(); string txt=ss.str();
@@ -545,7 +572,7 @@ bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
   if ((feats==NULL) || (feats->t!=J_ARR)){err=filename+" is not a GeoJSON FeatureCollection";return false;}
   JCoords C(crs);
   if (!CheckFileCRS(root,filename,crs,err,C.unknown)){return false;}
-  int nfound=0,npart=0;
+  int nfound=0,npart=0; map<long long,string> first; //(first: the first feature of an ID read without a ring)
   for (size_t f=0;f<feats->a.size();f++)
   {
     const JVal &F=feats->a[f];
@@ -560,8 +587,8 @@ bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
     if (idField!=""){
       if ((props==NULL) || (props->t!=J_OBJ)){err="GeoJSON "+C.feature+" in "+filename+" has no \"properties\" member, so no ID field '"+idField+"'";return false;}
       const JVal *jid=props->Get(idField);
-      if (jid==NULL){err="GeoJSON feature missing ID field '"+idField+"' in "+filename;return false;}
-      if (!FeatureID(*jid,id)){err="GeoJSON file "+filename+", "+C.feature+": its ID field '"+idField+"' is "+JCoords::What(*jid)+", not a whole number";return false;}
+      if (jid==NULL){err=IDMissing(F,idField,filename);return false;}
+      if (!FeatureID(*jid,id)){err="GeoJSON file "+filename+", "+C.feature+": its ID field '"+idField+"' is "+IDRefused(*jid);return false;}
     }
     vector<gw_ring> &rings=shapes[id];
     vector<int> *pp=(parts!=NULL)?&(*parts)[id]:NULL;  //(the polygon each ring belongs to: a Polygon, or one part of a MultiPolygon)
@@ -569,9 +596,20 @@ bool GWGeom::ReadGeoJSONPolygons(const string &filename,const string &idField,
     if (gt->s=="Polygon"){AddPolygon(*co,rings,C,pp,npart++,"its coordinates");}
     else if (C.Array(*co,"its coordinates")){for (size_t i=0;i<co->a.size();i++){AddPolygon(co->a[i],rings,C,pp,npart++,"polygon "+to_string((unsigned long long)(i+1)));}}
     if (!C.bad.empty()){err="GeoJSON file "+filename+", "+C.bad;return false;}
+    if (rings.empty() && (first.find(id)==first.end())){
+      size_t nr=0; //(the rings written: none is an empty geometry)
+      if (gt->s=="Polygon"){nr=co->a.size();} else {for (size_t i=0;i<co->a.size();i++){nr+=(co->a[i].t==J_ARR)?co->a[i].a.size():1;}}
+      first[id]=C.feature+((nr==0)?": it has no polygon (its coordinates are empty)":": its polygon has no outline of 3 or more distinct vertices, so no area");
+    }
     nfound++;
   }
   if (nfound==0){err="no Polygon/MultiPolygon features found in "+filename;return false;}  //(callers may then try lines)
+  for (map<long long,string>::const_iterator it=first.begin();it!=first.end();it++){ //(an ID none of whose polygons has an area is left
+    if (shapes[it->first].empty()){                                                 // out; the caller decides whether it needs it)
+      shapes.erase(it->first); if (parts!=NULL){parts->erase(it->first);}
+      if (noArea!=NULL){(*noArea)[it->first]="GeoJSON file "+filename+", "+it->second;}
+    }
+  }
   C.Box(rawbox);
   return CheckLonLat(C,filename,err);
 }
@@ -604,8 +642,8 @@ bool GWGeom::ReadGeoJSONLines(const string &filename,const string &idField,
     if ((idField!="") && ((props==NULL) || (props->t!=J_OBJ))){err="GeoJSON "+C.feature+" in "+filename+" has no \"properties\" member, so no ID field '"+idField+"'";return false;}
     if (idField!=""){
       const JVal *jid=props->Get(idField);
-      if (jid==NULL){err="GeoJSON feature missing ID field '"+idField+"' in "+filename;return false;}
-      if (!FeatureID(*jid,id)){err="GeoJSON file "+filename+", "+C.feature+": its ID field '"+idField+"' is "+JCoords::What(*jid)+", not a whole number";return false;}
+      if (jid==NULL){err=IDMissing(F,idField,filename);return false;}
+      if (!FeatureID(*jid,id)){err="GeoJSON file "+filename+", "+C.feature+": its ID field '"+idField+"' is "+IDRefused(*jid);return false;}
       C.feature+=" ("+idField+" "+to_string(id)+")";
     }
     vector<const JVal*> parts;
@@ -761,6 +799,8 @@ bool CGWCRS::Parse(const string &spec0,string &err)
 void CGWCRS::Forward(const double lon,const double lat,double &x,double &y) const
 {
   double p=lat*D2R,l=lon*D2R-_lon0;
+  if (fabs(l)>CRS_PI+1e-12){l=remainder(l,2*CRS_PI);} //(the longitude from the central meridian within +-180 degrees, as PROJ's
+                                                      // adjlon takes it: the cones are not periodic in it)
   if (_type==1){
     double s=sin(p),c2=2*sqrt(_n)/(1+_n);
     double t=sinh(atanh(s)-c2*atanh(c2*s));

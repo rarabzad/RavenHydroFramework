@@ -5,7 +5,8 @@
   SPDX-License-Identifier: Artistic-2.0
   Raven-MODFLOW 6 groundwater coupling: an existing MODFLOW 6 model coupled to Raven.
   The user's simulation is copied into the output folder and kept intact except for the time discretization (split
-  into Raven time steps), the packages Raven takes over (removed) and Raven's packages added (RCH_RAVEN, DRN_RAVEN; with
+  into Raven time steps), the packages Raven takes over (removed), the names of unnamed packages written into their rows
+  (the names MODFLOW 6 gives them in the model's own name file) and Raven's packages added (RCH_RAVEN, DRN_RAVEN; with
   water-table ET, :SurfaceWaterExchange, :ReservoirExchange or :SoilZone PHYSICAL also EVT_RAVEN, SWX_RAVEN, RES_RAVEN, SZ*_RAVEN).
   HRUs are linked to the cells of the model's top active layer through overlap areas - from cell polygons, or from an
   :OverlapWeights table as in the MODFLOW-USG coupling - normalised per HRU so that each HRU's volume is conserved.
@@ -144,6 +145,14 @@ namespace
   }
   bool IsTakeOverType(const string &ftype){string f=Upper(ftype); return (f.find("RCH")==0) || (f.find("EVT")==0) || (f.find("UZF")==0);}
   bool IsStreamType(const string &ftype){string f=Upper(ftype); return (f=="RIV6") || (f=="DRN6") || (f=="GHB6");}
+  //the package types of which a GWF model may hold several (MODFLOW 6.8.1, gwf.f90: GWF_MULTIPKG); a package of another
+  //type is named by its type (DIS, NPF, STO, ...)
+  bool IsMultiType(const string &base)
+  {
+    const char *m[]={"WEL","DRN","RIV","GHB","RCH","EVT","CHD","MAW","SFR","LAK","UZF","API"};
+    for (size_t i=0;i<sizeof(m)/sizeof(m[0]);i++){if (base==m[i]){return true;}}
+    return false;
+  }
 }
 
 //////////////////////////////////////////////////////////////////
@@ -188,10 +197,11 @@ void CGroundwaterModel::ExtReadSimulation()
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
     if (W0=="END"){block=""; continue;}
     if ((block=="PACKAGES") && (w.size()>=2)){
-      gw_ext_pkg P; P.ftype=W0; P.fname=w[1];
+      gw_ext_pkg P; P.ftype=W0; P.fname=w[1]; P.named=(w.size()>=3);
       string base=W0.substr(0,W0.size()-1); //without the trailing 6
-      if (w.size()>=3){P.pname=Upper(w[2]);}
-      else {int c=++count[base]; P.pname=((base=="DIS") || (base=="DISV") || (base=="DISU") || (base=="NPF") || (base=="STO") || (base=="IC") || (base=="OC"))?base:base+"-"+to_string(c);}
+      const int c=++count[base]; //(the row's place among all rows of its type, named or not, as MODFLOW 6 numbers them)
+      if (P.named){P.pname=Upper(w[2]);}
+      else {P.pname=IsMultiType(base)?base+"-"+to_string(c):base;}
       _extPkgs.push_back(P);
     }
   }
@@ -305,6 +315,10 @@ void CGroundwaterModel::ExtRewriteTDIS(const optStruct &Options)
     }
   }
   I.close();
+  for (size_t p=0;p<perlen.size();p++){
+    ExitGracefullyIf(perlen[p]<0.0,("CGroundwaterModel: the length of stress period "+to_string(p+1)+" in "+fu+" is "+ToStr(perlen[p])+
+      "; a stress period cannot be shorter than 0 (MODFLOW 6: PERLEN cannot be less than 0.0)").c_str(),BAD_DATA);
+  }
   ExitGracefullyIf((nper>=0) && (nper!=(int)perlen.size()),("CGroundwaterModel: "+fu+" gives NPER "+to_string(nper)+" but "+to_string(perlen.size())+
     " stress periods in PERIODDATA; MODFLOW 6 reads exactly NPER rows there").c_str(),BAD_DATA);
   double Tf=1.0; //model time units per day
@@ -630,6 +644,7 @@ void CGroundwaterModel::ExtEditNameFile(const bool addRaven)
   ExitGracefullyIf(L.empty(),("CGroundwaterModel: the copied model name file "+f+" is empty").c_str(),BAD_DATA);
   ofstream O(f.c_str());
   ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+f).c_str(),BAD_DATA);
+  vector<bool> used(_extPkgs.size(),false);
   for (size_t i=0;i<L.size();i++){
     vector<string> w=Words(L[i],block=="PACKAGES");
     if (!w.empty() && (Upper(w[0])=="BEGIN") && (w.size()>1)){block=Upper(w[1]);}
@@ -645,8 +660,21 @@ void CGroundwaterModel::ExtEditNameFile(const bool addRaven)
     if (!w.empty() && (Upper(w[0])=="END")){block="";}
     if ((block=="PACKAGES") && (w.size()>=2) && (Upper(w[0])!="BEGIN")){
       bool tk=false; for (size_t j=0;j<_extPkgs.size();j++){if ((_extPkgs[j].fname==w[1]) && (find(_takeOver.begin(),_takeOver.end(),_extPkgs[j].pname)!=_takeOver.end())){tk=true;}}
-      if (tk){O<<"# "<<L[i]<<"   # taken over by Raven\n"; continue;}
+      if (tk){ //(the row's carriage return, in a file with CRLF line ends, stays at the end of the line)
+        const bool cr=!L[i].empty() && (L[i][L[i].size()-1]=='\r');
+        O<<"# "<<(cr?L[i].substr(0,L[i].size()-1):L[i])<<"   # taken over by Raven"<<(cr?"\r":"")<<"\n"; continue;
+      }
       if (addRaven && (_hotHeads.size()>0) && (Upper(w[0])=="IC6")){O<<"  IC6  raven.ic  "<<((w.size()>=3)?w[2]:string("IC"))<<"   # hotstart heads from Raven\n"; continue;}
+      if (w.size()==2){ //an unnamed package of a type the model may hold several of: its name written into the row, so that
+                        //MODFLOW gives it the name it has in the model's own name file (removed rows and Raven's added
+                        //rows would otherwise change the place by which MODFLOW numbers it)
+        size_t j=0; for (j=0;j<_extPkgs.size();j++){if (!used[j] && !_extPkgs[j].named && (_extPkgs[j].ftype==Upper(w[0])) && (_extPkgs[j].fname==w[1])){break;}}
+        if ((j<_extPkgs.size()) && (_extPkgs[j].pname.find('-')!=string::npos)){
+          used[j]=true;
+          const size_t e=L[i].find_last_not_of(" \t\r,");
+          O<<L[i].substr(0,e+1)<<"  "<<_extPkgs[j].pname<<"   # the name MODFLOW 6 gives this package in the model's name file\n"; continue;
+        }
+      }
     }
     O<<L[i]<<"\n";
   }
@@ -683,6 +711,30 @@ void CGroundwaterModel::ExtProbe()
     }
   }
   if (!_mf6.Initialize(_mf6dir)){ExitGracefully(("CGroundwaterModel: the MODFLOW 6 model does not initialise: "+_mf6.GetLastError()+" (see "+_mf6dir+"/mfsim.lst)").c_str(),RUNTIME_ERR);}
+  { //every package Raven looks up by name (the stream package, the packages in the balance) must have that name in
+    //MODFLOW's memory: the model's package names as MODFLOW gave them (PKGNAMES), else the package's own memory
+    vector<string> mn; const bool haveNames=_mf6.GetStrings("__INPUT__/"+_mname+"/PKGNAMES",mn);
+    for (size_t i=0;i<mn.size();i++){mn[i]=Upper(mn[i]);}
+    string missing;
+    for (size_t i=0;i<_extPkgs.size();i++){
+      const gw_ext_pkg &P=_extPkgs[i];
+      if (!IsMultiType(P.ftype.substr(0,P.ftype.size()-1)) || (find(_takeOver.begin(),_takeOver.end(),P.pname)!=_takeOver.end())){continue;}
+      const bool in=haveNames?(find(mn.begin(),mn.end(),P.pname)!=mn.end()):_mf6.HasVar(_mf6.GetVarAddress(_mname,P.pname,"INUNIT"));
+      if (!in){missing+=(missing.empty()?"":", ")+P.pname+" ("+P.ftype+" "+P.fname+")";}
+    }
+    string have; for (size_t i=0;i<mn.size();i++){have+=(i?", ":"")+mn[i];}
+    ExitGracefullyIf(!missing.empty(),("CGroundwaterModel: MODFLOW 6 has no package named "+missing+" in the model "+_mname+
+      (have.empty()?string(""):" (its packages: "+have+")")+"; give each package of the name file "+_extNamFile+" a name as the third word of its row").c_str(),BAD_DATA);
+    //the stream package's auxiliary variables as MODFLOW read them (it keeps the names of the first AUXILIARY line only)
+    _extAuxMem.clear(); _extNauxMem=-1;
+    if ((_streamPkg!="") && (_streamMap=="AUX")){
+      const string S=Upper(_streamPkg),na=_mf6.GetVarAddress(_mname,S,"NAUX");
+      int *pna=_mf6.HasVar(na)?_mf6.GetIntPtr(na):NULL;
+      if (pna!=NULL){_extNauxMem=*pna;}
+      vector<string> an;
+      if (_mf6.GetStrings(_mf6.GetVarAddress(_mname,S,"AUXNAME_CST"),an) && ((_extNauxMem<0) || ((int)an.size()==_extNauxMem))){_extAuxMem=an; _extNauxMem=(int)an.size();}
+    }
+  }
   //MODFLOW 6 keeps the discretization and storage packages in its memory under fixed names (DIS, STO), whatever the name
   //file calls them, as it keeps NPF: those names first, then the name file's
   {const string cd[3]={"DIS",_disName,_extDisFtype.substr(0,_extDisFtype.size()-1)};
@@ -915,7 +967,10 @@ void CGroundwaterModel::ExtLinkHRUs(const optStruct &Options)
   else if (_extGridFile!=""){
     map<long long,vector<gw_ring> > shapes; string err;
     double rb[4];
-    if (!GWGeom::ReadGeoJSONPolygons(_extGridFile,_extGridID,shapes,err,InCRS(),rb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    map<long long,string> noArea;
+    if (!GWGeom::ReadGeoJSONPolygons(_extGridFile,_extGridID,shapes,err,InCRS(),rb,NULL,&noArea)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    ExitGracefullyIf(!noArea.empty(),("CGroundwaterModel: cell "+(noArea.empty()?string(""):to_string(noArea.begin()->first)+" of "+_extGridFile+
+      " has no area: "+noArea.begin()->second)).c_str(),BAD_DATA); //(every cell of the file is a cell of the model)
     CheckInputLonLat(_extGridFile,rb,"GeoJSON file");
     ExitGracefullyIf((int)shapes.size()!=_ncpl,("CGroundwaterModel: "+_extGridFile+" holds "+to_string(shapes.size())+" cells; the model layer has "+to_string(_ncpl)).c_str(),BAD_DATA);
     long long expect=1;
@@ -1005,25 +1060,32 @@ void CGroundwaterModel::ExtBuild(const optStruct &Options)
   _extAux=-1; _extNaux=0;
   if ((_streamPkg!="") && (_streamMap=="AUX")){
     string fn; for (size_t i=0;i<_extPkgs.size();i++){if (_extPkgs[i].pname==Upper(_streamPkg)){fn=_extPkgs[i].fname;}}
-    ifstream P((_mf6dir+"/"+fn).c_str()); string line,block;
+    //the auxiliary names of the file: MODFLOW 6 keeps those of the first AUXILIARY line of the OPTIONS block (every word
+    //of the line is a name); a later AUXILIARY line is not used
+    ifstream P((_mf6dir+"/"+fn).c_str()); string line,block; vector<string> fileAux; int nline=0;
     while (getline(P,line)){
       vector<string> w=Words(line,true); if (w.empty()){continue;}
       string W0=Upper(w[0]);
       if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
       if (W0=="END"){block=""; continue;}
-      if ((block=="OPTIONS") && ((W0=="AUXILIARY") || (W0=="AUX"))){ //(every word of the line is an auxiliary name, as for MODFLOW)
-        _extNaux=(int)w.size()-1; _extAux=-1;
-        for (size_t j=1;j<w.size();j++){if ((_extAux<0) && (Upper(w[j])==Upper(_streamAux))){_extAux=(int)j-1;}}
+      if ((block=="OPTIONS") && ((W0=="AUXILIARY") || (W0=="AUX"))){
+        nline++; if (nline==1){fileAux.assign(w.begin()+1,w.end());}
       }
     }
-    ExitGracefullyIf(_extAux<0,("CGroundwaterModel: stream package "+_streamPkg+" has no auxiliary variable "+_streamAux).c_str(),BAD_DATA);
-    //the number of auxiliary variables MODFLOW read (its memory): the stride of the values of each entry
-    const string na=_mf6.GetVarAddress(_mname,Upper(_streamPkg),"NAUX");
-    int *pna=_mf6.HasVar(na)?_mf6.GetIntPtr(na):NULL;
-    if (pna!=NULL){
-      ExitGracefullyIf(*pna!=_extNaux,("CGroundwaterModel: stream package "+_streamPkg+": MODFLOW 6 reads "+to_string(*pna)+" auxiliary variables, Raven "+to_string(_extNaux)+
-        " from its AUXILIARY line; write the line with the names only").c_str(),BAD_DATA);
+    //the names as MODFLOW read them (its memory, read while the model was initialised), else the file's first line
+    const vector<string> &aux=_extAuxMem.empty()?fileAux:_extAuxMem;
+    string an; for (size_t j=0;j<aux.size();j++){an+=(j?", ":"")+aux[j];}
+    if (nline>1){
+      WriteWarning("CGroundwaterModel: stream package "+_streamPkg+" ("+fn+") has "+to_string(nline)+" AUXILIARY lines in its OPTIONS block; MODFLOW 6 "
+                   "keeps the auxiliary variables of the first ("+an+") and Raven reads the subbasin ID from them. Write the auxiliary names on one line",false);
     }
+    _extNaux=(int)aux.size(); _extAux=-1;
+    for (size_t j=0;j<aux.size();j++){if ((_extAux<0) && (Upper(aux[j])==Upper(_streamAux))){_extAux=(int)j;}}
+    ExitGracefullyIf(_extAux<0,("CGroundwaterModel: stream package "+_streamPkg+" has no auxiliary variable "+_streamAux+
+      (aux.empty()?string(""):" (MODFLOW 6 reads the auxiliary variables "+an+(nline>1?string(", from the first AUXILIARY line"):string(""))+")")).c_str(),BAD_DATA);
+    //the number of auxiliary variables MODFLOW read: the stride of the values of each entry
+    ExitGracefullyIf((_extNauxMem>=0) && (_extNauxMem!=_extNaux),("CGroundwaterModel: stream package "+_streamPkg+": MODFLOW 6 reads "+to_string(_extNauxMem)+
+      " auxiliary variables, Raven "+to_string(_extNaux)+" from its AUXILIARY line; write the line with the names only").c_str(),BAD_DATA);
   }
   _sbGain.assign(_pModel->GetNumSubBasins(),0.0);
   _sbLossRemain.assign(_pModel->GetNumSubBasins(),0.0);

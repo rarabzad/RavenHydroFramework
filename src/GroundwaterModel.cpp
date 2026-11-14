@@ -54,7 +54,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _connectByElevation=false; _disType=0; _meshFidelity=1.0;
   _mname="GWF"; _hf=1.0; _qf=1.0; _rf=1.0;
   _extGridID="CELL_ID"; _streamMap="AUX"; _streamAux="SUBBASIN"; _extSeepage=true; _extTf=_extLf=1.0; _extDvclose=-1.0; _extAreaCheck=0.0;
-  _Qother=0.0; _extAux=-1; _extNaux=0; _extOffset=0.0; _extDrop=0; _extNModels=0; _extMoverDropped=0; _extTSShifted=0; _extSteady=false; _extNoSto=false; _mf6Version=""; _stoName="STO"; _disName="DIS";
+  _Qother=0.0; _extAux=-1; _extNaux=0; _extNauxMem=-1; _extOffset=0.0; _extDrop=0; _extNModels=0; _extMoverDropped=0; _extTSShifted=0; _extSteady=false; _extNoSto=false; _mf6Version=""; _stoName="STO"; _disName="DIS";
   _iGW=_iReturnSV=DOESNT_EXIST;
   _maxiter=500;
   _X=_rchBound=_rchHcof=_rchRhs=_drnHcof=_drnRhs=_strgss=_strgsy=NULL;
@@ -1148,7 +1148,8 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   }
   if (!_cacheHit){
   double rb[4];
-  if (!GWGeom::ReadGeoJSONPolygons(_hruGeomFile,_hruIDField,shapes,err,InCRS(),rb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+  map<long long,string> noArea;
+  if (!GWGeom::ReadGeoJSONPolygons(_hruGeomFile,_hruIDField,shapes,err,InCRS(),rb,NULL,&noArea)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
   CheckInputLonLat(_hruGeomFile,rb,"GeoJSON file");
 
   int nHRUs=_pModel->GetNumHRUs();
@@ -1171,7 +1172,9 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
     CHydroUnit *pHRU=_pModel->GetHydroUnit(k);
     map<long long,vector<gw_ring> >::iterator it=shapes.find(pHRU->GetHRUID());
     if (it==shapes.end()){
-      ExitGracefully(("CGroundwaterModel: HRU "+to_string(pHRU->GetHRUID())+" has an AQUIFER_PROFILE but no polygon in "+_hruGeomFile).c_str(),BAD_DATA);
+      map<long long,string>::const_iterator na=noArea.find(pHRU->GetHRUID());
+      ExitGracefully(("CGroundwaterModel: HRU "+to_string(pHRU->GetHRUID())+" has an AQUIFER_PROFILE but no polygon in "+_hruGeomFile+
+                      ((na!=noArea.end())?" ("+na->second+")":string(""))).c_str(),BAD_DATA);
       continue;
     }
     for (size_t r=0;r<it->second.size();r++){
@@ -1329,7 +1332,10 @@ void CGroundwaterModel::BuildGeometry(const optStruct &Options)
   else { //imported cells
     map<long long,vector<gw_ring> > cellshapes;
     double gb[4];
-    if (!GWGeom::ReadGeoJSONPolygons(_gridFile,_gridFileID,cellshapes,err,InCRS(),gb)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    map<long long,string> noArea;
+    if (!GWGeom::ReadGeoJSONPolygons(_gridFile,_gridFileID,cellshapes,err,InCRS(),gb,NULL,&noArea)){ExitGracefully(("CGroundwaterModel: "+err).c_str(),BAD_DATA);}
+    ExitGracefullyIf(!noArea.empty(),("CGroundwaterModel: grid cell "+(noArea.empty()?string(""):to_string(noArea.begin()->first)+" of "+_gridFile+
+      " has no area: "+noArea.begin()->second)).c_str(),BAD_DATA); //(every cell of the file is a cell of the grid)
     CheckInputLonLat(_gridFile,gb,"GeoJSON file");
     vector<gw_ring> cells;
     for (map<long long,vector<gw_ring> >::iterator it=cellshapes.begin();it!=cellshapes.end();it++){

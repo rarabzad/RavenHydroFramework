@@ -136,7 +136,7 @@ private:/*----------------------------------------------------*/
   vector<int> _topNode;                ///< per column: user node of the top active cell (empty: layer 1)
   int    _disType;
   //-- existing MODFLOW 6 model (see GWExternal.cpp)
-  struct gw_ext_pkg { string ftype,fname,pname; };
+  struct gw_ext_pkg { string ftype,fname,pname; bool named; };  ///< name-file row: file type, file, package name (named: given in the row)
   vector<double> _extKv,_extSy;   ///< existing model: vertical conductivity [m/d] and specific yield of every user node (soil zone)
   struct gw_ow      { long long hru; int cell; double w; };  ///< :OverlapWeights row: HRU ID, cell (1..NCPL), A_overlap/A_cell
   string _extSim,_extModel,_extGridFile,_extGridID,_extStart;   ///< .rvg inputs
@@ -153,7 +153,9 @@ private:/*----------------------------------------------------*/
   double _extTf,_extLf,_extDvclose,_extAreaCheck,_Qother;       ///< model time units per day, length units per m; solver tolerance [m]
   vector<double> _extArea,_extTopRaw;                           ///< per column: cell area [m2]; top of the top active cell [model units]
   vector<int>    _userOf;                                       ///< reduced node -> user node
-  int    _extAux,_extNaux;
+  int    _extAux,_extNaux;                                      ///< stream package: index of the subbasin auxiliary variable, their number
+  vector<string> _extAuxMem;                                    ///< stream package: auxiliary names in MODFLOW's memory (probe)
+  int    _extNauxMem;                                           ///< stream package: NAUX in MODFLOW's memory (-1: not read)
   double _extOffset;                                           ///< [d] Raven's start after the model's time zero (restart)
   int    _extNModels;
   string _mf6Version;                                           ///< version reported by the MODFLOW 6 library

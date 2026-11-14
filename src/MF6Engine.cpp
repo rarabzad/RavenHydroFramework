@@ -89,7 +89,8 @@ namespace
 CMF6Engine::CMF6Engine():_lib(NULL),_initialized(false),
   _initialize(NULL),_finalize(NULL),_prepare_time_step(NULL),_finalize_time_step(NULL),
   _prepare_solve(NULL),_solve(NULL),_finalize_solve(NULL),_get_value_ptr(NULL),_get_var_address(NULL),
-  _get_var_rank(NULL),_get_var_shape(NULL),_get_last_bmi_error(NULL),_get_current_time(NULL),_get_version(NULL){}
+  _get_var_rank(NULL),_get_var_shape(NULL),_get_last_bmi_error(NULL),_get_current_time(NULL),_get_version(NULL),
+  _get_var_itemsize(NULL),_get_var_type(NULL),_get_value_string(NULL){}
 CMF6Engine::~CMF6Engine(){Finalize();}
 
 void *CMF6Engine::Sym(const char *name)
@@ -191,8 +192,14 @@ bool CMF6Engine::Load(const string &libpath)
   bool ok=(_lasterr=="");
 #ifdef _WIN32
   _get_version=(f_errmsg)GetProcAddress((HMODULE)_lib,"get_version");
+  _get_var_itemsize=(f_rank)GetProcAddress((HMODULE)_lib,"get_var_itemsize");
+  _get_var_type=(f_str2)GetProcAddress((HMODULE)_lib,"get_var_type");
+  _get_value_string=(f_sval)GetProcAddress((HMODULE)_lib,"get_value_string");
 #else
   _get_version=(f_errmsg)dlsym(_lib,"get_version");
+  _get_var_itemsize=(f_rank)dlsym(_lib,"get_var_itemsize");
+  _get_var_type=(f_str2)dlsym(_lib,"get_var_type");
+  _get_value_string=(f_sval)dlsym(_lib,"get_value_string");
 #endif
   if (ok){CheckVersion(libpath);}
   return ok;
@@ -354,15 +361,19 @@ string CMF6Engine::GetVarAddress(const string &comp,const string &sub,const stri
   if (_get_var_address(comp.c_str(),sub.c_str(),var.c_str(),buf)!=0){return "";}
   return string(buf);
 }
+//(the queries below are answered only while a model is initialised: a finalised library has no memory to look in, and
+// reports the failed query on its closed output unit, which the Fortran runtime then writes to a file fort.<unit> in the
+// current folder)
 bool CMF6Engine::HasVar(const string &address)
 {
   int rank=-1;
-  if (address.empty()){return false;}
+  if (address.empty() || !_initialized){return false;}
   return (_get_var_rank(address.c_str(),&rank)==0);
 }
 int CMF6Engine::GetVarSize(const string &address)
 {
   int rank=0;
+  if (!_initialized){return -1;}
   if (_get_var_rank(address.c_str(),&rank)!=0){return -1;}
   if (rank==0){return 1;}
   int shape[8]={0,0,0,0,0,0,0,0};
@@ -373,14 +384,41 @@ int CMF6Engine::GetVarSize(const string &address)
 double *CMF6Engine::GetDoublePtr(const string &address)
 {
   void *p=NULL;
+  if (!_initialized){_lasterr="get_value_ptr("+address+"): no MODFLOW 6 model is initialised"; return NULL;}
   if (!Check(_get_value_ptr(address.c_str(),&p),"get_value_ptr("+address+")")){return NULL;}
   return (double*)p;
 }
 int *CMF6Engine::GetIntPtr(const string &address)
 {
   void *p=NULL;
+  if (!_initialized){_lasterr="get_value_ptr("+address+"): no MODFLOW 6 model is initialised"; return NULL;}
   if (!Check(_get_value_ptr(address.c_str(),&p),"get_value_ptr("+address+")")){return NULL;}
   return (int*)p;
+}
+//a string variable, or an array of strings, of MODFLOW's memory (such as a package's AUXNAME_CST or a model's PKGNAMES);
+//only strings MODFLOW keeps as STRING type are asked for (get_value_string takes the address of the caller's buffer
+//pointer; each string is given with its terminating NUL in a slot of itemsize+1 bytes)
+bool CMF6Engine::GetStrings(const string &address,vector<string> &s)
+{
+  s.clear();
+  if (!_initialized || address.empty() || (_get_var_itemsize==NULL) || (_get_var_type==NULL) || (_get_value_string==NULL)){return false;}
+  int rank=-1,isz=0;
+  if ((_get_var_rank(address.c_str(),&rank)!=0) || (rank<0) || (rank>1)){return false;}
+  char ty[1024]; memset(ty,0,sizeof(ty));
+  if ((_get_var_type(address.c_str(),ty)!=0) || (strncmp(ty,"STRING",6)!=0)){return false;}
+  if ((_get_var_itemsize(address.c_str(),&isz)!=0) || (isz<0) || (isz>100000)){return false;}
+  int n=1;
+  if (rank==1){int shape[8]={0,0,0,0,0,0,0,0}; if (_get_var_shape(address.c_str(),shape)!=0){return false;} n=shape[0];}
+  if ((n<0) || (n>1000000)){return false;}
+  if (n==0){return true;}
+  vector<char> buf((size_t)(isz+1)*n+1,'\0'); void *p=&buf[0];
+  if (_get_value_string(address.c_str(),&p)!=0){return false;}
+  for (int i=0;i<n;i++){
+    const char *b=&buf[(size_t)(isz+1)*i]; size_t l=0; while ((l<(size_t)isz) && (b[l]!='\0')){l++;}
+    string t(b,l); size_t e=t.find_last_not_of(' '); t=(e==string::npos)?string(""):t.substr(0,e+1);
+    size_t a=t.find_first_not_of(' '); s.push_back((a==string::npos)?string(""):t.substr(a));
+  }
+  return true;
 }
 double CMF6Engine::GetModelTime()
 {
