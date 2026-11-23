@@ -148,10 +148,11 @@ bool CGWRaster::Read(const string &filename,string &err)
     }
   }
   //GDAL's side file <file>.aux.xml, read as for a GeoTIFF (GWGeoTIFF::BandMeta): GDAL's ESRI ASCII driver takes its Scale,
-  //Offset and UnitType; it keeps the header's NODATA_value and takes no NoDataValue from the side file
+  //Offset and UnitType; it keeps the header's NODATA_value and takes no NoDataValue from the side file, and ignores a
+  //GeoTransform or SRS there (the header and the .prj georeference the grid)
   { string pam,note,pnd; bool has=false,hasPnd=false; double sc=1.0,of=0.0;
     if (!GWGeoTIFF::ReadSideFile(filename,pam,has,err)){_ncols=0; return false;}
-    if (!GWGeoTIFF::BandMeta("raster "+filename+": ","",has?&pam:NULL,filename+".aux.xml",_metres,_cmd,sc,of,hasPnd,pnd,note,err)){_ncols=0; return false;}
+    if (!GWGeoTIFF::BandMeta("raster "+filename+": ","",has?&pam:NULL,filename+".aux.xml",_metres,_cmd,sc,of,hasPnd,pnd,note,err,false)){_ncols=0; return false;}
     if (note!=""){_note+=(_note.empty()?"":"\n")+note;}
     if ((sc!=1.0) || (of!=0.0)){ //(no-data cells become NaN, so that no scaled value is taken for NODATA)
       for (size_t i=0;i<_v.size();i++){

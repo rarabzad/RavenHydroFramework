@@ -562,8 +562,12 @@ namespace
   //   element on its own line, indented by two blanks a level; attributes as ` name="value"`, in double quotes, one blank
   //   before each; an element with only text as <name>text</name>, one without content as <name />, one with child elements
   //   as <name>, its children, then </name> at its own indentation. In text GDAL writes &lt; &gt; &amp; for < > & (in an
-  //   attribute also &quot; for "), &#xFEFF; for a byte-order mark, and leaves out other control characters; no comments,
-  //   declarations, CDATA or other entities. A file in any other form may be read differently by GDAL (its parser takes
+  //   attribute also &quot; for "), &#xFEFF; for a byte-order mark, and leaves out other control characters; no CDATA or
+  //   other entities. In the metadata of an xml: domain, which GDAL keeps as parsed XML, it also writes comments
+  //   (<!--...-->), literals (<!DOCTYPE ...>) and processing instructions (<?name attributes?>), each on its own line at
+  //   the indentation of an element, and mixed content: a text where it stands, with no line end of its own, the first child
+  //   on a new line, and the closing tag at its indentation after the last text (CPLSerializeXMLNode); Raven reads nothing
+  //   in them. A file in any other form may be read differently by GDAL (its parser takes
   //   other quoting, entities and layouts, and ignores a file that does not start with its element), so the caller stops
   //   when such a file can hold band values
   struct gx_node {string name; vector<pair<string,string> > attr; bool text; string value; vector<gx_node> kids; gx_node():text(false){}};
@@ -586,13 +590,27 @@ namespace
     }
     return true;
   }
+  //a comment or a literal at an indentation, and its line end, as GDAL writes them (above): passed over
+  bool GXSkip(const string &x,size_t &p,const size_t ind)
+  {
+    if ((x.compare(p,ind,string(ind,' '))!=0) || (x.compare(p+ind,2,"<!")!=0)){return false;}
+    size_t q=p+ind;
+    if (x.compare(q,4,"<!--")==0){q=x.find("-->",q+4); if (q==string::npos){return false;} q+=3;}
+    else { //(a literal ends at the first > outside its brackets: <!DOCTYPE x [ <!ENTITY ...> ]>)
+      int d=0; for (q+=2;q<x.size();q++){if (x[q]=='['){d++;} else if (x[q]==']'){d--;} else if ((x[q]=='>') && (d<=0)){break;}}
+      if (q>=x.size()){return false;} q++;
+    }
+    if (x.compare(q,1,"\n")!=0){return false;}
+    p=q+1; return true;
+  }
   bool GXElement(const string &x,size_t &p,const size_t ind,gx_node &n,string &why)
   {
     const size_t at=p;
-    if ((x.compare(p,ind,string(ind,' '))!=0) || (x.compare(p+ind,1,"<")!=0) || (p+ind+1>=x.size()) || !GXNameChar(x[p+ind+1])){
+    const bool pi=(p+ind+2<x.size()) && (x.compare(p+ind,2,"<?")==0); //(a processing instruction: <?name attributes?>)
+    if ((x.compare(p,ind,string(ind,' '))!=0) || (x.compare(p+ind,1,"<")!=0) || (p+ind+1>=x.size()) || !GXNameChar(x[p+ind+(pi?2:1)])){
       why="byte "+to_string((unsigned long long)at)+": an element at an indentation of "+to_string((unsigned long long)ind)+" blanks expected"; return false;
     }
-    p+=ind+1; size_t q=p; while ((q<x.size()) && GXNameChar(x[q])){q++;}
+    p+=ind+(pi?2:1); size_t q=p; while ((q<x.size()) && GXNameChar(x[q])){q++;}
     n.name=x.substr(p,q-p); p=q;
     while ((p+1<x.size()) && (x[p]==' ') && GXNameChar(x[p+1])){
       p++; q=p; while ((q<x.size()) && GXNameChar(x[q])){q++;}
@@ -603,20 +621,38 @@ namespace
       for (size_t k=0;k<n.attr.size();k++){if (n.attr[k].first==a){why="element "+n.name+": attribute "+a+" given twice"; return false;}}
       n.attr.push_back(make_pair(a,v)); p=q+1;
     }
+    if (pi){
+      if (x.compare(p,3,"?>\n")!=0){why="processing instruction "+n.name+": ?> and a line end expected at byte "+to_string((unsigned long long)p); return false;}
+      n.name="?"+n.name; p+=3; return true;
+    }
     if (x.compare(p,4," />\n")==0){p+=4; return true;}
     if (x.compare(p,1,">")!=0){why="element "+n.name+": > expected at byte "+to_string((unsigned long long)p); return false;}
     p++;
     const string close="</"+n.name+">\n";
     const size_t lt=x.find('<',p);
     const bool textOnly=(lt!=string::npos) && (x.compare(lt,close.size(),close)==0); //(a text may start with a line end: no '<' in it)
-    if (!textOnly && (x.compare(p,1,"\n")==0)){ //(child elements, then the closing tag at this indentation)
-      p++;
-      while (!((x.compare(p,ind,string(ind,' '))==0) && (x.compare(p+ind,close.size(),close)==0))){
-        if (p>=x.size()){why="element "+n.name+" is not closed"; return false;}
+    if (!textOnly){ //(child elements, comments and literals at the next indentation, a text before, between or after them,
+                    // then the closing tag at this indentation)
+      const string in0(ind,' '),in2(ind+2,' '); string tx;
+      for (bool first=true;;first=false){
+        const size_t lq=x.find('<',p);
+        if (lq==string::npos){why="element "+n.name+" is not closed"; return false;}
+        if (!first && (lq>=p+ind) && (x.compare(lq-ind,ind,in0)==0) && (x.compare(lq,close.size(),close)==0)){
+          if (!GXUnescape(x.substr(p,lq-ind-p),false,tx)){why="element "+n.name+": a text holds a character or entity GDAL does not write"; return false;}
+          p=lq+close.size(); return true;
+        }
+        if ((lq<p+ind+2) || (x.compare(lq-ind-2,ind+2,in2)!=0) || (first && ((lq==p+ind+2) || (x[lq-ind-3]!='\n')))){
+          why="byte "+to_string((unsigned long long)p)+": an element at an indentation of "+to_string((unsigned long long)(ind+2))+" blanks expected"; return false;
+        }
+        if (!GXUnescape(x.substr(p,lq-ind-2-p-(first?1:0)),false,tx)){why="element "+n.name+": a text holds a character or entity GDAL does not write"; return false;}
+        p=lq-ind-2;
+        if (x.compare(lq,2,"<!")==0){
+          if (!GXSkip(x,p,ind+2)){why="byte "+to_string((unsigned long long)lq)+": a comment or literal of element "+n.name+" not in the form GDAL writes"; return false;}
+          continue;
+        }
         gx_node c; if (!GXElement(x,p,ind+2,c,why)){return false;}
         n.kids.push_back(c);
       }
-      p+=ind+close.size(); return true;
     }
     q=x.find('<',p);
     if ((q==string::npos) || (x.compare(q,close.size(),close)!=0)){why="element "+n.name+": its text is not followed by </"+n.name+"> and a line end"; return false;}
@@ -835,6 +871,7 @@ namespace
     "\xCE\xBC\xCE\xAD\xCF\x84\xCF\x81\xCE\xBF","\xCE\xBC\xCE\xAD\xCF\x84\xCF\x81\xCE\xB1"};                       //(μέτρο, μέτρα)
   const char *BU_METRE_ABBR[]={"m","masl","m asl","m a.s.l.","m.a.s.l.","mamsl","m amsl","m a.m.s.l.","moh","m.o.h.","m\xC3\xB6h","m \xC3\xB6.h.",
     "m\xC3\xBC","m\xC3\xBCnn","m \xC3\xBC. nn","m \xC3\xBC.nn","m \xC3\xBC. m.","m \xC3\xBC.m.","\xD0\xBC","\xD0\xBC\xD0\xB1\xD1\x81","\xD0\xBC \xD0\xB1\xD1\x81", //(..., möh, mü, müNN, m ü. M., м, мБС: Baltic system)
+    "m.\xC3\xB6.h.","m o.h.","mt","mts","mtr","mtrs",                                                            //(m.ö.h., m o.h., mt, mts, mtr, mtrs)
     "m.","epsg:9001","epsg::9001","epsg 9001","urn:ogc:def:uom:epsg::9001","http://www.opengis.net/def/uom/epsg/0/9001",
     "https://www.opengis.net/def/uom/epsg/0/9001"};
   //vertical datums and references that may follow a metre form ("m MSL", "m (NAVD88)", "m, AHD", "Meter Ã¼ber NN", fused
@@ -843,10 +880,18 @@ namespace
     "nn","nhn","\xC3\xBC. nn","\xC3\xBC.nn","\xC3\xBC nn","\xC3\xBC\x62\x65r nn","\xC3\xBC. nhn","\xC3\xBC.nhn","\xC3\xBC\x62\x65r nhn","\xC3\xBC. m.","\xC3\xBC.m.",
     "nn2000","rh2000","dvr90","navd88","navd 88","ngvd29","ngvd 29","cgvd2013","cgvd28","egm96","egm2008","s.l.m.","slm","n.p.m.","npm",
     "s.n.m.","snm","n. m.","n.m.","s. n. m.","ellipsoidal","above ellipsoid","above the ellipsoid","ellipsoid","wgs84 ellipsoid","the wgs84 ellipsoid",
-    "egm08","od","mllw","mlw","mhw","mhhw","lat","hae","orthometric","ngf","ign69","n2000","nzvd2016","t.p."};
+    "egm08","od","mllw","mlw","mhw","mhhw","lat","hae","orthometric","ngf","ign69","n2000","nzvd2016","t.p.",
+    "above sea-level","above mean sea-level","navd","ngvd","evrf2007","evrf2000","dhhn2016","dhhn92","nhn2016","\xC3\xBC. nhn2016","\xC3\xBC.nhn2016",
+    "ln02","\xC3\xBC. a.","\xC3\xBC.a.","bpv","n. m. bpv","n.m. bpv","ngf-ign69","ngf ign69","t.o.v. nap","n60","dnn","ahd71","cd","chart datum",
+    "osgm15","ordnance datum","geoid","wgs84","tp"};                                                          //(..., m ü. NHN2016, m ü. A.)
   //quantities that may precede a metre form in brackets or after "in": "elevation (m)", "Elevation [m]", "height in metres"
   const char *BU_QUANT[]={"elevation","elevations","height","heights","altitude","elevation above sea level","elevation above mean sea level",
-    "height above sea level","height above mean sea level","height above ellipsoid","ellipsoidal height","orthometric height","height_above_ellipsoid"};
+    "height above sea level","height above mean sea level","height above ellipsoid","ellipsoidal height","orthometric height","height_above_ellipsoid",
+    "elev","elev.","z","dem","dtm","dsm","h\xC3\xB6he","altitud","altura","cota","hauteur","\xC3\xA9l\xC3\xA9vation","quota","altezza","altitudine","hoogte",
+    "wysoko\xC5\x9B\xC4\x87","v\xC3\xBD\xC5\xA1ka","nadmo\xC5\x99sk\xC3\xA1 v\xC3\xBD\xC5\xA1ka","magass\xC3\xA1g","korkeus","h\xC3\xB6jd","h\xC3\xB8yde","h\xC3\xB8jde",
+    "\xC3\xAEn\xC4\x83l\xC8\x9Bime","\xD0\xB2\xD1\x8B\xD1\x81\xD0\xBE\xD1\x82\xD0\xB0","\xD0\xB2\xD0\xB8\xD1\x81\xD0\xBE\xD1\x82\xD0\xB0",
+    "\xCF\x85\xCF\x88\xCF\x8C\xCE\xBC\xCE\xB5\xCF\x84\xCF\x81\xCE\xBF","\xCF\x8D\xCF\x88\xCE\xBF\xCF\x82"};
+    //(..., Höhe, élévation, wysokość, výška, nadmořská výška, magasság, höjd, høyde, højde, înălțime, высота, висота, υψόμετρο, ύψος)
   //parts and multiples, which with a metre make a scaled metre ("m (in thousands)", "tenths of a metre")
   const char *BU_PART[]={"tenth","tenths","hundredth","hundredths","thousandth","thousandths","tens","hundred","hundreds","thousand","thousands"};
   const char *BU_CJK_METRE[]={"\xE7\xB1\xB3","\xE5\x85\xAC\xE5\xB0\xBA","\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB",
@@ -860,6 +905,20 @@ namespace
     "st\xC3\xB3p","stopach","stop\xC3\xA1\x63h","jalka","jalkaa","l\xC3\xA1\x62","l\xC3\xA1\x62\x62\x61n",
     "zoll","pouce","pouces","pulgada","pulgadas","pollice","pollici","duim","yarda","yardas","milla","millas","meile","meilen",
     "mijl","miglio","miglia",
+    "polegada","polegadas","milha","milhas","jarda","jardas","cal","cale","cali","mila","mile","mil","jard","jardy","jard\xC3\xB3w","palec","palce","palc\xC5\xAF",
+    "m\xC3\xADle","h\xC3\xBCvelyk","m\xC3\xA9rf\xC3\xB6ld","tuuma","tuumaa","maili","mailia","jaardi","jaardia","tum","tomme","tommer","picior","picioare",
+    "\xC8\x9Boli","\xC5\xA3oli","toli","inci","yarzi","mil\xC4\x83","milles","verge","verges","iarda","iarde","vara","varas",
+    //(..., jardów, palců, míle, hüvelyk, mérföld, țoli, ţoli, milă)
+    "braza","brazas","bra\xC3\xA7\x61","bra\xC3\xA7\x61s","brasse","brasses","toise","toises","faden","klafter","vadem","vademen","famn","famnar","favn","favne",
+    "s\xC4\x85\xC5\xBC\x65\xC5\x84","s\xC3\xA1h","syli","st\xC3\xA2njen",                                   //(fathoms: ..., braça(s), sążeń, sáh, stânjen)
+    "\xCE\xAF\xCE\xBD\xCF\x84\xCF\x83\xCE\xB1","\xCE\xAF\xCE\xBD\xCF\x84\xCF\x83\xCE\xB5\xCF\x82","\xCE\xBC\xCE\xAF\xCE\xBB\xCE\xB9","\xCE\xBC\xCE\xAF\xCE\xBB\xCE\xB9\xCE\xB1",
+    "\xCE\xB3\xCE\xB9\xCE\xAC\xCF\x81\xCE\xB4\xCE\xB1","\xCE\xB3\xCE\xB9\xCE\xAC\xCF\x81\xCE\xB4\xCE\xB5\xCF\x82","\xCE\xBF\xCF\x81\xCE\xB3\xCE\xB9\xCE\xAC",
+    //(ίντσα, ίντσες, μίλι, μίλια, γιάρδα, γιάρδες, οργιά)
+    "\xD1\x81\xD0\xB0\xD0\xB6\xD0\xB5\xD0\xBD\xD1\x8C","\xD1\x81\xD0\xB0\xD0\xB6\xD0\xB5\xD0\xBD\xD0\xB8","\xD1\x81\xD0\xB0\xD0\xB6\xD0\xB5\xD0\xBD\xD0\xB5\xD0\xB9",
+    "\xD0\xB2\xD0\xB5\xD1\x80\xD1\x81\xD1\x82\xD0\xB0","\xD0\xB2\xD0\xB5\xD1\x80\xD1\x81\xD1\x82\xD1\x8B","\xD0\xB2\xD1\x91\xD1\x80\xD1\x81\xD1\x82","\xD0\xB2\xD0\xB5\xD1\x80\xD1\x81\xD1\x82",
+    "\xD0\xB0\xD1\x80\xD1\x88\xD0\xB8\xD0\xBD","\xD0\xB0\xD1\x80\xD1\x88\xD0\xB8\xD0\xBD\xD0\xB0","\xD0\xB0\xD1\x80\xD1\x88\xD0\xB8\xD0\xBD\xD0\xBE\xD0\xB2",
+    //(сажень, сажени, саженей, верста, версты, вёрст, верст, аршин, аршина, аршинов)
+    "micron","microns","rod","rods","perch","perches","league","leagues","kft",
     "\xD1\x84\xD1\x83\xD1\x82","\xD1\x84\xD1\x83\xD1\x82\xD0\xB0","\xD1\x84\xD1\x83\xD1\x82\xD0\xBE\xD0\xB2","\xD1\x84\xD1\x83\xD1\x82\xD1\x8B", //(фут, фута, футов, футы,
     "\xD1\x84\xD1\x83\xD1\x82\xD0\xB0\xD1\x85","\xD1\x84\xD1\x83\xD1\x82\xD1\x96\xD0\xB2",                                                   // футах, футів)
     "\xD0\xB4\xD1\x8E\xD0\xB9\xD0\xBC","\xD0\xB4\xD1\x8E\xD0\xB9\xD0\xBC\xD0\xB0\xD1\x85","\xD1\x8F\xD1\x80\xD0\xB4","\xD1\x8F\xD1\x80\xD0\xB4\xD0\xB0\xD1\x85",
@@ -882,6 +941,7 @@ namespace
   const char *BU_CJK_OTHER[]={"\xE5\x8E\x98\xE7\xB1\xB3","\xE6\xAF\xAB\xE7\xB1\xB3","\xE5\x88\x86\xE7\xB1\xB3","\xE5\x8D\x83\xE7\xB1\xB3",
     "\xE5\x85\xAC\xE9\x87\x8C","\xE5\xBE\xAE\xE7\xB1\xB3","\xE7\xBA\xB3\xE7\xB1\xB3","\xE7\xB4\x8D\xE7\xB1\xB3","\xE5\x85\xAC\xE5\x88\x86",
     "\xE8\x8B\xB1\xE5\xB0\xBA","\xE5\x91\x8E","\xE8\x8B\xB1\xE5\xAF\xB8","\xE5\x90\x8B","\xE8\x8B\xB1\xE9\x87\x8C","\xE7\xA0\x81","\xE7\xA2\xBC",
+    "\xE5\xB0\xBA","\xE5\xB8\x82\xE5\xB0\xBA","\xE5\xAF\xB8","\xE4\xB8\x88","\xE9\x87\x8C","\xE9\x96\x93",                            //(尺, 市尺, 寸, 丈, 里, 間)
     "\xE6\xB5\xB7\xE9\x87\x8C","\xE9\x87\x90\xE7\xB1\xB3","\xE5\x85\xAC\xE9\x87\x90","\xE7\x99\xBE\xE7\xB1\xB3","\xE5\x8D\x81\xE7\xB1\xB3","\xE5\x85\xAC\xE5\x8E\x98",
     //(厘米, 毫米, 分米, 千米, 公里, 微米, 纳米, 納米, 公分, 英尺, 呎, 英寸, 吋, 英里, 码, 碼, 海里, 釐米, 公釐, 百米, 十米)
     "\xE3\x82\xAD\xE3\x83\xAD\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB","\xE3\x82\xBB\xE3\x83\xB3\xE3\x83\x81\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB","\xE3\x83\x9F\xE3\x83\xAA\xE3\x83\xA1\xE3\x83\xBC\xE3\x83\x88\xE3\x83\xAB",
@@ -1000,8 +1060,15 @@ namespace
     return false;
   }
   bool BUDatum(string r){
-    if ((r.size()>6) && (r.compare(r.size()-6,6," geoid")==0)){r=r.substr(0,r.size()-6);}
-    return BUDatum1(r) || ((r.size()>6) && (r.compare(0,6,"above ")==0) && BUDatum1(r.substr(6))); //("m above msl")
+    { const size_t b=r.find_last_of(' ');                                       //(a geoid model after the datum: "navd88 geoid18",
+      if ((b!=string::npos) && (b>0)){                                            // "navd88 (geoid12b)", "egm96 geoid")
+        string g=r.substr(b+1);
+        if ((g.size()>2) && (((g[0]=='(') && (g[g.size()-1]==')')) || ((g[0]=='[') && (g[g.size()-1]==']')))){g=g.substr(1,g.size()-2);}
+        if (g.compare(0,5,"geoid")==0){r=r.substr(0,b);}
+      }
+    }
+    return BUDatum1(r) || ((r.size()>6) && (r.compare(0,6,"above ")==0) && BUDatum1(r.substr(6))) || //("m above msl", "m over msl")
+           ((r.size()>5) && (r.compare(0,5,"over ")==0) && BUDatum1(r.substr(5)));
   }
   //(a text in one pair of brackets: its inside)
   bool BUBracketed(const string &r,string &in){
@@ -1021,13 +1088,13 @@ namespace
       if ((r.find(' ')==string::npos) && BUDatum(r)){return true;}
       if ((r[0]=='.') && (r.size()>1) && BUDatum(r.substr(1))){return true;}
     }
-    for (size_t p=1;p<t.size();p++){
-      if ((t[p]!=' ') && (t[p]!=',')){continue;}
+    for (size_t p=1;p<t.size();p++){                                            //(after a blank, a comma, ; / - _ or a bracket:
+      if (strchr(" ,;/-_([",t[p])==NULL){continue;}                               // "m, navd88", "m-navd88", "m(navd88)")
       if (!BUMetreForm(t.substr(0,p))){continue;}
-      string r=t.substr(p); while (!r.empty() && ((r[0]==' ') || (r[0]==','))){r.erase(0,1);}
+      string r=t.substr(p); while (!r.empty() && (strchr(" ,;/-_",r[0])!=NULL)){r.erase(0,1);}
       if (r.empty()){continue;}
       string in;
-      if (BUDatum(r) || (BUBracketed(r,in) && (BUDatum(in) || BUMetreForm(in)))){return true;}
+      if (BUDatum(r) || (BUBracketed(r,in) && (BUDatum(in) || BUMetreDatum(in)))){return true;}
     }
     return false;
   }
@@ -1035,8 +1102,9 @@ namespace
   bool BUMetreText(const string &t){
     if (BUMetreDatum(t)){return true;}
     for (size_t q=0;q<sizeof(BU_QUANT)/sizeof(char*);q++){
-      const size_t n=strlen(BU_QUANT[q]);
-      if ((t.size()<=n) || (t.compare(0,n,BU_QUANT[q])!=0) || ((t[n]!=' ') && (t[n]!='(') && (t[n]!='[') && (t[n]!=','))){continue;}
+      const string qn=BUNormal(BU_QUANT[q]); const size_t n=qn.size();
+      if ((t.size()<=n) || (t.compare(0,n,qn)!=0) || ((t[n]!=' ') && (t[n]!='(') && (t[n]!='[') && (t[n]!=',') && (t[n]!='_'))){continue;}
+      if ((t[n]=='_') && BUMetreDatum(t.substr(n+1))){return true;}             //("elevation_m")
       string r=t.substr(n); while (!r.empty() && (r[0]==' ')){r.erase(0,1);}
       if (!r.empty() && (r[0]==',')){r.erase(0,1); while (!r.empty() && (r[0]==' ')){r.erase(0,1);} if (BUMetreDatum(r)){return true;} continue;} //("Elevation, m")
       string in;
@@ -1071,6 +1139,13 @@ namespace
     }
     return false;
   }
+  //feet fused with a datum, its digits kept ("ftnavd88", "ftnavd 88", "usftngvd29", "ftnavd88 geoid"): read on a whole
+  //text or on a word between blanks, commas and brackets, since words of letters alone part the datum from its year
+  bool BUFeetDatum(const string &w){
+    const char *f[6]={"usft","usfeet","usfoot","ft","feet","foot"};
+    for (int i=0;i<6;i++){const size_t n=strlen(f[i]); if ((w.size()>n) && (w.compare(0,n,f[i])==0) && isalpha((unsigned char)w[n]) && BUDatum(w.substr(n))){return true;}}
+    return false;
+  }
   bool BUPrefixed(const string &w){                                                 //(a prefix joined to a metre word)
     for (size_t i=0;i<sizeof(BU_PREFIX)/sizeof(BU_PREFIX[0]);i++){
       const string p=BUNormal(BU_PREFIX[i]); const size_t n=p.size();
@@ -1098,6 +1173,10 @@ int GWGeoTIFF::BandUnit(const string &ut0)
       for (size_t q=0;q<sizeof(BU_EPSG_OTHER)/sizeof(int);q++){if (code==BU_EPSG_OTHER[q]){return BU_LENGTH;}}
     }
   }
+  if ((t.compare(0,5,"link_")==0) || (t.compare(0,6,"links_")==0) || (t.compare(0,6,"chain_")==0) || (t.compare(0,4,"rod_")==0)){return BU_LENGTH;} //(ESRI
+                                                                                    // unit names: Link_Clarke, Chain_Benoit_1895_B, Rod_US)
+  bool ftd=BUFeetDatum(t);
+  { string tok; for (size_t i=0;i<=t.size();i++){if ((i==t.size()) || (strchr(" ,;()[]{}",t[i])!=NULL)){if (BUFeetDatum(tok)){ftd=true;} tok="";} else {tok+=t[i];}} }
   vector<string> wd; vector<bool> cj; string cur; bool curCJK=false,gapBlank=false;  //(words: runs of letters; Chinese, Japanese and
   for (size_t i=0;i<=t.size();){                                                    // Korean runs apart, joined across blanks: 千 米, キロ メートル)
     size_t len=1; const uint32_t c=(i<t.size())?BUDecode(t,i,len):(uint32_t)' ';
@@ -1133,6 +1212,7 @@ int GWGeoTIFF::BandUnit(const string &ut0)
     if (BUIn(BU_AMBIG,w) && ((wd.size()==1) || ((wd.size()==2) && (j==1) && BUIn(BU_QUAL,wd[0])))){other=true;}
     if (BUIn(BU_PART,w)){part=true;}
   }
+  if (ftd){other=true;}
   if (other && !metre){return BU_LENGTH;}
   if (other && metre && !t.empty() && ((t[t.size()-1]==')') || (t[t.size()-1]==']'))){ //-- another length named with its metre conversion:
     const size_t ob=t.find_last_of("([");                                          //   "ft (0.3048 m)" or a metre form and the length, "m (feet)"
@@ -1155,15 +1235,29 @@ int GWGeoTIFF::BandUnit(const string &ut0)
     const char *sign[]={"*","/","^","\xC3\x97","\xC3\xB7","\xC2\xB7","\xE2\x8B\x85"};   //(*, /, ^, the signs of multiplication and division, dots)
     bool hasSign=false;
     for (int k=0;k<7;k++){q=0; while ((q=s.find(sign[k],q))!=string::npos){hasSign=true; s.replace(q,strlen(sign[k])," ");}}
-    for (q=0;q<s.size();q++){if (strchr(";()[]{}=,:",s[q])!=NULL){s[q]=' ';}}
-    istringstream is(s); string k,prev; bool num=false,word=false,prevNum=false; vector<string> tk;
-    while (is>>k){
-      tk.push_back(k);
+    //(punctuation parts the text into groups, "|": a unit word or an ordinal counts only next to a number of its own group)
+    { string g; for (q=0;q<s.size();q++){if (strchr(";()[]{}=,:",s[q])!=NULL){g+=" | ";} else {g+=s[q];}} s=g; }
+    istringstream is(s); string k; bool num=false,word=false,prevNum=false; vector<string> tk;
+    while (is>>k){tk.push_back(k);}
+    for (size_t i=0;i<tk.size();i++){
+      k=tk[i]; if (k=="|"){continue;}
+      const string pv=(i>0)?tk[i-1]:string("|"),nx=(i+1<tk.size())?tk[i+1]:string("|"),nx2=(i+2<tk.size())?tk[i+2]:string("|");
+      const string pv2=(i>1)?tk[i-2]:string("|");
       const bool n=BUNumberToken(k); if (n || isdigit((unsigned char)k[0])){num=true;}       //(also with superscripts: 10⁻²)
       if (n && (k[k.size()-1]=='s')){word=true;}                                  //("in 1000s": a multiple)
+      if (n && (k.find('e')!=string::npos)){word=true;}                           //(a power of ten: "m 1e-2")
+      if ((k.size()>1) && (k[0]=='e') && BUNumberToken("1"+k)){num=true; word=true;} //("m e-2")
+      if (isdigit((unsigned char)k[0]) && (k.size()>2)){                            //(an ordinal as a part: "100ths of a metre", "in 100ths";
+        const bool th=(k.compare(k.size()-2,2,"th")==0),ths=(k.size()>3) && (k.compare(k.size()-3,3,"ths")==0); // not "19th century")
+        if ((th || ths) && ((nx=="of") || (ths && (pv=="in")))){word=true;}
+      }
       if ((k.size()>1) && (k[0]=='x') && isdigit((unsigned char)k[1])){hasSign=true;}
       if ((k=="x") || (k=="scale") || (k=="scaled") || (k=="times") || (k=="multiplier") || (k=="factor") || (k=="divide") || (k=="divided") ||
-          (k=="multiply") || (k=="multiplied") || (k=="per") || ((k=="of") && prevNum)){word=true;}
+          (k=="multiply") || (k=="multiplied") || (k=="per") || ((k=="of") && prevNum) || (k=="faktor") || (k=="facteur") || (k=="fattore") ||
+          (k=="fator")){word=true;}
+      if ((k=="unit") || (k=="units")){ //(next to a number of its group: "units of 0.1 m", "0.1 m units", "0.1 units"; not "NAVD 1988 (units)")
+        if (BUNumberToken(pv) || BUNumberToken(nx) || ((nx=="of") && BUNumberToken(nx2)) || (BUMetreForm(pv) && BUNumberToken(pv2))){word=true;}
+      }
       prevNum=n;
     }
     if (num && (hasSign || word)){return BU_SCALED;}
@@ -1192,7 +1286,7 @@ bool GWGeoTIFF::ReadSideFile(const string &filename,string &pam,bool &has,string
 
 //the band's scale, offset, unit and side-file no-data value as GDAL reads them, and the band-unit rule (see GWGeoTIFF.h)
 bool GWGeoTIFF::BandMeta(const string &F,const string &meta,const string *pam,const string &side,const bool metres,const string &cmd,
-                         double &bscale,double &boffset,bool &pamHasNodata,string &pamNodata,string &note,string &err)
+                         double &bscale,double &boffset,bool &pamHasNodata,string &pamNodata,string &note,string &err,const bool georef)
 {
   bscale=1.0; boffset=0.0; pamHasNodata=false; pamNodata=""; note="";
   const string rewrite="rewrite it with GDAL: copy the raster with gdal_translate, or set the values with gdal_edit.py (-scale, -offset, -units, -a_nodata), "
@@ -1213,7 +1307,7 @@ bool GWGeoTIFF::BandMeta(const string &F,const string &meta,const string *pam,co
   if (pam!=NULL){ //GDAL's side file, which GDAL reads before the file's own metadata: a Scale or Offset there replaces both of
                   //the file's (the other is then 1 or 0); a UnitType replaces the file's; a NoDataValue replaces GDAL_NODATA
     map<string,string> pi; string pe;
-    { //georeferencing in the side file (GeoTransform, SRS, GCPs): GDAL may take it in place of the raster's own, in any form
+    if (georef){ //georeferencing in the side file (GeoTransform, SRS, GCPs): GDAL may take it in place of a GeoTIFF's own, in any form
       string l=*pam; for (size_t i=0;i<l.size();i++){l[i]=(char)tolower((unsigned char)l[i]);}
       const char *g[4]={"geotransform","<srs","gcplist","<gcp"}; string found;
       for (int k=0;k<4;k++){if (l.find(g[k])!=string::npos){found=g[k];}}

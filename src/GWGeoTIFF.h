@@ -58,12 +58,14 @@ namespace GWGeoTIFF
   bool ReadSideFile(const string &filename,string &pam,bool &has,string &err);
   //the band's scale, offset and unit as GDAL reads them, from the GDAL_METADATA text meta ("" if none) and the side file's
   //text pam (NULL if none, named side), each read only in the form GDAL writes (a file in another form that names band
-  //values stops; so does georeferencing in the side file); the band-unit rule: no unit or a metre form is read as metres,
+  //values stops; so does georeferencing in the side file of a GeoTIFF, georef, which GDAL may take in place of the file's
+  //own: GDAL's ESRI ASCII driver takes its geotransform from the header and its CRS from the .prj only, and ignores both
+  //in the side file, as Raven does); the band-unit rule: no unit or a metre form is read as metres,
   //another length or a scaled metre stops, any other text stops unless metres (METRES after the file name: the user's
   //statement that the values are metres), which then sets note to the file's own unit (for a warning, also for a metre form
   //or no unit). pamNodata: the side file's NoDataValue (pamHasNodata). F starts every message; cmd as in Read
   bool BandMeta(const string &F,const string &meta,const string *pam,const string &side,const bool metres,const string &cmd,
-                double &scale,double &offset,bool &pamHasNodata,string &pamNodata,string &note,string &err);
+                double &scale,double &offset,bool &pamHasNodata,string &pamNodata,string &note,string &err,const bool georef=true);
 
   //the decoders (exposed for the unit tests): each writes at most `limit` bytes to `out` and returns false with a
   //reason on corrupt input; `full` is set when the output reached `limit` before the end of the encoded data

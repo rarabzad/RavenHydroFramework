@@ -284,6 +284,10 @@ private:/*----------------------------------------------------*/
   int    _extLocal;        ///< package files named outside the simulation folder, copied into the working copy
   void   ExtRenumberPeriods();
   void   ExtLocalizeFiles ();
+  void   ExtLocalizePaths ();
+  int    _extInCopied;     ///< files named with FILEIN, or solution files, outside the simulation folder, copied into the working copy
+  int    _extInAbs;        ///< OPEN/CLOSE files outside the simulation folder (or not in the working copy), named by their absolute paths
+  vector<string> _extOutMoved; ///< output files named outside the simulation folder, written in the working copy instead
   void   ExtRestartState  ();
   void   ExtWriteSimFile   ();
   void   ExtUpdateCHDTop   ();

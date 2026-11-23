@@ -54,7 +54,7 @@ CGroundwaterModel::CGroundwaterModel(CModel *pModel)
   _connectByElevation=false; _disType=0; _meshFidelity=1.0;
   _mname="GWF"; _hf=1.0; _qf=1.0; _rf=1.0;
   _extGridID="CELL_ID"; _streamMap="AUX"; _streamAux="SUBBASIN"; _extSeepage=true; _extTf=_extLf=1.0; _demMetres=_bedMetres=false; _extDvclose=-1.0; _extAreaCheck=0.0;
-  _Qother=0.0; _extAux=-1; _extNaux=0; _extNauxMem=-1; _extOffset=0.0; _extDrop=0; _extNModels=0; _extMoverDropped=0; _extTSShifted=0; _extLocal=0; _extSteady=false; _extNoSto=false; _mf6Version=""; _stoName="STO"; _disName="DIS";
+  _Qother=0.0; _extAux=-1; _extNaux=0; _extNauxMem=-1; _extOffset=0.0; _extDrop=0; _extNModels=0; _extMoverDropped=0; _extTSShifted=0; _extLocal=0; _extInCopied=0; _extInAbs=0; _extSteady=false; _extNoSto=false; _mf6Version=""; _stoName="STO"; _disName="DIS";
   _iGW=_iReturnSV=DOESNT_EXIST;
   _maxiter=500;
   _X=_rchBound=_rchHcof=_rchRhs=_drnHcof=_drnRhs=_strgss=_strgsy=NULL;
@@ -3625,6 +3625,9 @@ void CGroundwaterModel::WriteSummary(const optStruct &Options)
     if (_extSteady){S<<"  time                  : steady-state model with one stress period, stretched over Raven's run: every Raven step is a steady-state solution (no storage)"<<endl;}
     if (_extMoverDropped>0){S<<"  water mover           : "<<_extMoverDropped<<" movers from or to packages taken over by Raven removed"<<endl;}
     if (_extLocal>0){S<<"  package files         : "<<_extLocal<<" named outside the simulation folder, copied into the working copy"<<endl;}
+    if (_extInCopied>0){S<<"  model files           : "<<_extInCopied<<" named with FILEIN or as a solution file outside the simulation folder, copied into the working copy"<<endl;}
+    if (_extInAbs>0){S<<"  OPEN/CLOSE files      : "<<_extInAbs<<" outside the simulation folder, read in place (named by their absolute paths in the working copy)"<<endl;}
+    for (size_t i=0;i<_extOutMoved.size();i++){S<<"  output file           : "<<_extOutMoved[i]<<" in the working copy (Raven writes only in its output folder)"<<endl;}
     if (_extTSShifted>0){S<<"  time series           : "<<_extTSShifted<<" TS6 files shifted to Raven's start ("<<_extOffset<<" d after the model's time zero)"<<endl;}
     S<<"  stream package        : "<<((_streamPkg=="")?string("none"):_streamPkg+((_streamMap=="AUX")?" (subbasin from auxiliary "+_streamAux+")":" (subbasin of the dominant HRU)"))<<endl;
     double Ahru=0,Alink=0; int nlow=0;
