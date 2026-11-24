@@ -326,8 +326,9 @@ void CGroundwaterModel::ExtReadSimulation()
     string ms,es; for (size_t i=0;i<mall.size();i++){ms+=(i?", ":"")+mall[i];} for (size_t i=0;i<exg.size();i++){es+=(i?", ":"")+exg[i];}
     ExitGracefully(("CGroundwaterModel: the MODFLOW 6 simulation "+_extSim+" holds "+((_extNModels>1)?to_string(_extNModels)+" models ("+ms+")":string("one model"))+
       (exg.empty()?string(""):" and "+to_string(exg.size())+" exchange"+((exg.size()>1)?"s":"")+" ("+es+")")+
-      "; Raven couples one MODFLOW 6 groundwater-flow model and books only that model's water, so the flow across an exchange would be outside "
-      "Raven's balance. Couple a simulation that holds the one GWF model alone, with no EXCHANGES rows").c_str(),BAD_DATA);
+      "; Raven couples one MODFLOW 6 groundwater-flow model and books only that model's water, so "+
+      (exg.empty()?string("the water of any other model would be outside Raven's balance, and Raven would not drive that model's solution"):
+                   string("the flow across an exchange would be outside Raven's balance"))+". Couple a simulation that holds the one GWF model alone, with no EXCHANGES rows").c_str(),BAD_DATA);
   }
   //Raven drives the one model's solution (SLN_1): with one model, a second solution solves no model of the simulation
   if (sol.size()>1){
@@ -1442,8 +1443,13 @@ void CGroundwaterModel::ExtBuild(const optStruct &Options)
     const double fr=Options.julian_start_day-floor(Options.julian_start_day); const long s=lround(fr*86400.0)%86400;
     if (s>0){char b[32]; snprintf(b,sizeof(b),"T%02ld:%02ld:%02ld",s/3600,(s/60)%60,s%60); _extRavenStart+=b;}
   }
-  ExitGracefullyIf((dm==LLONG_MIN) || (dr==LLONG_MIN),("CGroundwaterModel: :MF6StartDate "+_extStart+" is not a date yyyy-mm-dd, with a time of day "
-    "hh:mm:ss after it if the model's time zero is not at midnight (1985-10-01 12:00:00 or 1985-10-01T12:00:00)").c_str(),BAD_DATA);
+  if ((dm==LLONG_MIN) || (dr==LLONG_MIN)){
+    string glued; //(a # inside a value is part of it: a comment starts at a # after a blank)
+    { const vector<string> w=Words(_extStart); for (size_t i=0;i<w.size();i++){if (w[i].find('#')!=string::npos){glued=w[i]; break;}} }
+    ExitGracefully(("CGroundwaterModel: :MF6StartDate "+_extStart+" is not a date yyyy-mm-dd, with a time of day "
+      "hh:mm:ss after it if the model's time zero is not at midnight (1985-10-01 12:00:00 or 1985-10-01T12:00:00)"+
+      (glued.empty()?string(""):"; a # glued to a value is part of it, as in '"+glued+"': write a blank before # to start a comment")).c_str(),BAD_DATA);
+  }
   //[d] Raven starts this long after the model's time zero (a restart), including the times of day of :StartDate and :MF6StartDate
   _extOffset=(double)(dr-dm)+(Options.julian_start_day-floor(Options.julian_start_day));
   if (fm>0.0){_extOffset-=fm; if (fabs(_extOffset)<1e-9){_extOffset=0.0;}}
