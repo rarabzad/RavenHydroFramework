@@ -1064,7 +1064,10 @@ namespace
       if ((b!=string::npos) && (b>0)){                                            // "navd88 (geoid12b)", "egm96 geoid")
         string g=r.substr(b+1);
         if ((g.size()>2) && (((g[0]=='(') && (g[g.size()-1]==')')) || ((g[0]=='[') && (g[g.size()-1]==']')))){g=g.substr(1,g.size()-2);}
-        if (g.compare(0,5,"geoid")==0){r=r.substr(0,b);}
+        size_t nd=5; while ((nd<g.size()) && isdigit((unsigned char)g[nd])){nd++;}  //("geoid", or "geoid" and the model's year, 2 or 4
+        const bool model=(g.compare(0,5,"geoid")==0) && ((g.size()==5) || (((nd==7) || (nd==9)) && //  digits, with an optional a or b:
+          ((g.size()==nd) || ((g.size()==nd+1) && ((g[nd]=='a') || (g[nd]=='b')))))); //  geoid18, geoid12b, geoid2022)
+        if (model){r=r.substr(0,b);}
       }
     }
     return BUDatum1(r) || ((r.size()>6) && (r.compare(0,6,"above ")==0) && BUDatum1(r.substr(6))) || //("m above msl", "m over msl")

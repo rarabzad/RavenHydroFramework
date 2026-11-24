@@ -98,8 +98,11 @@ static int    GWInt(char **s,const int i,const optStruct &Options){return GWInte
 static void GWMaxTokens(char **s,const int Len,const int nmax,const optStruct &Options)
 {
   if (Len>nmax){
+    string glued; //(a # inside a value is part of it: a comment starts at a # after a blank)
+    for (int i=1;i<nmax;i++){if (strchr(s[i],'#')!=NULL){glued=string(s[i]); break;}}
     ExitGracefully(("ParseGWFile: command "+string(s[0])+" in "+Options.rvg_filename+" has the surplus value '"+string(s[nmax])+"' (it takes "+
-                    to_string(nmax-1)+" value"+((nmax==2)?"":"s")+" at most; a comma separates values, so write 2000.0, not 2,000.0)").c_str(),BAD_DATA);
+                    to_string(nmax-1)+" value"+((nmax==2)?"":"s")+" at most; "+(glued.empty()?string("a comma separates values, so write 2000.0, not 2,000.0)"):
+                    "a # glued to a value is part of it, as in '"+glued+"': write a blank before # to start a comment)")).c_str(),BAD_DATA);
   }
 }
 //the most tokens a command takes (with the command itself; 0: a list of any length, or a form the command's own reader

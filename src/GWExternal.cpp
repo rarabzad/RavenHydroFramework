@@ -305,7 +305,7 @@ void CGroundwaterModel::ExtReadSimulation()
     if ((W0=="BEGIN") && (w.size()>1)){block=Upper(w[1]); continue;}
     if (W0=="END"){block=""; continue;}
     if ((block=="TIMING") && (W0=="TDIS6") && (w.size()>1)){tdis=w[1];}
-    if ((block=="MODELS") && (w.size()>2)){_extNModels++; mall.push_back(w[2]+" ("+W0+")"); if (W0!="GWF6"){other.push_back(w[2]+" ("+W0+")");}}
+    if ((block=="MODELS") && (w.size()>2)){_extNModels++; mall.push_back(w[2]+" ("+W0+")"); if ((W0=="GWT6") || (W0=="GWE6") || (W0=="PRT6")){other.push_back(w[2]+" ("+W0+")");}}
     if ((block=="EXCHANGES") && (w.size()>1)){exg.push_back(w[0]+" "+w[1]);}
     if ((block=="MODELS") && (W0=="GWF6") && (w.size()>2)){mnam.push_back(w[1]); mname.push_back(w[2]);}
     if ((block=="SOLUTIONGROUP") && (W0!="MXITER") && (W0.size()>1) && (W0[W0.size()-1]=='6')){sol.push_back(W0+" "+((w.size()>1)?w[1]:string("")));} //IMS6, EMS6, ...
@@ -776,7 +776,7 @@ void CGroundwaterModel::ExtRenumberPeriods()
       string l; vector<string> &L=orig[key]; while (getline(I,l)){L.push_back(l);}
     }
     vector<string> &raw=orig[key];
-    vector<string> pre,tsFiles; map<int,vector<string> > blk; string line; int k=-1; bool arrays=false,ts=false,tv=false,retarget=false;
+    vector<string> pre,tsFiles; map<int,vector<string> > blk; string line; int k=-1; bool arrays=false,ts=false,tv=false;
     for (size_t il=0;il<raw.size();il++){
       line=raw[il];
       vector<string> w=Words(line); string W0=w.empty()?"":Upper(w[0]);
@@ -809,35 +809,12 @@ void CGroundwaterModel::ExtRenumberPeriods()
     //not rewrite them, so any later start stops
     ExitGracefullyIf(tv,("CGroundwaterModel: "+P.pname+" uses time-varying properties (TVK6/TVS6), whose period data and time series count from the model's "
       "time zero; Raven does not shift them, so it cannot start after the model's time zero: start Raven at :MF6StartDate").c_str(),BAD_DATA);
-    for (size_t j=0;j<tsFiles.size();j++){ //(a series is shifted in the working copy: its file must lie in the simulation folder)
-      string tf=tsFiles[j];
+    for (size_t j=0;j<tsFiles.size();j++){ //(ExtLocalizePaths has named each series by a path inside the working copy: it is shifted there)
+      const string tf=tsFiles[j];
       { const string at=IsAbsPath(tf)?tf:_mf6dir+"/"+tf; //(a file that does not exist is named first, as MODFLOW would name it)
         ExitGracefullyIf(!FileExists(at),("CGroundwaterModel: "+P.pname+" names the time-series file "+(IsAbsPath(tf)?tf:OCPath(DirOf(_extSim),tf))+
           ", which does not exist").c_str(),BAD_DATA); }
-      if (IsAbsPath(tf) || LeavesFolder(tf)){ //(a path that leads into the simulation folder is named there relative to it, in the package file)
-        const string rel=RelativeInside(OCPath(DirOf(_extSim),tf),DirOf(_extSim));
-        ExitGracefullyIf(rel.empty() || !FileExists(_mf6dir+"/"+rel),("CGroundwaterModel: "+P.pname+" names the time-series file "+tf+" outside the simulation "
-          "folder; on a start after the model's time zero Raven shifts the series in its working copy of that folder: keep the file in the folder, or start Raven "
-          "at :MF6StartDate").c_str(),BAD_DATA);
-        bool found=false;
-        for (size_t il=0;il<raw.size();il++){
-          vector<string> w=Words(raw[il]);
-          if ((w.size()>2) && (Upper(w[0])=="TS6") && (Upper(w[1])=="FILEIN") && (w[2]==tf)){
-            const string nl="  TS6  FILEIN  "+rel+"   # "+tf+" named relative to the simulation folder";
-            for (size_t q=0;q<pre.size();q++){if (pre[q]==raw[il]){pre[q]=nl;}}
-            raw[il]=nl; found=true;
-          }
-        }
-        ExitGracefullyIf(!found,("CGroundwaterModel: "+P.pname+" names the time-series file "+tf+" by a path Raven cannot rewrite (in an OPEN/CLOSE file of its OPTIONS); "
-          "on a start after the model's time zero Raven shifts the series in its working copy: name the file relative to the simulation folder, or start Raven at "
-          ":MF6StartDate").c_str(),BAD_DATA);
-        tf=rel; retarget=true;
-      }
       if (tsDone.insert(gwutil::NormPath(_mf6dir+"/"+tf)).second){ExtShiftTimeSeries(tf);}
-    }
-    if (retarget && (_extDrop==0) && written.insert(key).second){ //(only the TS6 line changes)
-      ofstream O(f.c_str()); ExitGracefullyIf(!O,("CGroundwaterModel: cannot write "+f).c_str(),BAD_DATA);
-      for (size_t il=0;il<raw.size();il++){O<<raw[il]<<"\n";}
     }
     if (_extDrop==0){continue;} //start inside the first period: period numbers are unchanged
     if (blk.empty()){continue;}
